@@ -229,9 +229,9 @@
 // ----------------------------------------------------------------------------
 
 #include <stddef.h>
-extern void * ps2_sbrk(size_t increment);
+extern void * PS2_Sbrk(size_t increment);
 
-#define MORECORE ps2_sbrk
+#define MORECORE PS2_Sbrk
 #define MORECORE_CONTIGUOUS 1
 #define MORECORE_FAILURE ((void *)(-1))
 
@@ -4914,11 +4914,11 @@ void mSTATs(void)
     }
 #endif
 
-    fprintf(stderr, "max system bytes = %10lu\n",
+    fprintf(stderr, "max system bytes = %10zu\n",
             (CHUNK_SIZE_T)(mi.usmblks));
-    fprintf(stderr, "system bytes     = %10lu\n",
+    fprintf(stderr, "system bytes     = %10zu\n",
             (CHUNK_SIZE_T)(mi.arena + mi.hblkhd));
-    fprintf(stderr, "in use bytes     = %10lu\n",
+    fprintf(stderr, "in use bytes     = %10zu\n",
             (CHUNK_SIZE_T)(mi.uordblks + mi.hblkhd));
 
 #ifdef WIN32

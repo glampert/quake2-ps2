@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // F5 -> build + launch in PCSX2. Uses the built-in JS debugger's
+      // "node-terminal" type only as a way to run a shell command on F5
+      // (no Node involved, no extension to install).
+      // Toolchain env is inherited from ~/.zshenv (see .vscode/tasks.json note).
+      "name": "Run in PCSX2 (make run)",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "make run",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

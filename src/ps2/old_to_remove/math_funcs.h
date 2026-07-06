@@ -117,6 +117,7 @@ static inline float ps2_sec_to_msec(float sec)
  * only the single-precision ones are (float, f suffix).
  * This hack fixes the problem in a quick-'n-dirty way.
  */
+/*test
 #define sin   ps2_sinf
 #define cos   ps2_cosf
 #define acos  ps2_acosf
@@ -129,5 +130,6 @@ static inline float ps2_sec_to_msec(float sec)
 #define atan2 atan2f
 #define floor floorf
 #define ceil  ceilf
+*/
 
 #endif // PS2_MATH_FUNCS_H

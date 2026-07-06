@@ -19,7 +19,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "client.h"
-#include "ps2/defs_ps2.h"
 
 typedef struct
 {
@@ -434,8 +433,8 @@ byte * SCR_ReadNextFrame(void)
     // These were originally stack variables, but I fear they
     // are dangerously big and would stress the PS2 stack. Since
     // this is not threaded code, no worries with race conditions.
-    static byte samples[22050 / 14 * 4] PS2_ALIGN(16); // 6.2KB
-    static byte compressed[0x20000] PS2_ALIGN(16);     // 128KB
+    static byte samples[22050 / 14 * 4] __attribute__((aligned(16))); // 6.2KB
+    static byte compressed[0x20000] __attribute__((aligned(16)));     // 128KB
 
     int r;
     int command;

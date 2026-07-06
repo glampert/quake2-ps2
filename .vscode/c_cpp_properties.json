@@ -1,0 +1,30 @@
+{
+  "configurations": [
+    {
+      "name": "PS2 (EE)",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/**",
+        "${PS2DEV}/ee/mips64r5900el-ps2-elf/include",
+        "${PS2DEV}/ee/lib/gcc/mips64r5900el-ps2-elf/15.2.0/include",
+        "${PS2SDK}/ee/include",
+        "${PS2SDK}/common/include"
+      ],
+      "defines": ["_EE", "GAME_HARD_LINKED", "PS2_QUAKE"],
+      "compilerPath": "${PS2DEV}/ee/bin/mips64r5900el-ps2-elf-gcc",
+      "cStandard": "gnu89",
+      "cppStandard": "gnu++20",
+      "intelliSenseMode": "gcc-x64",
+      "compileCommands": "${workspaceFolder}/compile_commands.json"
+    }
+  ],
+  // Single source of truth for IntelliSense. IntelliSense is served by the
+  // C/C++ extension (not a shell), so it can't read ~/.zshenv; this env block
+  // is the one place the SDK path is declared for editor tooling. ${PS2SDK}
+  // cross-references ${PS2DEV}, so only PS2DEV holds a literal path.
+  "env": {
+    "PS2DEV": "/Users/guilherme/ps2dev",
+    "PS2SDK": "${PS2DEV}/ps2sdk"
+  },
+  "version": 4
+}

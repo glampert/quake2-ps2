@@ -444,19 +444,6 @@ a null buffer will just return the file length without loading
 */
 int FS_LoadFile(const char * path, void ** buffer)
 {
-    //FIXME TEMP, just for development/testing
-    if (strcmp(path, "maps/fact3.bsp") == 0)
-    {
-        extern unsigned int size_fact3_data;
-        extern unsigned char fact3_data[];
-        if (buffer)
-        {
-            *buffer = fact3_data;
-        }
-        return size_fact3_data;
-    }
-    //END TEMP
-
     FILE * h;
     byte * buf;
     int len;
@@ -495,14 +482,6 @@ FS_FreeFile
 */
 void FS_FreeFile(void * buffer)
 {
-    //FIXME TEMP, just for development/testing
-    extern unsigned char fact3_data[];
-    if (buffer == fact3_data)
-    {
-        return;
-    }
-    //END TEMP
-
     Z_Free(buffer);
 }
 

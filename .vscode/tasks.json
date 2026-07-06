@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  // Toolchain env (PS2DEV/PS2SDK/GSKIT/PATH) is defined once in ~/.zshenv, which
+  // every zsh invocation sources -- including the non-interactive shell VSCode
+  // uses to run these tasks. So there's nothing to declare here; it's inherited.
+  "tasks": [
+    {
+      "label": "build",
+      "type": "shell",
+      "command": "make",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$gcc",
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "detail": "Compile quake2.elf (Shift+Cmd+B)"
+    },
+    {
+      "label": "run",
+      "type": "shell",
+      "command": "make run",
+      "group": "build",
+      "problemMatcher": "$gcc",
+      "presentation": { "reveal": "always", "panel": "shared" },
+      "detail": "Build then launch quake2.elf in PCSX2 (F5)"
+    },
+    {
+      "label": "clean",
+      "type": "shell",
+      "command": "make clean",
+      "problemMatcher": [],
+      "detail": "Remove build artifacts"
+    }
+  ]
+}

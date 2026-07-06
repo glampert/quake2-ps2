@@ -23,8 +23,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // client.h -- primary header for client
 
-#include "ps2/math_funcs.h"
-
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>

@@ -39,9 +39,12 @@ gitem_armor_t jacketarmor_info = { 25, 50, .30, .00, ARMOR_JACKET };
 gitem_armor_t combatarmor_info = { 50, 100, .60, .30, ARMOR_COMBAT };
 gitem_armor_t bodyarmor_info = { 100, 200, .80, .60, ARMOR_BODY };
 
-static int jacket_armor_index;
-static int combat_armor_index;
-static int body_armor_index;
+// NOTE: these three are declared 'extern' in g_local.h, so they must have
+// external linkage here - GCC 15 rejects a static definition following the
+// extern declaration. Left non-static to match; behaviour is unchanged.
+int jacket_armor_index;
+int combat_armor_index;
+int body_armor_index;
 static int power_screen_index;
 static int power_shield_index;
 

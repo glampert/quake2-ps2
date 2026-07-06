@@ -1,0 +1,15 @@
+# Build artifacts not submitted:
+*.elf
+*.o
+*.a
+*.d
+
+# VU microprogram intermediates:
+*.pp.vcl
+*.vsm
+
+# Generated per-machine editor tooling:
+compile_commands.json
+
+# MacOS stuff:
+.DS_Store

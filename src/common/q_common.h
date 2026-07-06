@@ -24,7 +24,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef Q_COMMON_H
 #define Q_COMMON_H
 
-#include "ps2/math_funcs.h"
 #include "game/q_shared.h"
 
 #define VERSION 3.19
@@ -140,13 +139,6 @@ void MSG_ReadData(sizebuf_t * sb, void * buffer, int size);
 //============================================================================
 
 extern qboolean bigendien;
-
-short BigShort(short l);
-short LittleShort(short l);
-int BigLong(int l);
-int LittleLong(int l);
-float BigFloat(float l);
-float LittleFloat(float l);
 
 //============================================================================
 
@@ -743,9 +735,7 @@ MISC
 
 void Com_BeginRedirect(int target, char * buffer, int buffersize, void(*flush));
 void Com_EndRedirect(void);
-void Com_Printf(const char * fmt, ...) Q_PRINTF_FUNC(1, 2);
 void Com_DPrintf(const char * fmt, ...) Q_PRINTF_FUNC(1, 2);
-void Com_Error(int code, const char * fmt, ...) Q_PRINTF_FUNC(2, 3);
 void Com_Quit(void);
 
 int Com_ServerState(void); // this should have just been a cvar...
@@ -804,7 +794,6 @@ char * Sys_ConsoleInput(void);
 void Sys_ConsoleOutput(const char * string);
 void Sys_SendKeyEvents(void);
 
-void Sys_Error(const char * error, ...) Q_PRINTF_FUNC(1, 2);
 void Sys_Quit(void);
 
 char * Sys_GetClipboardData(void);

@@ -18,6 +18,7 @@
 typedef enum
 {
     MEMTAG_MISC,       // Miscellaneous/uncategorized (includes the estimate size of the ELF executable).
+    MEMTAG_OPNEW,      // C++ new/new[].
     MEMTAG_QUAKE,      // Game allocations: Z_Malloc/Z_TagMalloc/etc.
     MEMTAG_RENDERER,   // Things related to rendering / the refresh module.
     MEMTAG_TEXIMAGE,   // Allocs related to images/textures/palettes.

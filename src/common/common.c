@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "common/q_common.h"
+#include "client/console.h"
 #include <setjmp.h>
 
 //
@@ -1099,7 +1100,7 @@ void Info_Print(char * s)
 // Replaced malloc/free with the PS2 memory allocation wrappers to keep
 // count of all memory allocations, plus a few other minor changes.
 //
-#include "ps2/mem_alloc.h"
+#include "ps2/system/heap.h"
 
 enum
 {
@@ -1489,7 +1490,6 @@ void Qcommon_Init(int argc, char ** argv)
     SV_Init();
     CL_Init();
 
-    /*
     // add + commands from command line
     if (!Cbuf_AddLateCommands())
     {
@@ -1510,10 +1510,12 @@ void Qcommon_Init(int argc, char ** argv)
         // so drop the loading plaque
         SCR_EndLoadingPlaque();
     }
-    */
-    //FIXME this is for temporary testing only! Restore the above once done!
-    Cbuf_AddText("killserver ; maxclients 1 ; deathmatch 0 ; map fact3\n");
-    Cbuf_Execute();
+
+    // NOTE (LAMPERT): Comment the block above and uncomment these
+    // two lines to force loading straight into a test map.
+    //
+    //Cbuf_AddText("killserver ; maxclients 1 ; deathmatch 0 ; map fact3\n");
+    //Cbuf_Execute();
 
     Com_Printf("---- Quake II Initialized! ----\n");
 }

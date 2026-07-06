@@ -32,14 +32,13 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #pragma warning(disable : 4305) // truncation from const double to float
 #endif // _WIN32
 
-#include "ps2/math_funcs.h"
-
 #include <assert.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <math.h>
 
 #if (defined _M_IX86 || defined __i386__) && !defined C_ONLY && !defined __sun__
 #define id386 1
@@ -54,11 +53,19 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 
 typedef unsigned char byte;
+#ifdef __cplusplus
+// 'false'/'true' are reserved keywords in C++, so the enum below won't parse
+// when this header is pulled into the C++ PS2 backend. Expose qboolean as a
+// plain int there instead - same 4-byte ABI as the C enum, and the C++ 'false'
+// and 'true' literals (0 and 1) interoperate transparently across the seam.
+typedef int qboolean;
+#else
 typedef enum
 {
     false,
     true
 } qboolean;
+#endif
 
 #ifndef NULL
 #define NULL ((void *)0)

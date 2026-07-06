@@ -28,4 +28,22 @@ extern "C" {
     #include "client/keys.h"     // Key_Event + key codes
 }
 
+// Helper assert macros that display the error on screen and halt.
+// Prefer these over standard assert().
+#define PS2_Assert(cond)                               \
+    do {                                               \
+        if (!(cond))                                   \
+        {                                              \
+            Sys_Error("Assert Failed: %s", #cond);     \
+        }                                              \
+    } while (0)
+
+#define PS2_AssertMsg(cond, message)                   \
+    do {                                               \
+        if (!(cond))                                   \
+        {                                              \
+            Sys_Error("Assert Failed: %s", (message)); \
+        }                                              \
+    } while (0)
+
 #endif // PS2_QCOMMON_H

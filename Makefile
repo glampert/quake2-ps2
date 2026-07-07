@@ -29,11 +29,13 @@ EE_BIN = $(OUTPUT_DIR)/quake2.elf
 
 # New PS2 backend, modern C++ (clean-slate rewrite of src/ps2):
 PS2_CXX_SRC = \
-	ps2/system/main.cpp     \
-	ps2/system/sys.cpp      \
-	ps2/system/heap.cpp     \
-	ps2/math/math.cpp       \
-	ps2/net/net.cpp         \
+	ps2/system/main.cpp      \
+	ps2/system/sys.cpp       \
+	ps2/system/heap.cpp      \
+	ps2/math/math.cpp        \
+	ps2/net/net.cpp          \
+	ps2/input/input.cpp      \
+	ps2/input/pad.cpp        \
 	ps2/renderer/gs.cpp      \
 	ps2/renderer/texture.cpp \
 	ps2/renderer/vid.cpp     \
@@ -51,8 +53,7 @@ PS2_C_SRC = \
 	ps2/builtin/help.c
 
 # Stock Quake II engine / game / server - untouched C, statically linked.
-# The null/* stubs stand in for sound, input and CD audio until real PS2
-# backends land.
+# The null/* stubs stand in for sound and CD audio until real PS2 backends land.
 ENGINE_C_SRC = \
 	client/cl_cin.c    client/cl_ents.c   client/cl_fx.c     client/cl_input.c \
 	client/cl_inv.c    client/cl_main.c   client/cl_newfx.c  client/cl_parse.c \
@@ -75,7 +76,7 @@ ENGINE_C_SRC = \
 	game/m_parasite.c  game/m_soldier.c   game/m_supertank.c game/m_tank.c     \
 	game/p_client.c    game/p_hud.c       game/p_trail.c     game/p_view.c     \
 	game/p_weapon.c    game/q_shared.c                                         \
-	null/cd_null.c     null/in_null.c     null/snddma_null.c                   \
+	null/cd_null.c     null/snddma_null.c                                      \
 	server/sv_ccmds.c  server/sv_ents.c   server/sv_game.c   server/sv_init.c  \
 	server/sv_main.c   server/sv_send.c   server/sv_user.c   server/sv_world.c
 

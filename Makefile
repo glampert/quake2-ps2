@@ -34,15 +34,21 @@ PS2_CXX_SRC = \
 	ps2/system/heap.cpp     \
 	ps2/math/math.cpp       \
 	ps2/net/net.cpp         \
-	ps2/renderer/gs.cpp     \
-	ps2/renderer/vid.cpp    \
-	ps2/renderer/ref.cpp    \
+	ps2/renderer/gs.cpp      \
+	ps2/renderer/texture.cpp \
+	ps2/renderer/vid.cpp     \
+	ps2/renderer/ref.cpp     \
 	ps2/debug/scr_print.cpp
 
 # Doug Lea's allocator + a small amount of embedded data kept as plain C:
 PS2_C_SRC = \
 	ps2/system/dlmalloc/dlmalloc.c \
-	ps2/builtin/palette.c
+	ps2/builtin/palette.c   \
+	ps2/builtin/conchars.c  \
+	ps2/builtin/conback.c   \
+	ps2/builtin/backtile.c  \
+	ps2/builtin/inventory.c \
+	ps2/builtin/help.c
 
 # Stock Quake II engine / game / server - untouched C, statically linked.
 # The null/* stubs stand in for sound, input and CD audio until real PS2

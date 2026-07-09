@@ -12,6 +12,8 @@
 #include "ps2/qcommon.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/vu1.h"
+#include "ps2/renderer/tests/draw_cube.h"
 #include "ps2/builtin/builtin.h"
 
 #include <cstdio>
@@ -138,6 +140,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
     ps2::gs::Init();
     ps2::tex::Init();
+    ps2::vu1::Init();
 
     s_texConchars = ps2::tex::Find("conchars");
     s_texBacktile = ps2::tex::Find("backtile");
@@ -258,6 +261,15 @@ void PS2_BeginFrame(float camera_separation)
 void PS2_EndFrame()
 {
     DrawFpsCounter();
+
+    // VU1 bring-up scene: the engine only calls PS2_RenderFrame once game
+    // assets load, and while disconnected Quake forces the fullscreen console,
+    // which would hide anything drawn under the 2D overlay. So the test cube
+    // draws after the 2D flush, on top of everything (its batch programs its
+    // own z-test). Disable with "ps2_testcube 0".
+    ps2::gs::Flush2D();
+    ps2::test::DrawRotatingCube();
+
     ps2::gs::EndFrame();
 }
 

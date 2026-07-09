@@ -73,6 +73,19 @@ public:
         m_ptr = draw_texture_wrapping(m_ptr, context, &wrap);
     }
 
+    // Pixel tests for subsequent draws. Disable switches the z-test to ALLPASS
+    // (draw on top of everything; depth writes still happen) while keeping the
+    // environment's alpha test; Enable restores the z-buffer's test method.
+    void DisableTests(int context, zbuffer_t & zbuffer)
+    {
+        m_ptr = draw_disable_tests(m_ptr, context, &zbuffer);
+    }
+
+    void EnableTests(int context, zbuffer_t & zbuffer)
+    {
+        m_ptr = draw_enable_tests(m_ptr, context, &zbuffer);
+    }
+
     void Clear(int context, float x, float y, float width, float height, int r, int g, int b)
     {
         m_ptr = draw_clear(m_ptr, context, x, y, width, height, r, g, b);

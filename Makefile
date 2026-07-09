@@ -33,6 +33,7 @@ PS2_CXX_SRC = \
 	ps2/system/sys.cpp       \
 	ps2/system/heap.cpp      \
 	ps2/math/math.cpp        \
+	ps2/math/vec_mat.cpp     \
 	ps2/net/net.cpp          \
 	ps2/input/input.cpp      \
 	ps2/input/pad.cpp        \
@@ -40,6 +41,8 @@ PS2_CXX_SRC = \
 	ps2/renderer/texture.cpp \
 	ps2/renderer/vid.cpp     \
 	ps2/renderer/ref.cpp     \
+	ps2/renderer/vu1.cpp     \
+	ps2/renderer/tests/draw_cube.cpp \
 	ps2/debug/scr_print.cpp
 
 # Doug Lea's allocator + a small amount of embedded data kept as plain C:
@@ -87,12 +90,10 @@ C_OBJS   = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(C_SRC:.c=.o))
 CXX_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(CXX_SRC:.cpp=.o))
 
 # VU microprograms: vclpp -> openvcl -> dvp-as
-# The 2D boot path references no VU program yet; the VU1 pipeline (and its
-# microprograms, emitting UVs for texturing) is rewritten in Phase 2. The old
-# color_triangles_clip_tris.vcl uses a clipw form the current openvcl rejects, so
-# it is left out of the build for now. The assembly rule below stays ready.
-VCL_PATH  = $(SRC_DIR)/ps2/vu1progs
-VCL_FILES =
+# Each .vcl assembles into .vudata with <name>_CodeStart/_CodeEnd link symbols
+# (see PS2_DECLARE_VU_MICROPROGRAM in ps2/renderer/vu1.h).
+VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
+VCL_FILES = textured_triangles.vcl
 VU_OBJS   = $(addprefix $(OUTPUT_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
 # IOP/IRX modules embedded into the ELF. None are needed for the current
@@ -152,7 +153,7 @@ EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
 	$(EE_CXX_WARNFLAGS) $(EE_CXX_SYSINCS) \
 	-MMD -MP
 
-EE_LIBS += -ldraw -lgraph -lmath3d -lpacket -ldma -lpad -lpatches -lkernel
+EE_LIBS += -ldraw -lgraph -lmath3d -lpacket -lpacket2 -ldma -lpad -lpatches -lkernel
 
 # ----------------------------------------------------------------------------
 #  Rules

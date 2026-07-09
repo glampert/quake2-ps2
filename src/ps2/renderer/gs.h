@@ -23,13 +23,29 @@ void Init();
 int Width();
 int Height();
 
+// GS drawing context (0 or 1) being rendered into this frame. The 3D path
+// needs it for every context-indexed register it touches (TEX0/TEX1/TEST and
+// the prim CTXT bit) - using the wrong one draws into the displayed buffer.
+int CurrentContext();
+
+// The configured z-test method (a libdraw ZTEST_METHOD_* value), for paths
+// that program the TEST register themselves (the VU1 3D batches).
+int DepthTestMethod();
+
 // Background colour used by BeginFrame()'s screen clear.
 void SetClearColor(std::uint8_t r, std::uint8_t g, std::uint8_t b);
 
-// Per-frame lifecycle: BeginFrame() starts a fresh packet and clears the back
-// buffer; EndFrame() finalises, kicks the DMA, waits and flips to the front.
+// Per-frame lifecycle: BeginFrame() clears the back buffer (color + depth,
+// sent immediately) and starts a fresh 2D packet; EndFrame() finalises,
+// kicks the DMA, waits and flips to the front.
 void BeginFrame();
 void EndFrame();
+
+// Sends the accumulated 2D packet and waits for the GS to finish drawing it.
+// EndFrame() does this implicitly; calling it earlier allows drawing on top
+// of the 2D overlay before the flip (the debug cube uses this). No further
+// 2D draws are allowed in the frame afterwards.
+void Flush2D();
 
 // Adds a solid rectangle to the current frame. Alpha below 255 blends with the
 // framebuffer (255 = fully opaque, unblended).

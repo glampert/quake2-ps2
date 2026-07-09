@@ -5,7 +5,12 @@
  *  Modelled on the ps2sdk libdraw "font"/"cube" samples: two 32-bit framebuffers
  *  in VRAM, one displayed while the other is drawn, using the two GS drawing
  *  contexts. draw_setup_environment programs each context so screen coordinates
- *  are direct top-left pixels. The z-buffer is disabled for the 2D-only path.
+ *  are direct top-left pixels.
+ *
+ *  Frame structure: BeginFrame() clears color and depth immediately (its own
+ *  DMA transfer), the VU1 3D world arrives over PATH1 mid-frame, and the 2D
+ *  overlay accumulates in the frame packet, sent at EndFrame() to draw on top
+ *  with an always-pass z-test.
  *
  *  Textures are uploaded to the VRAM left over after the framebuffers and stay
  *  resident (~1.8 MB fits every built-in image at once), so switching textures
@@ -42,16 +47,21 @@ constexpr int kPacketQwords = 32768;
 // pixel data is referenced in place).
 constexpr int kTexUploadQwords = 128;
 
+// The color+depth clear, sent as its own transfer at the top of each frame.
+constexpr int kClearQwords = 128;
+
 static framebuffer_t s_frame[2];
 static zbuffer_t     s_zbuffer;
 
 static RenderPacket s_framePacket[2];   // double-buffered per-frame packets
 static RenderPacket s_texUploadPacket;  // scratch packet for texture uploads
+static RenderPacket s_clearPacket;      // per-frame color+depth clear
 
 static int s_drawCtx   = 1; // which framebuffer/context we render into this frame
 static int s_packetIdx = 0; // which frame packet is being filled
 
 static bool s_frameStarted = false;
+static bool s_2dFlushed    = false;
 static const tex::Texture * s_currentTex = nullptr; // texture bound in the current frame packet
 
 static std::uint8_t s_clear[3] = { 0x20, 0x20, 0x38 }; // distinctive dark blue
@@ -69,6 +79,10 @@ inline RenderPacket & FramePacket()
 
 int Width()  { return kWidth; }
 int Height() { return kHeight; }
+
+int CurrentContext() { return s_drawCtx; }
+
+int DepthTestMethod() { return static_cast<int>(s_zbuffer.method); }
 
 void SetClearColor(std::uint8_t r, std::uint8_t g, std::uint8_t b)
 {
@@ -92,12 +106,15 @@ void Init()
     s_frame[1]         = s_frame[0];
     s_frame[1].address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_PSM_32, GRAPH_ALIGN_PAGE));
 
-    // Z-buffer disabled for the 2D path (frees VRAM; re-enable for the 3D world).
-    s_zbuffer.enable  = 0;
-    s_zbuffer.method  = ZTEST_METHOD_GREATER;
-    s_zbuffer.address = 0;
-    s_zbuffer.mask    = 1;
-    s_zbuffer.zsm     = 0;
+    // Z-buffer for the 3D world; larger depth = closer (the projection maps the
+    // near plane to 0xFFFFFF), hence GREATER_EQUAL. 32-bit z leaves ~730 KB of
+    // VRAM for textures - switch to GS_ZBUF_16S if that gets tight once real
+    // game textures land.
+    s_zbuffer.enable  = DRAW_ENABLE;
+    s_zbuffer.method  = ZTEST_METHOD_GREATER_EQUAL;
+    s_zbuffer.mask    = 0;
+    s_zbuffer.zsm     = GS_ZBUF_32;
+    s_zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_ZBUF_32, GRAPH_ALIGN_PAGE));
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
     graph_initialize(static_cast<int>(s_frame[0].address), kWidth, kHeight, GS_PSM_32, 0, 0);
@@ -105,6 +122,7 @@ void Init()
     s_framePacket[0].Init(kPacketQwords);
     s_framePacket[1].Init(kPacketQwords);
     s_texUploadPacket.Init(kTexUploadQwords);
+    s_clearPacket.Init(kClearQwords);
 
     // Program both drawing contexts: context 0 -> frame 0, context 1 -> frame 1.
     // The environment defaults texture wrapping to CLAMP; Quake's DrawTileClear
@@ -137,20 +155,39 @@ void BeginFrame()
     s_currentTex   = nullptr; // texture state does not persist across packets
 
     s_packetIdx ^= 1;
-    RenderPacket & pkt = FramePacket();
-    pkt.Reset();
+
+    // The clear goes out immediately as its own transfer instead of riding the
+    // deferred 2D packet: the VU1 3D world arrives over PATH1 mid-frame and
+    // must land on an already-cleared framebuffer. The z=0 sprite with an
+    // ALLPASS z-test clears color and depth in one pass (0 = farthest).
+    RenderPacket & clear = s_clearPacket;
+    clear.Reset();
 
     draw_disable_blending(); // draw_clear must overwrite, never blend
-    pkt.Clear(s_drawCtx,
-              0.0f, 0.0f,
-              static_cast<float>(kWidth), static_cast<float>(kHeight),
-              static_cast<int>(s_clear[0]), static_cast<int>(s_clear[1]), static_cast<int>(s_clear[2]));
+    clear.DisableTests(s_drawCtx, s_zbuffer);
+    clear.Clear(s_drawCtx,
+                0.0f, 0.0f,
+                static_cast<float>(kWidth), static_cast<float>(kHeight),
+                static_cast<int>(s_clear[0]), static_cast<int>(s_clear[1]), static_cast<int>(s_clear[2]));
+    clear.EnableTests(s_drawCtx, s_zbuffer); // restore the real z-test for the 3D world
+    clear.Finish();
+
+    clear.SendNormal();
+    dma_wait_fast();
+    draw_wait_finish();
+
+    // The 2D overlay accumulates here all frame and goes out at EndFrame, after
+    // the 3D world has drawn: always-pass z-test so it lands on top.
+    RenderPacket & pkt = FramePacket();
+    pkt.Reset();
+    pkt.DisableTests(s_drawCtx, s_zbuffer);
 }
 
 void FillRect(int x, int y, int w, int h,
               std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
 {
     PS2_AssertMsg(s_frameStarted, "FillRect outside Begin/EndFrame!");
+    PS2_AssertMsg(!s_2dFlushed, "FillRect after Flush2D!");
 
     RenderPacket & pkt = FramePacket();
     pkt.EnsureSpace(64);
@@ -228,6 +265,7 @@ void UploadTexture(tex::Texture & texture)
 void SetTexture(const tex::Texture & texture)
 {
     PS2_AssertMsg(s_frameStarted, "SetTexture outside Begin/EndFrame!");
+    PS2_AssertMsg(!s_2dFlushed, "SetTexture after Flush2D!");
     PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "Texture not resident in VRAM!");
     PS2_Assert(texture.type != tex::ImageType::Null);
 
@@ -267,6 +305,7 @@ void DrawTexturedRect(int x, int y, int w, int h,
                       int u0, int v0, int u1, int v1, std::uint8_t brightness)
 {
     PS2_AssertMsg(s_frameStarted, "DrawTexturedRect outside Begin/EndFrame!");
+    PS2_AssertMsg(!s_2dFlushed, "DrawTexturedRect after Flush2D!");
     PS2_AssertMsg(s_currentTex != nullptr, "DrawTexturedRect without SetTexture!");
 
     RenderPacket & pkt = FramePacket();
@@ -297,10 +336,11 @@ void DrawTexturedRect(int x, int y, int w, int h,
     pkt.RectTextured(s_drawCtx, rect);
 }
 
-void EndFrame()
+void Flush2D()
 {
-    PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
-    s_frameStarted = false;
+    PS2_AssertMsg(s_frameStarted, "Flush2D outside Begin/EndFrame!");
+    PS2_AssertMsg(!s_2dFlushed, "Flush2D called twice this frame!");
+    s_2dFlushed = true;
 
     RenderPacket & pkt = FramePacket();
     pkt.Finish();
@@ -308,6 +348,18 @@ void EndFrame()
     dma_wait_fast();
     pkt.SendNormal();
     draw_wait_finish();
+}
+
+void EndFrame()
+{
+    PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
+
+    if (!s_2dFlushed)
+    {
+        Flush2D();
+    }
+    s_frameStarted = false;
+    s_2dFlushed    = false;
 
     graph_wait_vsync();
     graph_set_framebuffer_filtered(static_cast<int>(s_frame[s_drawCtx].address),

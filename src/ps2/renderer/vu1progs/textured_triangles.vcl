@@ -32,31 +32,33 @@
 ; Transforms one vertex: 3 input qwords at offPos/offColor/offStq from
 ; iInPtr become the ST, RGBAQ and XYZ2 output qwords at the same offsets
 ; from iOutPtr (the offsets coincide because both formats are 3 qwords).
-; Steps: load, MVP transform, guard-band clip judgement against |w|
-; (clipw; scaled x/y, exact z), perspective divide with the same 1/w
-; multiplied onto the texture coords - the GS wants (s/w, t/w, 1/w) for
-; perspective-correct interpolation - then NDC to GS window coordinates
-; in 12.4 fixed point, and store. Leaves this vertex's clipw flags as
-; the newest entry in the clip flag register; the caller judges whole
-; triangles with fcand after 3 calls and writes the XYZ2 .w ADC bit.
+; Leaves this vertex's clipw flags as the newest entry in the clip flag
+; register; the caller judges whole triangles with fcand after 3 calls
+; and writes the XYZ2 .w ADC bit.
 #macro DoVertex: offPos, offColor, offStq
 
     lq fPos,   offPos(iInPtr)
     lq fColor, offColor(iInPtr)
     lq fStq,   offStq(iInPtr)
 
+    ; Position to clip space (row-vector MVP):
     mul  acc,  fMVP0, fPos[x]
     madd acc,  fMVP1, fPos[y]
     madd acc,  fMVP2, fPos[z]
     madd fPos, fMVP3, fPos[w]
 
+    ; Guard-band clip judgement against |w|: scaled x/y, exact z.
     mul.xyz   fJudge, fPos, fClipScale
     clipw.xyz fJudge, fPos[w]
 
+    ; Perspective divide, with the same 1/w multiplied onto the texture
+    ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
+    ; interpolation.
     div     q,    vf00[w], fPos[w]
     mul.xyz fPos, fPos,    q
     mulq    fStq, fStq,    q
 
+    ; NDC to GS window coordinates, in 12.4 fixed point:
     mula.xyz  acc,  fGSOffset, vf00[w]
     madd.xyz  fPos, fPos, fGSScale
     ftoi4.xyz fPos, fPos

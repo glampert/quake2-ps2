@@ -5,7 +5,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/renderer/tests/draw_cube.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
@@ -114,7 +114,7 @@ void DrawRotatingCube()
 
     const Mat4 mvp = model * view * proj;
 
-    vu1::DrawTriangles(mvp, *tex::DebugTexture(), s_cubeVerts, 36);
+    vu1::DrawTriangles(mvp, tex::DebugTexture(), s_cubeVerts, ArrayLength(s_cubeVerts));
 }
 
 } // namespace ps2::test

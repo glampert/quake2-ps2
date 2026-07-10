@@ -7,7 +7,7 @@
  * ================================================================================================ */
 
 #include "ps2/input/pad.h"
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 
 #include <sifrpc.h>
 #include <loadfile.h>

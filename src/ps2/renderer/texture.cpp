@@ -127,8 +127,10 @@ class TextureCache final
 public:
     void Init();
 
-    Texture * Find(const char * name)
+    const Texture * Find(const char * name)
     {
+        PS2_Assert(name != nullptr && *name != '\0');
+
         char fullname[MAX_QPATH];
         NormalizeName(name, fullname);
 
@@ -146,7 +148,7 @@ public:
         return texture;
     }
 
-    Texture * DebugTexture() const { return m_debugTexture; }
+    const Texture & DebugTexture() const { return *m_debugTexture; }
 
 private:
     Texture & Register(const char * name, const void * pixels, int width, int height,
@@ -154,9 +156,9 @@ private:
 
     static constexpr int kMaxTextures = 32; // Builtins only for now; grows with asset loading.
 
+    int m_used = 0;
     Texture m_textures[kMaxTextures] = {};
-    int     m_used = 0;
-    Texture * m_debugTexture = nullptr;
+    const Texture * m_debugTexture = nullptr;
 
     // Name lookup: FNV-1a hash of the full path -> index into m_textures[].
     std::unordered_map<std::uint64_t, int> m_lookup;
@@ -239,12 +241,12 @@ void Init()
     s_cache.Init();
 }
 
-Texture * Find(const char * name)
+const Texture * Find(const char * name)
 {
     return s_cache.Find(name);
 }
 
-Texture * DebugTexture()
+const Texture & DebugTexture()
 {
     return s_cache.DebugTexture();
 }

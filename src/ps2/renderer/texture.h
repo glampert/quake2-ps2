@@ -8,7 +8,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 
 #include <cstdint>
 #include <draw_buffers.h> // texbuffer_t
@@ -81,9 +81,9 @@ void Init();
 // Looks up a texture by game name. Bare names expand Quake-style to
 // "pics/<name>.pcx"; a leading '/' or '\' means the full path was given.
 // Returns nullptr if nothing matches (no file loading yet).
-Texture * Find(const char * name);
+const Texture * Find(const char * name);
 
 // Pink/black checkerboard stand-in, drawn wherever an image is missing.
-Texture * DebugTexture();
+const Texture & DebugTexture();
 
 } // namespace ps2::tex

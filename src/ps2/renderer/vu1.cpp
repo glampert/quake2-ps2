@@ -25,7 +25,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vif_packet.h"
 #include "ps2/renderer/gs.h"

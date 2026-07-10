@@ -9,7 +9,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/input/pad.h"
 
 // The input backend is client code (the engine's own win32/in_win.c is the same):

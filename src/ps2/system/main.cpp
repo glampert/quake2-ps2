@@ -6,7 +6,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 
 // Default filesystem prefix. PCSX2 exposes the ELF's directory as "host:"; a real
 // console typically loads from USB mass storage ("mass:"). Override at build time

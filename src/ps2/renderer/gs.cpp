@@ -20,7 +20,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_packet.h"
 #include "ps2/renderer/texture.h"

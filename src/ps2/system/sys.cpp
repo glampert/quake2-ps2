@@ -7,7 +7,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/debug/scr_print.h"
 
 #include <cstdio>

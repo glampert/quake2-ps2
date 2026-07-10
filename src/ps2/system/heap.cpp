@@ -8,7 +8,7 @@
  * ================================================================================================ */
 
 #include "ps2/system/heap.h"
-#include "ps2/qcommon.h" // Sys_Error, etc
+#include "ps2/common.h" // Sys_Error, etc
 
 #include <new>
 #include <cstdlib> // malloc/free/calloc/realloc (overridden to dlmalloc in dlmalloc.c)

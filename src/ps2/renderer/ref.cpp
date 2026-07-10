@@ -9,7 +9,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/qcommon.h"
+#include "ps2/common.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
@@ -32,13 +32,13 @@ static const ps2::tex::Texture * s_texBacktile = nullptr;
 
 // A missing image draws as the pink/black checkerboard instead of crashing or
 // silently vanishing - obvious on screen, and callers get sane dimensions.
-ps2::tex::Texture * FindPicOrPlaceholder(const char * name)
+const ps2::tex::Texture * FindPicOrPlaceholder(const char * name)
 {
-    ps2::tex::Texture * texture = ps2::tex::Find(name);
+    const ps2::tex::Texture * texture = ps2::tex::Find(name);
     if (texture == nullptr)
     {
         Com_DPrintf("Missing pic '%s', using placeholder.\n", name);
-        texture = ps2::tex::DebugTexture();
+        texture = &ps2::tex::DebugTexture();
     }
     return texture;
 }
@@ -167,12 +167,14 @@ void PS2_SetSky(const char * name, float rotate, vec3_t axis) { (void)name; (voi
 
 struct image_s * PS2_RegisterSkin(const char * name)
 {
-    return reinterpret_cast<struct image_s *>(FindPicOrPlaceholder(name));
+    return const_cast<struct image_s*>(
+        reinterpret_cast<const struct image_s *>(FindPicOrPlaceholder(name)));
 }
 
 struct image_s * PS2_RegisterPic(const char * name)
 {
-    return reinterpret_cast<struct image_s *>(FindPicOrPlaceholder(name));
+    return const_cast<struct image_s*>(
+        reinterpret_cast<const struct image_s *>(FindPicOrPlaceholder(name)));
 }
 
 // ------------------------------------------------------------------------------------------------

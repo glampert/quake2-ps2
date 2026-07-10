@@ -1,5 +1,5 @@
 /* ================================================================================================
- * File: qcommon.h
+ * File: common.h
  * Brief: The single seam between the modern C++ PS2 backend and the untouched C
  *        Quake II engine. Backend .cpp files include THIS rather than reaching
  *        into the engine headers directly, so the C-linkage wrapping and the few
@@ -8,8 +8,8 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#ifndef PS2_QCOMMON_H
-#define PS2_QCOMMON_H
+#ifndef PS2_COMMON_H
+#define PS2_COMMON_H
 
 // C++ standard headers must be included OUTSIDE the extern "C" block below.
 #include <cstddef>
@@ -27,6 +27,16 @@ extern "C" {
     #include "client/vid.h"      // VID_* + viddef
     #include "client/keys.h"     // Key_Event + key codes
 }
+
+namespace ps2 {
+
+template<typename T, size_t N>
+constexpr int ArrayLength(const T (&)[N])
+{
+    return static_cast<int>(N);
+}
+
+} // namespace ps2
 
 // Helper assert macros that display the error on screen and halt.
 // Prefer these over standard assert().
@@ -46,4 +56,4 @@ extern "C" {
         }                                              \
     } while (0)
 
-#endif // PS2_QCOMMON_H
+#endif // PS2_COMMON_H

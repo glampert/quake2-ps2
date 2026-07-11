@@ -1,0 +1,36 @@
+{
+    "name": "ps2-vcl",
+    "displayName": "PS2 VCL/VU Assembly",
+    "description": "Syntax highlighting for PlayStation 2 VU microprograms written in VCL (openvcl/vclpp) and raw VU assembly (.vsm).",
+    "version": "0.1.0",
+    "publisher": "guilherme",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "ps2-vcl",
+                "aliases": [
+                    "PS2 VCL",
+                    "VU Assembly"
+                ],
+                "extensions": [
+                    ".vcl",
+                    ".vsm"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "ps2-vcl",
+                "scopeName": "source.vcl.ps2",
+                "path": "./syntaxes/vcl.tmLanguage.json"
+            }
+        ]
+    }
+}

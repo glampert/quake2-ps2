@@ -1,0 +1,98 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "PS2 VCL",
+    "scopeName": "source.vcl.ps2",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#preprocessor" },
+        { "include": "#directives" },
+        { "include": "#labels" },
+        { "include": "#opcodes" },
+        { "include": "#macroCalls" },
+        { "include": "#registers" },
+        { "include": "#fields" },
+        { "include": "#numbers" },
+        { "include": "#constants" },
+        { "include": "#variables" },
+        { "include": "#operators" }
+    ],
+    "repository": {
+        "comments": {
+            "patterns": [
+                { "name": "comment.line.semicolon.vcl", "match": ";.*$" },
+                { "name": "comment.line.double-slash.vcl", "match": "//.*$" },
+                { "name": "comment.block.vcl", "begin": "/\\*", "end": "\\*/" }
+            ]
+        },
+        "preprocessor": {
+            "patterns": [
+                {
+                    "match": "^\\s*(#\\s*(?:macro|vuprog))\\s+([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.vcl" },
+                        "2": { "name": "entity.name.function.vcl" }
+                    }
+                },
+                {
+                    "match": "^\\s*(#\\s*define)\\s+([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.vcl" },
+                        "2": { "name": "variable.other.constant.vcl" }
+                    }
+                },
+                { "name": "keyword.control.directive.vcl", "match": "^\\s*#\\s*\\w+" }
+            ]
+        },
+        "directives": {
+            "patterns": [
+                { "name": "keyword.control.directive.vcl", "match": "^\\s*\\.[A-Za-z_]\\w*" },
+                { "name": "keyword.control.directive.vcl", "match": "^\\s*--[A-Za-z]\\w*" }
+            ]
+        },
+        "labels": {
+            "match": "^\\s*([A-Za-z_$.][\\w$.]*):",
+            "captures": {
+                "1": { "name": "entity.name.function.label.vcl" }
+            }
+        },
+        "opcodes": {
+            "name": "keyword.other.opcode.vcl",
+            "match": "(?i)\\b(?:(?:add|sub|mul|madd|msub)a?(?:i|q|[xyzw])?|max(?:i|[xyzw])?|mini(?:i|[xyzw])?|abs|opmula|opmsub|clipw?|ftoi(?:0|4|12|15)|itof(?:0|4|12|15)|nop|div|sqrt|rsqrt|e(?:atanxy|atanxz|atan|exp|leng|rcpr|rleng|rsadd|rsqrt|sadd|sin|sqrt|sum)|fc(?:and|eq|get|or|set)|fm(?:and|eq|or)|fs(?:and|eq|or|set)|i(?:add(?:iu|i)?|and|or|sub(?:iu)?)|ib(?:eq|gez|gtz|lez|ltz|ne)|ilwr?|iswr?|jalr|jr|lq[di]?|loi|sq[di]?|m(?:fir|fp|ove|r32|tir)|r(?:get|init|next|xor)|wait[pq]|x(?:gkick|itop|top)|b(?:al)?)(?:\\.[xyzw]{1,4})?\\b"
+        },
+        "macroCalls": {
+            "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\{)",
+            "captures": {
+                "1": { "name": "entity.name.function.macro.vcl" }
+            }
+        },
+        "registers": {
+            "patterns": [
+                { "name": "variable.language.register.vcl", "match": "(?i)\\$?\\bv[fi]\\d{1,2}\\b" },
+                { "name": "variable.language.register.vcl", "match": "\\$(?:ACC|acc|[IQRPiqrp])\\b" },
+                { "name": "variable.language.register.vcl", "match": "(?i)\\b(?:acc|q|p|r|i)\\b" }
+            ]
+        },
+        "fields": {
+            "name": "variable.language.field.vcl",
+            "match": "\\[[xyzw]{1,4}\\]"
+        },
+        "numbers": {
+            "patterns": [
+                { "name": "constant.numeric.hex.vcl", "match": "\\b0[xX][0-9A-Fa-f]+\\b" },
+                { "name": "constant.numeric.vcl", "match": "(?<![\\w.])[-+]?\\d+(?:\\.\\d+)?\\b" }
+            ]
+        },
+        "constants": {
+            "name": "variable.other.constant.vcl",
+            "match": "\\bk[A-Z]\\w*\\b"
+        },
+        "variables": {
+            "name": "variable.other.vcl",
+            "match": "\\b[fil][A-Z]\\w*\\b"
+        },
+        "operators": {
+            "name": "keyword.operator.vcl",
+            "match": "\\+\\+"
+        }
+    }
+}

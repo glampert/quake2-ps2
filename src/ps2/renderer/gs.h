@@ -10,7 +10,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include <cstdint>
+#include <tamtypes.h>
 
 namespace ps2::tex { struct Texture; }
 
@@ -33,7 +33,7 @@ int CurrentContext();
 int DepthTestMethod();
 
 // Background colour used by BeginFrame()'s screen clear.
-void SetClearColor(std::uint8_t r, std::uint8_t g, std::uint8_t b);
+void SetClearColor(u8 r, u8 g, u8 b);
 
 // Per-frame lifecycle: BeginFrame() clears the back buffer (color + depth,
 // sent immediately) and starts a fresh 2D packet; EndFrame() finalises,
@@ -50,7 +50,7 @@ void Flush2D();
 // Adds a solid rectangle to the current frame. Alpha below 255 blends with the
 // framebuffer (255 = fully opaque, unblended).
 void FillRect(int x, int y, int w, int h,
-              std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a);
+              u8 r, u8 g, u8 b, u8 a);
 
 // Uploads a texture's pixels to GS VRAM (allocating the VRAM space) and fills
 // in its libdraw descriptor. Synchronous; call outside Begin/EndFrame. The
@@ -66,6 +66,6 @@ void SetTexture(const tex::Texture & texture);
 // colour: 128 = unchanged, 255 = ~2x. Texels with alpha 0 are cut out by the
 // alpha test (console font transparency).
 void DrawTexturedRect(int x, int y, int w, int h,
-                      int u0, int v0, int u1, int v1, std::uint8_t brightness);
+                      int u0, int v0, int u1, int v1, u8 brightness);
 
 } // namespace ps2::gs

@@ -60,17 +60,17 @@ namespace {
 
 // 64-bit FNV-1a. Local to the texture module for now; move to a shared
 // utils header when a second user appears.
-constexpr std::uint64_t HashStr64(const char * str)
+constexpr u64 HashStr64(const char * str)
 {
     if (str == nullptr || *str == '\0')
     {
         return 0;
     }
 
-    std::uint64_t hash = 14695981039346656037ull;
+    u64 hash = 14695981039346656037ull;
     while (*str != '\0')
     {
-        hash ^= static_cast<std::uint8_t>(*str++);
+        hash ^= static_cast<u8>(*str++);
         hash *= 1099511628211ull;
     }
 
@@ -96,16 +96,16 @@ void NormalizeName(const char * name, char (&out)[MAX_QPATH])
 constexpr int kCheckerDim     = 64;
 constexpr int kCheckerSquares = 4;
 
-const std::uint16_t * MakeCheckerPattern()
+const u16 * MakeCheckerPattern()
 {
-    constexpr auto Rgb16 = [](int r, int g, int b) -> std::uint16_t
+    constexpr auto Rgb16 = [](int r, int g, int b) -> u16
     {
-        return static_cast<std::uint16_t>((1u << 15) | ((unsigned(b) >> 3) << 10) |
-                                          ((unsigned(g) >> 3) << 5) | (unsigned(r) >> 3));
+        return static_cast<u16>((1u << 15) | ((unsigned(b) >> 3) << 10) |
+                               ((unsigned(g) >> 3) << 5) | (unsigned(r) >> 3));
     };
-    const std::uint16_t colors[2] = { Rgb16(255, 100, 255), Rgb16(0, 0, 0) };
 
-    static std::uint16_t s_buffer[kCheckerDim * kCheckerDim] __attribute__((aligned(16)));
+    const u16 colors[2] = { Rgb16(255, 100, 255), Rgb16(0, 0, 0) };
+    static u16 s_buffer[kCheckerDim * kCheckerDim] __attribute__((aligned(16)));
 
     constexpr int squareSize = kCheckerDim / kCheckerSquares;
     for (int y = 0; y < kCheckerDim; ++y)
@@ -161,7 +161,7 @@ private:
     const Texture * m_debugTexture = nullptr;
 
     // Name lookup: FNV-1a hash of the full path -> index into m_textures[].
-    std::unordered_map<std::uint64_t, int> m_lookup;
+    std::unordered_map<u64, int> m_lookup;
 };
 
 Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,

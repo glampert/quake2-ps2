@@ -49,7 +49,7 @@ namespace {
 // '`' is the hardcoded console toggle in keys.c.
 struct ButtonMapping
 {
-    std::uint16_t padButton; // PAD_* bit
+    u16 padButton;           // PAD_* bit
     int uiKey;               // key sent while a menu/the console has focus
     int gameKey;             // key sent while playing
     const char * gameBind;   // default binding for gameKey (nullptr = leave unbound)
@@ -84,7 +84,7 @@ constexpr int kNumButtons = static_cast<int>(sizeof(kButtonMap) / sizeof(kButton
 static ps2::input::GamePad s_gamepad;
 
 // Edge-detection state for turning the button mask into key up/down events.
-static std::uint16_t s_oldButtons = 0;
+static u16 s_oldButtons = 0;
 
 // Key delivered when each button was pressed, so the release sends the same key
 // even if input focus changed while the button was held.
@@ -168,8 +168,8 @@ void IN_Frame()
 
 void IN_Commands()
 {
-    const std::uint16_t buttons = s_gamepad.Buttons();
-    const std::uint16_t changed = static_cast<std::uint16_t>(buttons ^ s_oldButtons);
+    const u16 buttons = s_gamepad.Buttons();
+    const u16 changed = static_cast<u16>(buttons ^ s_oldButtons);
     if (changed == 0)
     {
         return;

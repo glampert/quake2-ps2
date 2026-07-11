@@ -20,6 +20,12 @@
 
 namespace ps2::vu1 {
 
+struct VUCode
+{
+    u32* start;
+    u32* end;
+};
+
 class VifPacket final
 {
 public:
@@ -34,7 +40,7 @@ public:
     void Init(int maxQwords)
     {
         PS2_AssertMsg(m_packet == nullptr, "VifPacket::Init called twice!");
-        m_packet = packet2_create(static_cast<std::uint16_t>(maxQwords),
+        m_packet = packet2_create(static_cast<u16>(maxQwords),
                                   P2_TYPE_NORMAL, P2_MODE_CHAIN, /*tte=*/1);
         PS2_AssertMsg(m_packet != nullptr, "packet2_create failed!");
         m_maxQwords = maxQwords;
@@ -66,42 +72,40 @@ public:
 
     // References a VU microprogram into the chain as MPG transfers (chunked to
     // the 256-instruction VIF limit). 'destInstr' is the VU micro memory
-    // address in 64-bit instruction units. u32 is the SDK's type for the code
-    // words (note: NOT std::uint32_t, which is unsigned long on this ABI).
-    void AddMicroProgram(int destInstr, u32 * codeStart, u32 * codeEnd)
+    // address in 64-bit instruction units.
+    void AddMicroProgram(u32 destInstr, VUCode code)
     {
-        packet2_vif_add_micro_program(m_packet, static_cast<u32>(destInstr),
-                                      codeStart, codeEnd);
+        packet2_vif_add_micro_program(m_packet, destInstr, code.start, code.end);
     }
 
     // Programs the VIF1 BASE/OFFSET registers that split VU data memory into the
     // two halves the XTOP double buffering alternates between. Both in qwords.
-    void AddDoubleBufferSettings(int baseQw, int offsetQw)
+    void AddDoubleBufferSettings(u32 baseQw, u32 offsetQw)
     {
-        packet2_utils_vu_add_double_buffer(m_packet, static_cast<std::uint16_t>(baseQw),
-                                           static_cast<std::uint16_t>(offsetQw));
+        packet2_utils_vu_add_double_buffer(m_packet,
+                                           static_cast<u16>(baseQw),
+                                           static_cast<u16>(offsetQw));
     }
 
     // References 'data' in place (REF tag) and unpacks it to VU data memory at
     // 'vuAddr' (qword address; relative to the current double buffer when
     // 'useTop'). The data must be 16-byte aligned and stay untouched until the
     // transfer completes. At most 256 qwords per unpack.
-    void AddUnpackData(int vuAddr, const void * data, int qwords, bool useTop)
+    void AddUnpackData(u32 vuAddr, const void * data, u32 qwords, bool useTop)
     {
         PS2_AssertMsg(qwords <= 256, "VIF unpacks are limited to 256 qwords!");
         PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(data) & 15u) == 0, "Unpack data must be 16-byte aligned!");
 
-        packet2_chain_ref(m_packet, data, static_cast<std::uint32_t>(qwords), 0, 0, 0);
+        packet2_chain_ref(m_packet, data, qwords, 0, 0, 0);
         packet2_vif_stcycl(m_packet, 1, 1, 0);
-        packet2_vif_open_unpack(m_packet, P2_UNPACK_V4_32, static_cast<std::uint32_t>(vuAddr),
-                                useTop, /*masked=*/0, /*usigned=*/1, 0);
-        packet2_vif_close_unpack_manual(m_packet, static_cast<std::uint32_t>(qwords));
+        packet2_vif_open_unpack(m_packet, P2_UNPACK_V4_32, vuAddr, useTop, /*masked=*/0, /*usigned=*/1, 0);
+        packet2_vif_close_unpack_manual(m_packet, qwords);
     }
 
     // Small unpacks built directly into the chain: open, append qwords, close.
-    void OpenInlineUnpack(int vuAddr, bool useTop)
+    void OpenInlineUnpack(u32 vuAddr, bool useTop)
     {
-        packet2_utils_vu_open_unpack(m_packet, static_cast<std::uint32_t>(vuAddr), useTop);
+        packet2_utils_vu_open_unpack(m_packet, vuAddr, useTop);
     }
 
     void CloseInlineUnpack()
@@ -109,9 +113,9 @@ public:
         packet2_utils_vu_close_unpack(m_packet);
     }
 
-    void AddQword(std::uint64_t lo, std::uint64_t hi)
+    void AddQword(u64 lo, u64 hi)
     {
-        packet2_add_2x_s64(m_packet, static_cast<std::int64_t>(lo), static_cast<std::int64_t>(hi));
+        packet2_add_2x_s64(m_packet, static_cast<s64>(lo), static_cast<s64>(hi));
     }
 
     void AddFloat(float value)
@@ -119,16 +123,16 @@ public:
         packet2_add_float(m_packet, value);
     }
 
-    void AddU32(std::uint32_t value)
+    void AddU32(u32 value)
     {
         packet2_add_u32(m_packet, value);
     }
 
     // FLUSH + MSCAL: waits for any previous run, then starts the microprogram at
     // 'progInstr' (64-bit instruction units; 0 = start of micro memory).
-    void AddStartProgram(int progInstr)
+    void AddStartProgram(u32 progInstr)
     {
-        packet2_utils_vu_add_start_program(m_packet, static_cast<std::uint32_t>(progInstr));
+        packet2_utils_vu_add_start_program(m_packet, progInstr);
     }
 
     // Trailing FLUSH: stalls VIF1 until the microprogram ends and its XGKICKs

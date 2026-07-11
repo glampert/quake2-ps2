@@ -64,7 +64,7 @@ static bool s_frameStarted = false;
 static bool s_2dFlushed    = false;
 static const tex::Texture * s_currentTex = nullptr; // texture bound in the current frame packet
 
-static std::uint8_t s_clear[3] = { 0x20, 0x20, 0x38 }; // distinctive dark blue
+static u8 s_clear[3] = { 0x20, 0x20, 0x38 }; // distinctive dark blue
 
 inline RenderPacket & FramePacket()
 {
@@ -84,7 +84,7 @@ int CurrentContext() { return s_drawCtx; }
 
 int DepthTestMethod() { return static_cast<int>(s_zbuffer.method); }
 
-void SetClearColor(std::uint8_t r, std::uint8_t g, std::uint8_t b)
+void SetClearColor(u8 r, u8 g, u8 b)
 {
     s_clear[0] = r;
     s_clear[1] = g;
@@ -184,7 +184,7 @@ void BeginFrame()
 }
 
 void FillRect(int x, int y, int w, int h,
-              std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a)
+              u8 r, u8 g, u8 b, u8 a)
 {
     PS2_AssertMsg(s_frameStarted, "FillRect outside Begin/EndFrame!");
     PS2_AssertMsg(!s_2dFlushed, "FillRect after Flush2D!");
@@ -215,7 +215,7 @@ void FillRect(int x, int y, int w, int h,
     {
         // Translucent (fade screen and friends). GS alpha is 0..0x80 = 0..1.
         draw_enable_blending();
-        rect.color.a = static_cast<std::uint8_t>(a >> 1);
+        rect.color.a = static_cast<u8>(a >> 1);
 
         // The GS is slow on very large polygons; libdraw recommends strips for
         // near-fullscreen fills.
@@ -302,7 +302,7 @@ void SetTexture(const tex::Texture & texture)
 }
 
 void DrawTexturedRect(int x, int y, int w, int h,
-                      int u0, int v0, int u1, int v1, std::uint8_t brightness)
+                      int u0, int v0, int u1, int v1, u8 brightness)
 {
     PS2_AssertMsg(s_frameStarted, "DrawTexturedRect outside Begin/EndFrame!");
     PS2_AssertMsg(!s_2dFlushed, "DrawTexturedRect after Flush2D!");

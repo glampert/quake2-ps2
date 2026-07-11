@@ -9,7 +9,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include <cstdint>
+#include <tamtypes.h>
 #include <libpad.h> // padButtonStatus + PAD_* button bits
 
 namespace ps2::input {
@@ -29,7 +29,7 @@ public:
 
     // Currently-pressed buttons as an active-high mask of PAD_* bits
     // (0 while disconnected).
-    std::uint16_t Buttons() const { return m_buttons; }
+    u16 Buttons() const { return m_buttons; }
 
     // True when the analog sticks carry meaningful data: a DualShock in analog
     // mode that polled successfully this frame. Digital pads and the brief
@@ -44,7 +44,7 @@ public:
     float RightStickY() const;
 
 private:
-    enum class Status : std::uint8_t
+    enum class Status : u8
     {
         Unavailable,  // IOP modules or the port failed - pad permanently off
         Disconnected, // waiting for a pad to connect and stabilise
@@ -56,7 +56,7 @@ private:
 
     Status m_status = Status::Unavailable;
     padButtonStatus m_data{};    // last good padRead() result
-    std::uint16_t m_buttons = 0; // active-high pressed mask
+    u16 m_buttons = 0; // active-high pressed mask
     bool m_analogValid = false;
 
     // libpad DMA transfer area: 256 bytes, 64-byte aligned.

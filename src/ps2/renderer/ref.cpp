@@ -24,7 +24,7 @@ namespace {
 constexpr int kGlyphSize = 8;
 
 // Vertex colour applied to textured 2D (GS modulate: 128 = texels unchanged).
-constexpr std::uint8_t kUiBrightness = 128;
+constexpr u8 kUiBrightness = 128;
 
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
@@ -227,10 +227,10 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
 
 void PS2_DrawFill(int x, int y, int w, int h, int c)
 {
-    const std::uint32_t p = global_palette[c & 0xFF];
-    const std::uint8_t  r = static_cast<std::uint8_t>(p & 0xFFu);
-    const std::uint8_t  g = static_cast<std::uint8_t>((p >> 8) & 0xFFu);
-    const std::uint8_t  b = static_cast<std::uint8_t>((p >> 16) & 0xFFu);
+    const u32 p = global_palette[c & 0xFF];
+    const u8  r = static_cast<u8>(p & 0xFFu);
+    const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
+    const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
     ps2::gs::FillRect(x, y, w, h, r, g, b, 255);
 }
 

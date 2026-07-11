@@ -27,7 +27,6 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
-#include "ps2/renderer/vif_packet.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
 
@@ -88,7 +87,7 @@ static bool s_initialized = false;
 // TEX0/TEX1 register qwords for the batch's texture bind, sent A+D over PATH1.
 // Built here rather than with the packet2_utils helpers because those hardcode
 // GS context 0 and this renderer alternates contexts per frame.
-std::uint64_t MakeTex0Data(const tex::Texture & texture)
+u64 MakeTex0Data(const tex::Texture & texture)
 {
     // No palettized formats in use, so the CLUT fields stay zero (as gs::SetTexture).
     return GS_SET_TEX0(texture.texbuf.address >> 6,
@@ -101,7 +100,7 @@ std::uint64_t MakeTex0Data(const tex::Texture & texture)
                        0, 0, CLUT_STORAGE_MODE1, 0, CLUT_NO_LOAD);
 }
 
-std::uint64_t MakeTex1Data(const tex::Texture & texture)
+u64 MakeTex1Data(const tex::Texture & texture)
 {
     return GS_SET_TEX1(LOD_USE_K, 0,
                        tex::GsMagFilter(texture.magFilter),
@@ -111,7 +110,7 @@ std::uint64_t MakeTex1Data(const tex::Texture & texture)
 
 // Pixel tests for the batch: the environment's alpha test plus the real
 // z-test (mirrors libdraw's draw_enable_tests).
-std::uint64_t MakeTestData()
+u64 MakeTestData()
 {
     return GS_SET_TEST(DRAW_ENABLE, ATEST_METHOD_NOTEQUAL, 0x00, ATEST_KEEP_FRAMEBUFFER,
                        DRAW_DISABLE, DRAW_DISABLE,
@@ -132,7 +131,7 @@ void Init()
     dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_VIF1);
 
-    const auto instructions = (&VU1Prog_TexturedTriangles_CodeEnd - &VU1Prog_TexturedTriangles_CodeStart) / 2;
+    const auto instructions = VU1Prog_TexturedTriangles_InstructionQwordCount();
     PS2_AssertMsg(instructions <= 2048, "Microprogram overflows VU1 micro memory!");
 
     s_drawPacket.Init(kDrawPacketQwords);
@@ -140,7 +139,7 @@ void Init()
     // Upload the microprogram to micro address 0 and set up the double buffer.
     // Synchronous; VU1 is ready once this returns.
     VifPacket & pkt = s_drawPacket;
-    pkt.AddMicroProgram(0, &VU1Prog_TexturedTriangles_CodeStart, &VU1Prog_TexturedTriangles_CodeEnd);
+    pkt.AddMicroProgram(0, VU1Prog_TexturedTriangles_Code());
     pkt.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
     pkt.AddEndTag();
     pkt.Send();
@@ -176,24 +175,24 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         pkt.AddU32(0);
         pkt.AddU32(0);
         pkt.AddU32(0);
-        pkt.AddU32(static_cast<std::uint32_t>(vertCount));
+        pkt.AddU32(static_cast<u32>(vertCount));
 
         // Three A+D register writes: pixel tests and the texture bind for
         // this context...
         pkt.AddQword(GIF_SET_TAG(3, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
-        pkt.AddQword(MakeTestData(), static_cast<std::uint64_t>(GS_REG_TEST + ctx));
-        pkt.AddQword(MakeTex1Data(texture), static_cast<std::uint64_t>(GS_REG_TEX1 + ctx));
-        pkt.AddQword(MakeTex0Data(texture), static_cast<std::uint64_t>(GS_REG_TEX0 + ctx));
+        pkt.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + ctx));
+        pkt.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1 + ctx));
+        pkt.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0 + ctx));
 
         // ...then the drawing tag: gouraud textured triangle list, STQ mapping,
         // ST before RGBAQ so the GS latches Q for perspective-correct texturing.
         const u128 prim = VU_GS_PRIM(PRIM_TRIANGLE, 1, 1, 0, 0, 0, 0, ctx, 0);
-        pkt.AddQword(VU_GS_GIFTAG(static_cast<std::uint64_t>(vertCount), 1, 1, prim, 0, 3),
+        pkt.AddQword(VU_GS_GIFTAG(static_cast<u64>(vertCount), 1, 1, prim, 0, 3),
                      DRAW_STQ2_REGLIST);
     }
     pkt.CloseInlineUnpack();
 
-    pkt.AddUnpackData(kVertexDataAddr, verts, vertCount * 3, true);
+    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 3), true);
 
     pkt.AddStartProgram(0);
     pkt.AddFlush(); // so Wait() covers the VU run and its XGKICKs, not just the DMA

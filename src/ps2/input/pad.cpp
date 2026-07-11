@@ -120,7 +120,7 @@ void GamePad::Update()
         }
         else if (padRead(kPadPort, kPadSlot, &m_data) != 0)
         {
-            m_buttons = static_cast<std::uint16_t>(m_data.btns ^ 0xFFFFu); // Active-low.
+            m_buttons = static_cast<u16>(m_data.btns ^ 0xFFFFu); // Active-low.
 
             const int padType = m_data.mode >> 4;
             m_analogValid = (padType == PAD_TYPE_ANALOG) || (padType == PAD_TYPE_DUALSHOCK);

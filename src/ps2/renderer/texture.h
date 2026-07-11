@@ -10,14 +10,14 @@
 
 #include "ps2/common.h"
 
-#include <cstdint>
+#include <tamtypes.h>
 #include <draw_buffers.h> // texbuffer_t
 
 namespace ps2::tex {
 
 // What a texture is used for by the game. Mirrors the image classes of the
 // original renderers; later drives search flags and end-of-level eviction.
-enum class ImageType : std::uint8_t
+enum class ImageType : u8
 {
     Null,    // Free slot in the cache.
     Builtin, // Embedded in the ELF, always resident.
@@ -29,20 +29,20 @@ enum class ImageType : std::uint8_t
 };
 
 // Pixel storage formats we support, mapped to GS PSMs by GsPsm().
-enum class PixelFormat : std::uint8_t
+enum class PixelFormat : u8
 {
     RGBA32, // 4 bytes/texel, 8888.
     RGB16   // 2 bytes/texel, 5551 (alpha bit present but unused as TexComponents::RGB).
 };
 
 // Whether the texture's own alpha participates in the texture function (GS TCC bit).
-enum class TexComponents : std::uint8_t { RGB, RGBA };
+enum class TexComponents : u8 { RGB, RGBA };
 
 // GS texture function applied when a primitive samples the texture.
-enum class TexFunction : std::uint8_t { Modulate, Decal };
+enum class TexFunction : u8 { Modulate, Decal };
 
 // Texel filtering.
-enum class TexFilter : std::uint8_t { Nearest, Linear };
+enum class TexFilter : u8 { Nearest, Linear };
 
 // Mappings from the strongly typed enums above to the plain integer constants
 // libdraw/GS registers expect. SDK constants stay out of the rest of the backend.

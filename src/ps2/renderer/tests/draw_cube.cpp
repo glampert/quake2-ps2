@@ -20,7 +20,7 @@ constexpr float kCubeHalfSize = 20.0f;
 struct Corner
 {
     float x, y, z;
-    std::uint32_t r, g, b;
+    u32 r, g, b;
 };
 
 constexpr Corner kCorners[8] = {

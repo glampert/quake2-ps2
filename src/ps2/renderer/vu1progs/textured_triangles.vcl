@@ -35,6 +35,38 @@
 ; Leaves this vertex's clipw flags as the newest entry in the clip flag
 ; register; the caller judges whole triangles with fcand after 3 calls
 ; and writes the XYZ2 .w ADC bit.
+;
+; C-like pseudo-code ('in'/'out' are the qword arrays at iInPtr/iOutPtr):
+;
+;   void DoVertex(int offPos, int offColor, int offStq)
+;   {
+;       vec4 pos   = in[offPos];
+;       vec4 color = in[offColor];
+;       vec4 stq   = in[offStq];
+;
+;       // Object space to clip space (row-vector MVP):
+;       pos = pos.x * mvp[0] + pos.y * mvp[1]
+;           + pos.z * mvp[2] + pos.w * mvp[3];
+;
+;       // Guard-band clip judgement: compare the scaled position
+;       // against |w| and push the 6 outside flags (+x,-x,+y,-y,+z,-z)
+;       // onto the clip flag queue for the caller to inspect:
+;       vec3 judge = pos.xyz * clipScale.xyz;
+;       clipFlagQueue.push(judge, abs(pos.w));
+;
+;       // Perspective divide; STQ shares the 1/w so the GS gets
+;       // (s/w, t/w, 1/w) for perspective-correct interpolation:
+;       float q  = 1.0f / pos.w;
+;       pos.xyz *= q; // now NDC
+;       stq     *= q;
+;
+;       // NDC to GS window coordinates, in 12.4 fixed point:
+;       pos.xyz = ftoi4(gsOffset.xyz + pos.xyz * gsScale.xyz);
+;
+;       out[offPos]     = stq;     // ST    (.z carries Q = 1/w)
+;       out[offColor]   = color;   // RGBAQ
+;       out[offStq].xyz = pos.xyz; // XYZ   (.w ADC bit set by caller)
+;   }
 #macro DoVertex: offPos, offColor, offStq
 
     lq fPos,   offPos(iInPtr)
@@ -69,6 +101,53 @@
 
 #endmacro
 
+; C-like pseudo-code of the program below ('vuMem' is VU1 data memory
+; seen as an array of qwords):
+;
+;   void VU1Prog_TexturedTriangles()
+;   {
+;       // Frame constants at the fixed low addresses:
+;       mat4 mvp       = vuMem[0..3];
+;       vec4 gsScale   = vuMem[4];
+;       vec4 gsOffset  = vuMem[5];
+;       vec4 clipScale = vuMem[6];
+;
+;       // This batch, in the current double buffer:
+;       qword* batch    = &vuMem[XTOP];
+;       int    numVerts = batch[kBatchHeader].w;
+;       qword* in       = &batch[kVertexData]; // 3 qwords per vertex
+;
+;       // The GS packet starts right after the input vertices:
+;       qword* kick = in + (numVerts * 3);
+;       qword* out  = kick;
+;
+;       // Packet head: the 5 GIF tag qwords prepared by the EE:
+;       memcpy(out, &batch[kGifTags], 5 * sizeof(qword));
+;       out += 5;
+;
+;       do // One triangle per iteration:
+;       {
+;           DoVertex(0, 1, 2); // in[0..2] -> out[0..2]
+;           DoVertex(3, 4, 5); // in[3..5] -> out[3..5]
+;           DoVertex(6, 7, 8); // in[6..8] -> out[6..8]
+;
+;           // Whole-triangle guard band reject: if any of the 18 clip
+;           // flags of the 3 vertices above is set, adc becomes 0x8000,
+;           // i.e. bit 15 - the ADC bit - and the GS skips this
+;           // triangle's drawing kick.
+;           int adc = 0x7FFF + (clipFlagQueue.last3() != 0 ? 1 : 0);
+;           out[2].w = adc; // .w of each of the 3 vertices
+;           out[5].w = adc;
+;           out[8].w = adc;
+;
+;           in  += 9;
+;           out += 9;
+;           numVerts -= 3;
+;       }
+;       while (numVerts != 0);
+;
+;       XGKICK(kick); // Send the finished GS packet.
+;   }
 #vuprog VU1Prog_TexturedTriangles
 
     ; VCL requires zeroed clip flags before any CLIP instruction:

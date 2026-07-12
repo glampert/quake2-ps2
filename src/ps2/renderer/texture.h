@@ -61,26 +61,19 @@ enum class TexFunction : u8 { Modulate, Decal };
 // Texel filtering.
 enum class TexFilter : u8 { Nearest, Linear };
 
-// Mappings from the strongly typed enums above to the plain integer constants
-// libdraw/GS registers expect. SDK constants stay out of the rest of the backend.
-int GsPsm(PixelFormat format);
-int GsComponents(TexComponents components);
-int GsFunction(TexFunction function);
-int GsMagFilter(TexFilter filter);
-int GsMinFilter(TexFilter filter);
-
 // A texture or 2D image. Plain data; owned by the internal texture cache.
 struct Texture final
 {
-    const void * pixels; // Pixel data in EE RAM (static memory for built-ins).
-    int          width;  // In pixels, > 0.
-    int          height; // In pixels, > 0.
+    static constexpr int kNotResident = -1;
 
     // Residency is a cache managed by gs/vram: binding a const Texture may
     // upload it (or evict others), so these two mutate behind the const API.
     mutable int         vramAddr; // GS VRAM word address; kNotResident when not uploaded.
     mutable texbuffer_t texbuf;   // libdraw descriptor used when binding (filled on upload).
 
+    const void *  pixels; // Pixel data in EE RAM (static memory for built-ins).
+    int           width;  // In pixels, > 0.
+    int           height; // In pixels, > 0.
     PixelFormat   format;
     TexComponents components;
     TexFunction   function;
@@ -94,9 +87,15 @@ struct Texture final
     // end-of-level eviction, scrap-atlas UVs, per-texture surface chain.
 
     // TODO: Consider texture mipmaps support and native palettized formats (CLUT).
-
-    static constexpr int kNotResident = -1;
 };
+
+// Mappings from the strongly typed enums above to the plain integer constants
+// libdraw/GS registers expect. SDK constants stay out of the rest of the backend.
+int GsPsm(PixelFormat format);
+int GsComponents(TexComponents components);
+int GsFunction(TexFunction function);
+int GsMagFilter(TexFilter filter);
+int GsMinFilter(TexFilter filter);
 
 // Registers the built-in images (they stream into GS VRAM on first bind).
 // Call once, after gs::Init().

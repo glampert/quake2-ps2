@@ -115,10 +115,10 @@ const u16 * MakeCheckerPattern(int variant)
 {
     PS2_Assert(variant >= 0 && variant < kNumDebugTextures);
 
-    constexpr auto Rgb16 = [](int r, int g, int b) -> u16
+    constexpr auto Rgb16 = [](u32 r, u32 g, u32 b) -> u16
     {
-        return static_cast<u16>((1u << 15) | ((unsigned(b) >> 3) << 10) |
-                               ((unsigned(g) >> 3) << 5) | (unsigned(r) >> 3));
+        return static_cast<u16>((1u << 15) | ((b >> 3) << 10) |
+                               ((g >> 3) << 5) | (r >> 3));
     };
 
     // One bright color per variant, checkered against black.

@@ -58,6 +58,9 @@ int GsMinFilter(TexFilter filter)
 
 namespace {
 
+constexpr u64 kFnvSeed  = 14695981039346656037ull;
+constexpr u64 kFnvPrime = 1099511628211ull;
+
 // 64-bit FNV-1a. Local to the texture module for now; move to a shared
 // utils header when a second user appears.
 constexpr u64 HashStr64(const char * str)
@@ -67,13 +70,23 @@ constexpr u64 HashStr64(const char * str)
         return 0;
     }
 
-    u64 hash = 14695981039346656037ull;
+    u64 hash = kFnvSeed;
     while (*str != '\0')
     {
         hash ^= static_cast<u8>(*str++);
-        hash *= 1099511628211ull;
+        hash *= kFnvPrime;
     }
 
+    return hash;
+}
+
+// Cache lookup key: the name hash continued with the image type as one extra
+// FNV-1a byte, so the same file may be cached independently per ImageType.
+constexpr u64 LookupKey(const char * fullname, ImageType type)
+{
+    u64 hash = HashStr64(fullname);
+    hash ^= static_cast<u8>(type);
+    hash *= kFnvPrime;
     return hash;
 }
 
@@ -141,36 +154,8 @@ class TextureCache final
 {
 public:
     void Init();
-
-    const Texture * Find(const char * name, const ps2::tex::ImageType type)
-    {
-        PS2_Assert(name != nullptr && *name != '\0');
-
-        char fullname[MAX_QPATH];
-        NormalizeName(name, fullname);
-
-        const auto it = m_lookup.find(HashStr64(fullname));
-        if (it == m_lookup.end())
-        {
-            return nullptr;
-        }
-
-        // TODO: Incorporate type into lookup (might have to be a bitflag instead, e.g. image can be Pic & Builtin)
-        (void)type;
-
-        const Texture & texture = m_texturePool.Slot(it->second);
-        // 64-bit FNV-1a collisions are vanishingly rare, but a miss here would
-        // silently draw the wrong image - verify the actual name.
-        PS2_AssertMsg(std::strcmp(texture.name, fullname) == 0, "Texture name hash collision!");
-
-        return &texture;
-    }
-
-    const Texture & DebugTexture(int index) const
-    {
-        PS2_Assert(index >= 0 && index < kNumDebugTextures);
-        return *m_debugTextures[index];
-    }
+    const Texture * Find(const char * name, const ps2::tex::ImageType type) const;
+    const Texture & DebugTexture(int index) const;
 
 private:
     Texture & Register(const char * name, const void * pixels, int width, int height,
@@ -182,9 +167,39 @@ private:
     TexturePool m_texturePool;
     const Texture * m_debugTextures[kNumDebugTextures] = {};
 
-    // Name lookup: FNV-1a hash of the full path -> pool slot of the texture.
+    // Lookup: FNV-1a hash of the full path + image type -> pool slot of the texture.
     std::unordered_map<u64, u16> m_lookup;
 };
+
+const Texture * TextureCache::Find(const char * name, const ps2::tex::ImageType type) const
+{
+    PS2_Assert(name != nullptr && *name != '\0');
+    PS2_Assert(type != ImageType::Null);
+
+    char fullname[MAX_QPATH];
+    NormalizeName(name, fullname);
+
+    const auto it = m_lookup.find(LookupKey(fullname, type));
+    if (it == m_lookup.end())
+    {
+        return nullptr;
+    }
+
+    const Texture & texture = m_texturePool.Slot(it->second);
+
+    // 64-bit FNV-1a collisions are vanishingly rare, but a miss here would
+    // silently draw the wrong image - verify the actual name and type.
+    PS2_AssertMsg(std::strcmp(texture.name, fullname) == 0 && texture.type == type,
+                  "Texture lookup hash collision!");
+
+    return &texture;
+}
+
+const Texture & TextureCache::DebugTexture(int index) const
+{
+    PS2_Assert(index >= 0 && index < kNumDebugTextures);
+    return *m_debugTextures[index];
+}
 
 Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,
                                  PixelFormat format, TexComponents components)
@@ -194,8 +209,7 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     const u16 slot = m_texturePool.Alloc();
     PS2_AssertMsg(slot != TexturePool::kInvalidIndex, "Out of texture cache slots!");
 
-    Texture & texture = m_texturePool.Slot(slot);
-
+    Texture & texture  = m_texturePool.Slot(slot);
     texture.pixels     = pixels;
     texture.width      = width;
     texture.height     = height;
@@ -205,11 +219,12 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     texture.function   = TexFunction::Modulate;
     texture.magFilter  = TexFilter::Nearest;
     texture.minFilter  = TexFilter::Nearest;
-    texture.type       = ImageType::Builtin;
+    texture.type       = ImageType::Pic;    // All built-ins are 2D UI images. TODO: File loading has to set this accordingly!
+    texture.flags      = TexFlags::Builtin; // TODO: File-loaded textures won't have this flag!
     std::snprintf(texture.name, sizeof(texture.name), "%s", name);
 
-    const auto inserted = m_lookup.emplace(HashStr64(texture.name), slot);
-    PS2_AssertMsg(inserted.second, "Duplicate texture name!");
+    const auto inserted = m_lookup.emplace(LookupKey(texture.name, texture.type), slot);
+    PS2_AssertMsg(inserted.second, "Duplicate texture name+type!");
 
     return texture;
 }
@@ -253,7 +268,7 @@ void TextureCache::Init()
     {
         char name[16];
         std::snprintf(name, sizeof(name), "debug%d", i);
-        m_debugTextures[i] = Find(name, ImageType::Builtin);
+        m_debugTextures[i] = Find(name, ImageType::Pic);
         PS2_Assert(m_debugTextures[i] != nullptr);
     }
 

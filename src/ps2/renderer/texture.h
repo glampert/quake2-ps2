@@ -16,17 +16,34 @@
 namespace ps2::tex {
 
 // What a texture is used for by the game. Mirrors the image classes of the
-// original renderers; later drives search flags and end-of-level eviction.
+// original renderers and is part of the cache lookup key, so the same file
+// may be cached once per type; later also drives end-of-level eviction.
 enum class ImageType : u8
 {
-    Null,    // Free slot in the cache.
-    Builtin, // Embedded in the ELF (streams in and out of VRAM like any other).
-    Pic,     // 2D UI/HUD image.
-    Skin,    // Model skin.
-    Sprite,  // Sprite frame.
-    Wall,    // World texture.
-    Sky      // Skybox face.
+    Null,   // Free slot in the cache.
+    Pic,    // 2D UI/HUD image.
+    Skin,   // Model skin.
+    Sprite, // Sprite frame.
+    Wall,   // World texture.
+    Sky     // Skybox face.
 };
+
+// Bit-flag texture properties, orthogonal to the ImageType.
+enum class TexFlags : u8
+{
+    None    = 0,
+    Builtin = 1 << 0 // Embedded in the ELF; always available, never unloaded.
+};
+
+constexpr TexFlags operator|(TexFlags lhs, TexFlags rhs)
+{
+    return TexFlags(static_cast<u8>(lhs) | static_cast<u8>(rhs));
+}
+
+constexpr bool HasFlag(TexFlags flags, TexFlags test)
+{
+    return (static_cast<u8>(flags) & static_cast<u8>(test)) != 0;
+}
 
 // Pixel storage formats we support, mapped to GS PSMs by GsPsm().
 enum class PixelFormat : u8
@@ -70,6 +87,7 @@ struct Texture final
     TexFilter     magFilter;
     TexFilter     minFilter;
     ImageType     type;
+    TexFlags      flags;
     char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx".
 
     // Later additions when file/asset loading lands: registration sequence for
@@ -84,9 +102,10 @@ struct Texture final
 // Call once, after gs::Init().
 void Init();
 
-// Looks up a texture by game name. Bare names expand Quake-style to
-// "pics/<name>.pcx"; a leading '/' or '\' means the full path was given.
-// Returns nullptr if nothing matches (no file loading yet).
+// Looks up a texture by game name and type; the type is part of the cache
+// key, so the same file may live in the cache once per ImageType. Bare names
+// expand Quake-style to "pics/<name>.pcx"; a leading '/' or '\' means the
+// full path was given. Returns nullptr if nothing matches (no file loading yet).
 const Texture * Find(const char * name, ImageType type);
 
 // Number of built-in debug checkerboard variants (distinct colors).

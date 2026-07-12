@@ -155,7 +155,8 @@ static bool unpak(FILE * pak_file, const pak_header_t * pak_header, const char *
         return false;
     }
 
-    for (int i = 0; i < num_files_in_pak; ++i)
+    int i;
+    for (i = 0; i < num_files_in_pak; ++i)
     {
         const pak_file_t * entry = &pak_file_entries[i];
         if (!extract_file(pak_file, dest_dir_name, entry->name, entry->filepos, entry->filelen))

@@ -127,7 +127,7 @@ class TextureCache final
 public:
     void Init();
 
-    const Texture * Find(const char * name)
+    const Texture * Find(const char * name, const ps2::tex::ImageType type)
     {
         PS2_Assert(name != nullptr && *name != '\0');
 
@@ -139,6 +139,9 @@ public:
         {
             return nullptr;
         }
+
+        // TODO: Incorporate type into lookup (might have to be a bitflag instead, e.g. image can be Pic & Builtin)
+        (void)type;
 
         Texture * texture = &m_textures[it->second];
         // 64-bit FNV-1a collisions are vanishingly rare, but a miss here would
@@ -222,7 +225,7 @@ void TextureCache::Init()
         gs::UploadTexture(texture);
     }
 
-    m_debugTexture = Find("debug");
+    m_debugTexture = Find("debug", ImageType::Builtin);
     PS2_Assert(m_debugTexture != nullptr);
 
     Com_Printf("Texture cache initialised: %d built-in images resident in VRAM.\n", m_used);
@@ -241,9 +244,9 @@ void Init()
     s_cache.Init();
 }
 
-const Texture * Find(const char * name)
+const Texture * Find(const char * name, const ps2::tex::ImageType type)
 {
-    return s_cache.Find(name);
+    return s_cache.Find(name, type);
 }
 
 const Texture & DebugTexture()

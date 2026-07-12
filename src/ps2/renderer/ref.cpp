@@ -32,15 +32,15 @@ static const ps2::tex::Texture * s_texBacktile = nullptr;
 
 // A missing image draws as the pink/black checkerboard instead of crashing or
 // silently vanishing - obvious on screen, and callers get sane dimensions.
-const ps2::tex::Texture * FindPicOrPlaceholder(const char * name)
+const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2::tex::ImageType type)
 {
-    const ps2::tex::Texture * texture = ps2::tex::Find(name);
+    const ps2::tex::Texture * texture = ps2::tex::Find(name, type);
     if (texture == nullptr)
     {
-        Com_DPrintf("Missing pic '%s', using placeholder.\n", name);
+        Com_DPrintf("Missing texture '%s', using placeholder.\n", name);
         texture = &ps2::tex::DebugTexture();
     }
-    return texture;
+    return *texture;
 }
 
 void DrawGlyph(int x, int y, int c)
@@ -142,8 +142,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::tex::Init();
     ps2::vu1::Init();
 
-    s_texConchars = ps2::tex::Find("conchars");
-    s_texBacktile = ps2::tex::Find("backtile");
+    s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
+    s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
     PS2_Assert(s_texConchars != nullptr && s_texBacktile != nullptr);
 
     viddef.width  = ps2::gs::Width();
@@ -168,13 +168,13 @@ void PS2_SetSky(const char * name, float rotate, vec3_t axis) { (void)name; (voi
 struct image_s * PS2_RegisterSkin(const char * name)
 {
     return const_cast<struct image_s*>(
-        reinterpret_cast<const struct image_s *>(FindPicOrPlaceholder(name)));
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Skin)));
 }
 
 struct image_s * PS2_RegisterPic(const char * name)
 {
     return const_cast<struct image_s*>(
-        reinterpret_cast<const struct image_s *>(FindPicOrPlaceholder(name)));
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic)));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -191,24 +191,24 @@ void PS2_DrawGetPicSize(int * w, int * h, const char * name)
 {
     // Callable outside Begin/EndFrame. Placeholder dimensions keep the
     // callers' centering math sane when the pic is missing.
-    const ps2::tex::Texture * texture = FindPicOrPlaceholder(name);
-    *w = texture->width;
-    *h = texture->height;
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    *w = texture.width;
+    *h = texture.height;
 }
 
 void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
 {
-    const ps2::tex::Texture * texture = FindPicOrPlaceholder(name);
-    ps2::gs::SetTexture(*texture);
-    ps2::gs::DrawTexturedRect(x, y, w, h, 0, 0, texture->width, texture->height, kUiBrightness);
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    ps2::gs::SetTexture(texture);
+    ps2::gs::DrawTexturedRect(x, y, w, h, 0, 0, texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawPic(int x, int y, const char * name)
 {
-    const ps2::tex::Texture * texture = FindPicOrPlaceholder(name);
-    ps2::gs::SetTexture(*texture);
-    ps2::gs::DrawTexturedRect(x, y, texture->width, texture->height,
-                              0, 0, texture->width, texture->height, kUiBrightness);
+    const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    ps2::gs::SetTexture(texture);
+    ps2::gs::DrawTexturedRect(x, y, texture.width, texture.height,
+                              0, 0, texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawChar(int x, int y, int c)

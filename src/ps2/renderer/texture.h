@@ -81,7 +81,7 @@ void Init();
 // Looks up a texture by game name. Bare names expand Quake-style to
 // "pics/<name>.pcx"; a leading '/' or '\' means the full path was given.
 // Returns nullptr if nothing matches (no file loading yet).
-const Texture * Find(const char * name);
+const Texture * Find(const char * name, ImageType type);
 
 // Pink/black checkerboard stand-in, drawn wherever an image is missing.
 const Texture & DebugTexture();

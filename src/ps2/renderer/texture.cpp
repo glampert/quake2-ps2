@@ -122,7 +122,7 @@ const u16 * MakeCheckerPattern(int variant)
     };
 
     // One bright color per variant, checkered against black.
-    const u16 variantColors[kNumDebugTextures] = {
+    constexpr u16 variantColors[kNumDebugTextures] = {
         Rgb16(255, 100, 255), // pink
         Rgb16(255,  60,  60), // red
         Rgb16( 60, 255,  60), // green
@@ -245,6 +245,7 @@ void TextureCache::Init()
     const BuiltinImage builtins[] =
     {
         // conchars carries real alpha for the glyph transparency; the rest are opaque RGB16.
+        // TODO: Convert conchars over to RGBA16 5:5:5:1 (PSMCT16/PSMCT16S).
         { "pics/conchars.pcx",  conchars_data,         conchars_width,  conchars_height,  PixelFormat::RGBA32, TexComponents::RGBA },
         { "pics/conback.pcx",   conback_data,          conback_width,   conback_height,   PixelFormat::RGB16,  TexComponents::RGB  },
         { "pics/backtile.pcx",  backtile_data,         backtile_width,  backtile_height,  PixelFormat::RGB16,  TexComponents::RGB  },

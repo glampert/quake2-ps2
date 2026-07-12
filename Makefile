@@ -118,6 +118,8 @@ DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d)
 #  Compiler / linker flags (appended to the SDK defaults from Makefile.eeglobal)
 # ----------------------------------------------------------------------------
 
+# TODO: Define a debug and a release (optimized) target. Release should disable asserts.
+
 COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE
 
 EE_INCS += -I$(SRC_DIR)

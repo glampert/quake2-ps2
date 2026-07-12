@@ -38,6 +38,7 @@ PS2_CXX_SRC = \
 	ps2/input/input.cpp      \
 	ps2/input/pad.cpp        \
 	ps2/renderer/gs.cpp      \
+	ps2/renderer/vram.cpp    \
 	ps2/renderer/texture.cpp \
 	ps2/renderer/vid.cpp     \
 	ps2/renderer/ref.cpp     \

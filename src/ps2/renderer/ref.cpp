@@ -63,7 +63,7 @@ void DrawGlyph(int x, int y, int c)
     const int row = (c >> 4) * kGlyphSize;
     const int col = (c & 15) * kGlyphSize;
 
-    ps2::gs::SetTexture(*s_texConchars);
+    ps2::gs::SetTextureFor2D(*s_texConchars);
     ps2::gs::DrawTexturedRect(x, y, kGlyphSize, kGlyphSize,
                               col, row, col + kGlyphSize, row + kGlyphSize, kUiBrightness);
 }
@@ -199,14 +199,14 @@ void PS2_DrawGetPicSize(int * w, int * h, const char * name)
 void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
 {
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::gs::SetTexture(texture);
+    ps2::gs::SetTextureFor2D(texture);
     ps2::gs::DrawTexturedRect(x, y, w, h, 0, 0, texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawPic(int x, int y, const char * name)
 {
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::gs::SetTexture(texture);
+    ps2::gs::SetTextureFor2D(texture);
     ps2::gs::DrawTexturedRect(x, y, texture.width, texture.height,
                               0, 0, texture.width, texture.height, kUiBrightness);
 }
@@ -221,7 +221,7 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
     // Tiles the image over the given screen rectangle: texels are addressed in
     // screen space and wrap via the REPEAT mode set up in gs::Init().
     (void)name; // Quake only ever tiles "backtile" here.
-    ps2::gs::SetTexture(*s_texBacktile);
+    ps2::gs::SetTextureFor2D(*s_texBacktile);
     ps2::gs::DrawTexturedRect(x, y, w, h, x, y, x + w, y + h, kUiBrightness);
 }
 
@@ -258,18 +258,23 @@ void PS2_BeginFrame(float camera_separation)
 {
     (void)camera_separation;
     ps2::gs::BeginFrame();
+
+    // The engine draws its 2D overlay (console, HUD) right after BeginFrame -
+    // it never calls PS2_RenderFrame until game assets load - so the 2D
+    // section opens here for now. Once the 3D world lands, Begin2D() moves to
+    // after PS2_RenderFrame().
+    ps2::gs::Begin2D();
 }
 
 void PS2_EndFrame()
 {
     DrawFpsCounter();
+    ps2::gs::End2D();
 
-    // VU1 bring-up scene: the engine only calls PS2_RenderFrame once game
-    // assets load, and while disconnected Quake forces the fullscreen console,
-    // which would hide anything drawn under the 2D overlay. So the test cube
-    // draws after the 2D flush, on top of everything (its batch programs its
+    // VU1 bring-up scene: drawn outside the 2D section (3D inside it would
+    // assert), after the overlay so it stays visible over the fullscreen
+    // console that Quake forces while disconnected (its batch programs its
     // own z-test). Disable with "ps2_testcube 0".
-    ps2::gs::Flush2D();
     ps2::test::DrawRotatingCube();
 
     ps2::gs::EndFrame();

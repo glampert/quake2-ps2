@@ -6,7 +6,6 @@
  * ================================================================================================ */
 
 #include "ps2/renderer/texture.h"
-#include "ps2/renderer/gs.h"
 #include "ps2/builtin/builtin.h"
 
 #include <cstdio>
@@ -84,28 +83,43 @@ void NormalizeName(const char * name, char (&out)[MAX_QPATH])
 {
     if (name[0] != '/' && name[0] != '\\')
     {
-        std::snprintf(out, sizeof(out), "pics/%s.pcx", name);
+        std::snprintf(out, MAX_QPATH, "pics/%s.pcx", name);
     }
     else
     {
-        std::snprintf(out, sizeof(out), "%s", name + 1);
+        std::snprintf(out, MAX_QPATH, "%s", name + 1);
     }
 }
 
-// Pink/black checkerboard for DebugTexture(), RGB16.
-constexpr int kCheckerDim     = 64;
+// Checkerboards for the DebugTexture() variants, RGB16. Variant 0 (pink) is
+// the classic missing-image stand-in; the others give test scenes several
+// distinct textures to exercise VRAM streaming.
+constexpr int kCheckerDim     = 32;
 constexpr int kCheckerSquares = 4;
 
-const u16 * MakeCheckerPattern()
+const u16 * MakeCheckerPattern(int variant)
 {
+    PS2_Assert(variant >= 0 && variant < kNumDebugTextures);
+
     constexpr auto Rgb16 = [](int r, int g, int b) -> u16
     {
         return static_cast<u16>((1u << 15) | ((unsigned(b) >> 3) << 10) |
                                ((unsigned(g) >> 3) << 5) | (unsigned(r) >> 3));
     };
 
-    const u16 colors[2] = { Rgb16(255, 100, 255), Rgb16(0, 0, 0) };
-    static u16 s_buffer[kCheckerDim * kCheckerDim] __attribute__((aligned(16)));
+    // One bright color per variant, checkered against black.
+    const u16 variantColors[kNumDebugTextures] = {
+        Rgb16(255, 100, 255), // pink
+        Rgb16(255,  60,  60), // red
+        Rgb16( 60, 255,  60), // green
+        Rgb16( 80,  80, 255), // blue
+        Rgb16(255, 255,  60), // yellow
+        Rgb16( 60, 255, 255), // cyan
+    };
+    const u16 colors[2] = { variantColors[variant], Rgb16(0, 0, 0) };
+
+    alignas(16) static u16 s_buffers[kNumDebugTextures][kCheckerDim * kCheckerDim];
+    u16 * buffer = s_buffers[variant];
 
     constexpr int squareSize = kCheckerDim / kCheckerSquares;
     for (int y = 0; y < kCheckerDim; ++y)
@@ -113,11 +127,11 @@ const u16 * MakeCheckerPattern()
         for (int x = 0; x < kCheckerDim; ++x)
         {
             const int colorIndex = ((y / squareSize) + (x / squareSize)) % 2;
-            s_buffer[x + (y * kCheckerDim)] = colors[colorIndex];
+            buffer[x + (y * kCheckerDim)] = colors[colorIndex];
         }
     }
 
-    return s_buffer;
+    return buffer;
 }
 
 // Owns the texture pool and the name lookup. Internal singleton (s_cache);
@@ -151,7 +165,11 @@ public:
         return texture;
     }
 
-    const Texture & DebugTexture() const { return *m_debugTexture; }
+    const Texture & DebugTexture(int index) const
+    {
+        PS2_Assert(index >= 0 && index < kNumDebugTextures);
+        return *m_debugTextures[index];
+    }
 
 private:
     Texture & Register(const char * name, const void * pixels, int width, int height,
@@ -161,7 +179,7 @@ private:
 
     int m_used = 0;
     Texture m_textures[kMaxTextures] = {};
-    const Texture * m_debugTexture = nullptr;
+    const Texture * m_debugTextures[kNumDebugTextures] = {};
 
     // Name lookup: FNV-1a hash of the full path -> index into m_textures[].
     std::unordered_map<u64, int> m_lookup;
@@ -210,25 +228,34 @@ void TextureCache::Init()
     const BuiltinImage builtins[] =
     {
         // conchars carries real alpha for the glyph transparency; the rest are opaque RGB16.
-        { "pics/conchars.pcx",  conchars_data,        conchars_width,  conchars_height,  PixelFormat::RGBA32, TexComponents::RGBA },
-        { "pics/conback.pcx",   conback_data,         conback_width,   conback_height,   PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/backtile.pcx",  backtile_data,        backtile_width,  backtile_height,  PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/inventory.pcx", inventory_data,       inventory_width, inventory_height, PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/help.pcx",      help_data,            help_width,      help_height,      PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/debug.pcx",     MakeCheckerPattern(), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/conchars.pcx",  conchars_data,         conchars_width,  conchars_height,  PixelFormat::RGBA32, TexComponents::RGBA },
+        { "pics/conback.pcx",   conback_data,          conback_width,   conback_height,   PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/backtile.pcx",  backtile_data,         backtile_width,  backtile_height,  PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/inventory.pcx", inventory_data,        inventory_width, inventory_height, PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/help.pcx",      help_data,             help_width,      help_height,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug0.pcx",    MakeCheckerPattern(0), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug1.pcx",    MakeCheckerPattern(1), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug2.pcx",    MakeCheckerPattern(2), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug3.pcx",    MakeCheckerPattern(3), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug4.pcx",    MakeCheckerPattern(4), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
+        { "pics/debug5.pcx",    MakeCheckerPattern(5), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
     };
 
     for (const BuiltinImage & builtin : builtins)
     {
-        Texture & texture = Register(builtin.name, builtin.pixels, builtin.width,
-                                     builtin.height, builtin.format, builtin.components);
-        gs::UploadTexture(texture);
+        Register(builtin.name, builtin.pixels, builtin.width,
+                 builtin.height, builtin.format, builtin.components);
     }
 
-    m_debugTexture = Find("debug", ImageType::Builtin);
-    PS2_Assert(m_debugTexture != nullptr);
+    for (int i = 0; i < kNumDebugTextures; ++i)
+    {
+        char name[16];
+        std::snprintf(name, sizeof(name), "debug%d", i);
+        m_debugTextures[i] = Find(name, ImageType::Builtin);
+        PS2_Assert(m_debugTextures[i] != nullptr);
+    }
 
-    Com_Printf("Texture cache initialised: %d built-in images resident in VRAM.\n", m_used);
+    Com_Printf("Texture cache initialised: %d built-in images registered.\n", m_used);
 }
 
 static TextureCache s_cache;
@@ -249,9 +276,9 @@ const Texture * Find(const char * name, const ps2::tex::ImageType type)
     return s_cache.Find(name, type);
 }
 
-const Texture & DebugTexture()
+const Texture & DebugTexture(int index)
 {
-    return s_cache.DebugTexture();
+    return s_cache.DebugTexture(index);
 }
 
 } // namespace ps2::tex

@@ -36,32 +36,39 @@ int DepthTestMethod();
 void SetClearColor(u8 r, u8 g, u8 b);
 
 // Per-frame lifecycle: BeginFrame() clears the back buffer (color + depth,
-// sent immediately) and starts a fresh 2D packet; EndFrame() finalises,
-// kicks the DMA, waits and flips to the front.
+// sent immediately); EndFrame() waits for vsync and flips to the front.
+// 3D drawing (the VU1 path) happens outside the 2D section below.
 void BeginFrame();
 void EndFrame();
 
-// Sends the accumulated 2D packet and waits for the GS to finish drawing it.
-// EndFrame() does this implicitly; calling it earlier allows drawing on top
-// of the 2D overlay before the flip (the debug cube uses this). No further
-// 2D draws are allowed in the frame afterwards.
-void Flush2D();
+// The 2D overlay section. All 2D draws (FillRect/SetTextureFor2D/DrawTexturedRect)
+// must happen between Begin2D() and End2D(): they accumulate in a deferred
+// packet with an always-pass z-test that End2D() sends and waits on. 2D and
+// 3D never interleave - 2D outside the section (or 3D inside it) asserts.
+void Begin2D();
+void End2D();
+
+// True between Begin2D() and End2D(); the 3D path asserts against it.
+bool In2DMode();
 
 // Adds a solid rectangle to the current frame. Alpha below 255 blends with the
 // framebuffer (255 = fully opaque, unblended).
-void FillRect(int x, int y, int w, int h,
-              u8 r, u8 g, u8 b, u8 a);
+void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a);
 
-// Uploads a texture's pixels to GS VRAM (allocating the VRAM space) and fills
-// in its libdraw descriptor. Synchronous; call outside Begin/EndFrame. The
-// pixels must stay valid in EE RAM for later re-uploads.
-void UploadTexture(tex::Texture & texture);
+// Ensures the texture's pixels are resident in GS VRAM: on a miss, allocates
+// heap space (evicting the least-recently-bound textures when full) and
+// DMA-uploads synchronously; when already resident it only refreshes the LRU
+// stamp, so binding stays a plain register write. SetTextureFor2D and
+// vu1::DrawTriangles call this implicitly; also usable to prefetch. The
+// pixels must stay valid in EE RAM for re-uploads after eviction.
+void EnsureTextureResident(const tex::Texture & texture);
 
-// Selects the VRAM-resident texture sampled by subsequent DrawTexturedRect
-// calls. Redundant sets are dropped, so calling per-draw is fine.
-void SetTexture(const tex::Texture & texture);
+// Selects the texture sampled by subsequent DrawTexturedRect calls, uploading
+// it first if needed (which may flush the accumulated 2D packet when reusing
+// evicted VRAM). Redundant sets are dropped, so calling per-draw is fine.
+void SetTextureFor2D(const tex::Texture & texture);
 
-// Adds a textured rectangle to the current frame, sampling the SetTexture()
+// Adds a textured rectangle to the current frame, sampling the SetTextureFor2D()
 // texture over texel range [u0,v0]..[u1,v1]. 'brightness' modulates the texel
 // colour: 128 = unchanged, 255 = ~2x. Texels with alpha 0 are cut out by the
 // alpha test (console font transparency).

@@ -20,7 +20,7 @@ namespace ps2::tex {
 enum class ImageType : u8
 {
     Null,    // Free slot in the cache.
-    Builtin, // Embedded in the ELF, always resident.
+    Builtin, // Embedded in the ELF (streams in and out of VRAM like any other).
     Pic,     // 2D UI/HUD image.
     Skin,    // Model skin.
     Sprite,  // Sprite frame.
@@ -53,13 +53,17 @@ int GsMagFilter(TexFilter filter);
 int GsMinFilter(TexFilter filter);
 
 // A texture or 2D image. Plain data; owned by the internal texture cache.
-struct Texture
+struct Texture final
 {
-    const void *  pixels;    // Pixel data in EE RAM (static memory for built-ins).
-    int           width;     // In pixels, > 0.
-    int           height;    // In pixels, > 0.
-    int           vramAddr;  // GS VRAM word address; kNotResident if not uploaded.
-    texbuffer_t   texbuf;    // libdraw descriptor used when binding (filled on upload).
+    const void * pixels; // Pixel data in EE RAM (static memory for built-ins).
+    int          width;  // In pixels, > 0.
+    int          height; // In pixels, > 0.
+
+    // Residency is a cache managed by gs/vram: binding a const Texture may
+    // upload it (or evict others), so these two mutate behind the const API.
+    mutable int         vramAddr; // GS VRAM word address; kNotResident when not uploaded.
+    mutable texbuffer_t texbuf;   // libdraw descriptor used when binding (filled on upload).
+
     PixelFormat   format;
     TexComponents components;
     TexFunction   function;
@@ -71,10 +75,12 @@ struct Texture
     // Later additions when file/asset loading lands: registration sequence for
     // end-of-level eviction, scrap-atlas UVs, per-texture surface chain.
 
+    // TODO: Consider texture mipmaps support and native palettized formats (CLUT).
+
     static constexpr int kNotResident = -1;
 };
 
-// Registers the built-in images and uploads them to GS VRAM.
+// Registers the built-in images (they stream into GS VRAM on first bind).
 // Call once, after gs::Init().
 void Init();
 
@@ -83,7 +89,12 @@ void Init();
 // Returns nullptr if nothing matches (no file loading yet).
 const Texture * Find(const char * name, ImageType type);
 
-// Pink/black checkerboard stand-in, drawn wherever an image is missing.
-const Texture & DebugTexture();
+// Number of built-in debug checkerboard variants (distinct colors).
+constexpr int kNumDebugTextures = 6;
+
+// Checkerboard stand-ins ("pics/debug0..5.pcx"). Variant 0 is the pink/black
+// checker drawn wherever an image is missing; the others give test scenes
+// several distinct textures to exercise VRAM streaming.
+const Texture & DebugTexture(int index = 0);
 
 } // namespace ps2::tex

@@ -1,3 +1,4 @@
+#pragma once
 /* ================================================================================================
  * File: common.h
  * Brief: The single seam between the modern C++ PS2 backend and the untouched C
@@ -7,9 +8,6 @@
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
-
-#ifndef PS2_COMMON_H
-#define PS2_COMMON_H
 
 // C++ standard headers must be included OUTSIDE the extern "C" block below.
 #include <cstddef>
@@ -55,5 +53,3 @@ constexpr int ArrayLength(const T (&)[N])
             Sys_Error("Assert Failed: %s", (message)); \
         }                                              \
     } while (0)
-
-#endif // PS2_COMMON_H

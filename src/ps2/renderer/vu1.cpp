@@ -58,8 +58,8 @@ constexpr int kVertexDataAddr  = kGifTagsAddr + 5;
 constexpr int kDrawPacketQwords = 64;
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
-// 0xFFFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFFFF] in the z-buffer.
-constexpr float kGsDepthScale = static_cast<float>(0xFFFFFF) / 32.0f;
+// 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
+constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
 
 // Guard band: the clip judgement multiplies x/y by this before clipw tests
 // them against |w|, so triangles survive out to |ndc| = 0.8 - about 5x the
@@ -89,7 +89,7 @@ static bool s_initialized = false;
 // GS context 0 and this renderer alternates contexts per frame.
 u64 MakeTex0Data(const tex::Texture & texture)
 {
-    // No palettized formats in use, so the CLUT fields stay zero (as gs::SetTexture).
+    // No palettized formats in use, so the CLUT fields stay zero (as gs::SetTextureFor2D).
     return GS_SET_TEX0(texture.texbuf.address >> 6,
                        texture.texbuf.width >> 6,
                        texture.texbuf.psm,
@@ -150,10 +150,13 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount)
 {
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
+    PS2_AssertMsg(!gs::In2DMode(), "No 3D drawing inside the 2D section!");
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawTriangles wants whole triangles!");
     PS2_AssertMsg(vertCount <= kMaxVertsPerBatch, "Batch too large for the VU double buffer!");
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "Texture not resident in VRAM!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(verts) & 15u) == 0, "Vertex data must be 16-byte aligned!");
+
+    gs::EnsureTextureResident(texture);
+    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
     const int ctx = gs::CurrentContext();
 

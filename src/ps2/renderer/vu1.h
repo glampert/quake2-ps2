@@ -42,9 +42,10 @@ constexpr int kMaxVertsPerBatch = 78;
 void Init();
 
 // Draws a batch of triangles (3 verts each, triangle list) through VU1 with
-// the given transform and VRAM-resident texture. Synchronous for now: returns
-// once the GS has consumed the batch, so the vertex data only needs to stay
-// valid for the duration of the call. Call between gs::Begin/EndFrame.
+// the given transform and texture (uploaded to GS VRAM on demand). Synchronous
+// for now: returns once the GS has consumed the batch, so the vertex data only
+// needs to stay valid for the duration of the call. Call between
+// gs::Begin/EndFrame but outside the gs::Begin2D/End2D section.
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount);
 

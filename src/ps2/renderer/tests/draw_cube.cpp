@@ -114,7 +114,14 @@ void DrawRotatingCube()
 
     const Mat4 mvp = model * view * proj;
 
-    vu1::DrawTriangles(mvp, tex::DebugTexture(), s_cubeVerts, ArrayLength(s_cubeVerts));
+    // One debug texture variant per face - 6 tiny batches instead of one - so
+    // a single spin of the cube exercises repeated texture switching against
+    // the VRAM streaming path.
+    static_assert(tex::kNumDebugTextures >= 6, "One variant per cube face");
+    for (int face = 0; face < 6; ++face)
+    {
+        vu1::DrawTriangles(mvp, tex::DebugTexture(face), &s_cubeVerts[face * 6], 6);
+    }
 }
 
 } // namespace ps2::test

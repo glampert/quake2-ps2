@@ -8,14 +8,17 @@
  *  are direct top-left pixels.
  *
  *  Frame structure: BeginFrame() clears color and depth immediately (its own
- *  DMA transfer), the VU1 3D world arrives over PATH1 mid-frame, and the 2D
- *  overlay accumulates in the frame packet, sent at EndFrame() to draw on top
- *  with an always-pass z-test.
+ *  DMA transfer), the VU1 3D world arrives over PATH1, and the 2D overlay
+ *  accumulates inside the Begin2D()/End2D() section, sent at End2D() to draw
+ *  on top with an always-pass z-test. 2D and 3D never interleave; the section
+ *  boundaries are asserted.
  *
- *  Textures are uploaded to the VRAM left over after the framebuffers and stay
- *  resident (~1.8 MB fits every built-in image at once), so switching textures
- *  mid-frame is just a TEX0/TEX1 register write in the frame packet - no DMA
- *  upload, no pipeline flush, and 2D draws happen in call order.
+ *  Textures stream on first bind into the VRAM left over after the
+ *  framebuffers and z-buffer (~1.27 MB), managed by vram.cpp. While a texture
+ *  is resident, binding it is just a TEX0/TEX1 register write - no DMA upload,
+ *  no pipeline flush. When the heap fills, the least-recently-bound textures
+ *  are evicted; uploads over reused VRAM first sync the GS so queued draws
+ *  keep sampling the old texels, not the new ones.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -24,6 +27,7 @@
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_packet.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/vram.h"
 
 #include <dma.h>
 #include <gs_psm.h>
@@ -61,10 +65,19 @@ static int s_drawCtx   = 1; // which framebuffer/context we render into this fra
 static int s_packetIdx = 0; // which frame packet is being filled
 
 static bool s_frameStarted = false;
-static bool s_2dFlushed    = false;
-static const tex::Texture * s_currentTex = nullptr; // texture bound in the current frame packet
+static bool s_in2D         = false;
 
-static u8 s_clear[3] = { 0x20, 0x20, 0x38 }; // distinctive dark blue
+// Set when a VRAM allocation evicted a texture: draws already queued (or still
+// rasterising) may reference the freed range, so the next upload must sync the
+// GS first. Sticky until a GS-idle point - a block freed early in the frame
+// can be handed out later without a new eviction.
+static bool s_vramReuseHazard = false;
+
+// Texture bound in the current 2D section.
+static const tex::Texture * s_currentTex = nullptr;
+
+// Screen clean color. Distinctive dark blue.
+static u8 s_clear[3] = { 0x20, 0x20, 0x38 };
 
 inline RenderPacket & FramePacket()
 {
@@ -97,6 +110,7 @@ void Init()
     dma_channel_fast_waits(DMA_CHANNEL_GIF);
 
     // Two 32-bit framebuffers.
+    // TODO: Consider more compact framebuffer formats to leave more vram for textures (RGB16?).
     s_frame[0].width   = kWidth;
     s_frame[0].height  = kHeight;
     s_frame[0].mask    = 0;
@@ -107,14 +121,19 @@ void Init()
     s_frame[1].address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_PSM_32, GRAPH_ALIGN_PAGE));
 
     // Z-buffer for the 3D world; larger depth = closer (the projection maps the
-    // near plane to 0xFFFFFF), hence GREATER_EQUAL. 32-bit z leaves ~730 KB of
-    // VRAM for textures - switch to GS_ZBUF_16S if that gets tight once real
-    // game textures land.
+    // near plane to 0xFFFF), hence GREATER_EQUAL. 16-bit z leaves ~1.27 MB of
+    // VRAM for textures. It must be the *signed* 16-bit format: the GS pairs
+    // PSMCT32 color with the Z32/Z24/Z16S column - plain Z16 only works with
+    // CT16 color buffers.
     s_zbuffer.enable  = DRAW_ENABLE;
     s_zbuffer.method  = ZTEST_METHOD_GREATER_EQUAL;
     s_zbuffer.mask    = 0;
-    s_zbuffer.zsm     = GS_ZBUF_32;
-    s_zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_ZBUF_32, GRAPH_ALIGN_PAGE));
+    s_zbuffer.zsm     = GS_ZBUF_16S;
+    s_zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_ZBUF_16S, GRAPH_ALIGN_PAGE));
+
+    // Everything after the fixed buffers is the streamed texture heap.
+    vram::Init(static_cast<int>(s_zbuffer.address) +
+               graph_vram_size(kWidth, kHeight, GS_ZBUF_16S, GRAPH_ALIGN_PAGE));
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
     graph_initialize(static_cast<int>(s_frame[0].address), kWidth, kHeight, GS_PSM_32, 0, 0);
@@ -152,7 +171,6 @@ void BeginFrame()
 {
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
-    s_currentTex   = nullptr; // texture state does not persist across packets
 
     s_packetIdx ^= 1;
 
@@ -176,18 +194,48 @@ void BeginFrame()
     dma_wait_fast();
     draw_wait_finish();
 
-    // The 2D overlay accumulates here all frame and goes out at EndFrame, after
-    // the 3D world has drawn: always-pass z-test so it lands on top.
+    // The GS is idle now, so nothing queued can reference reused VRAM anymore.
+    s_vramReuseHazard = false;
+    vram::BeginFrame();
+}
+
+void Begin2D()
+{
+    PS2_AssertMsg(s_frameStarted, "Begin2D outside Begin/EndFrame!");
+    PS2_AssertMsg(!s_in2D, "Begin2D called twice!");
+    s_in2D       = true;
+    s_currentTex = nullptr; // the TEX0 dedupe state is per 2D section
+
+    // The 2D overlay accumulates here and goes out at End2D, after the 3D
+    // world has drawn: always-pass z-test so it lands on top.
     RenderPacket & pkt = FramePacket();
     pkt.Reset();
     pkt.DisableTests(s_drawCtx, s_zbuffer);
 }
 
-void FillRect(int x, int y, int w, int h,
-              u8 r, u8 g, u8 b, u8 a)
+void End2D()
 {
-    PS2_AssertMsg(s_frameStarted, "FillRect outside Begin/EndFrame!");
-    PS2_AssertMsg(!s_2dFlushed, "FillRect after Flush2D!");
+    PS2_AssertMsg(s_in2D, "End2D without Begin2D!");
+    s_in2D = false;
+
+    RenderPacket & pkt = FramePacket();
+    pkt.Finish();
+
+    dma_wait_fast();
+    pkt.SendNormal();
+    draw_wait_finish();
+
+    s_vramReuseHazard = false; // GS idle again
+}
+
+bool In2DMode()
+{
+    return s_in2D;
+}
+
+void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
+{
+    PS2_AssertMsg(s_in2D, "FillRect outside the 2D section!");
 
     RenderPacket & pkt = FramePacket();
     pkt.EnsureSpace(64);
@@ -231,15 +279,59 @@ void FillRect(int x, int y, int w, int h,
     }
 }
 
-void UploadTexture(tex::Texture & texture)
+// The GS may still be drawing - or hold queued draws that will sample - VRAM
+// about to be overwritten by an upload into evicted space: flush anything
+// queued and wait for the GS to go idle first. Inside the 2D section the frame
+// packet itself carries the FINISH; otherwise a bare FINISH rides the scratch
+// packet (VU1 batches are synchronous, but their DMA completing does not mean
+// the GS has finished rasterizing them).
+static void SyncGsBeforeVramReuse()
 {
-    PS2_AssertMsg(!s_frameStarted, "UploadTexture must happen outside Begin/EndFrame!");
-    PS2_AssertMsg(texture.vramAddr == tex::Texture::kNotResident, "Texture already resident!");
+    if (s_in2D)
+    {
+        RenderPacket & pkt = FramePacket();
+        pkt.Finish();
+
+        dma_wait_fast();
+        pkt.SendNormal();
+        draw_wait_finish();
+
+        pkt.Reset(); // GS registers persist; keep accumulating into the same packet
+    }
+    else
+    {
+        RenderPacket & pkt = s_texUploadPacket;
+        pkt.Reset();
+        pkt.Finish();
+
+        dma_wait_fast();
+        pkt.SendNormal();
+        draw_wait_finish();
+    }
+    s_vramReuseHazard = false;
+}
+
+void EnsureTextureResident(const tex::Texture & texture)
+{
     PS2_Assert(texture.type != tex::ImageType::Null);
 
-    const int psm  = tex::GsPsm(texture.format);
-    const int addr = graph_vram_allocate(texture.width, texture.height, psm, GRAPH_ALIGN_BLOCK);
-    PS2_AssertMsg(addr >= 0, "Out of GS VRAM for textures!");
+    if (texture.vramAddr != tex::Texture::kNotResident)
+    {
+        vram::Touch(texture); // protect from eviction until the next frame
+        return;
+    }
+
+    const int psm       = tex::GsPsm(texture.format);
+    const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
+
+    bool evicted = false;
+    const int addr = vram::Allocate(texture, sizeWords, &evicted);
+
+    s_vramReuseHazard |= evicted;
+    if (s_vramReuseHazard)
+    {
+        SyncGsBeforeVramReuse();
+    }
 
     texture.vramAddr = addr;
 
@@ -253,6 +345,8 @@ void UploadTexture(tex::Texture & texture)
     texture.texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(texture.function));
 
     // Synchronous DMA upload; the chain references the pixels in EE RAM.
+    // TODO: TextureTransfer has no EnsureSpace - revisit the 128-qword scratch
+    // packet if large streamed assets ever exceed its chain-tag headroom.
     RenderPacket & pkt = s_texUploadPacket;
     pkt.Reset();
     pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, addr);
@@ -260,19 +354,22 @@ void UploadTexture(tex::Texture & texture)
 
     pkt.SendChain();
     dma_wait_fast();
+
+    Com_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
+                texture.width, texture.height, sizeWords * 4 / 1024);
 }
 
-void SetTexture(const tex::Texture & texture)
+void SetTextureFor2D(const tex::Texture & texture)
 {
-    PS2_AssertMsg(s_frameStarted, "SetTexture outside Begin/EndFrame!");
-    PS2_AssertMsg(!s_2dFlushed, "SetTexture after Flush2D!");
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "Texture not resident in VRAM!");
+    PS2_AssertMsg(s_in2D, "SetTextureFor2D outside the 2D section!");
     PS2_Assert(texture.type != tex::ImageType::Null);
 
     if (&texture == s_currentTex)
     {
-        return;
+        return; // already bound (and made resident) this section
     }
+
+    EnsureTextureResident(texture);
     s_currentTex = &texture;
 
     RenderPacket & pkt = FramePacket();
@@ -304,9 +401,8 @@ void SetTexture(const tex::Texture & texture)
 void DrawTexturedRect(int x, int y, int w, int h,
                       int u0, int v0, int u1, int v1, u8 brightness)
 {
-    PS2_AssertMsg(s_frameStarted, "DrawTexturedRect outside Begin/EndFrame!");
-    PS2_AssertMsg(!s_2dFlushed, "DrawTexturedRect after Flush2D!");
-    PS2_AssertMsg(s_currentTex != nullptr, "DrawTexturedRect without SetTexture!");
+    PS2_AssertMsg(s_in2D, "DrawTexturedRect outside the 2D section!");
+    PS2_AssertMsg(s_currentTex != nullptr, "DrawTexturedRect without SetTextureFor2D!");
 
     RenderPacket & pkt = FramePacket();
     pkt.EnsureSpace(8);
@@ -336,30 +432,11 @@ void DrawTexturedRect(int x, int y, int w, int h,
     pkt.RectTextured(s_drawCtx, rect);
 }
 
-void Flush2D()
-{
-    PS2_AssertMsg(s_frameStarted, "Flush2D outside Begin/EndFrame!");
-    PS2_AssertMsg(!s_2dFlushed, "Flush2D called twice this frame!");
-    s_2dFlushed = true;
-
-    RenderPacket & pkt = FramePacket();
-    pkt.Finish();
-
-    dma_wait_fast();
-    pkt.SendNormal();
-    draw_wait_finish();
-}
-
 void EndFrame()
 {
     PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
-
-    if (!s_2dFlushed)
-    {
-        Flush2D();
-    }
+    PS2_AssertMsg(!s_in2D, "EndFrame inside the 2D section - End2D missing!");
     s_frameStarted = false;
-    s_2dFlushed    = false;
 
     graph_wait_vsync();
     graph_set_framebuffer_filtered(static_cast<int>(s_frame[s_drawCtx].address),
@@ -367,6 +444,8 @@ void EndFrame()
                                    static_cast<int>(s_frame[s_drawCtx].psm), 0, 0);
 
     s_drawCtx ^= 1; // draw into the other buffer next frame
+
+    vram::EndFrame();
 }
 
 } // namespace ps2::gs

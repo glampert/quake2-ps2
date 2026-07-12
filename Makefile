@@ -6,6 +6,7 @@
 #
 #    make            -> build build/quake2.elf   (VSCode: Shift+Cmd+B)
 #    make run        -> build + launch in PCSX2  (VSCode: F5)
+#    make tools      -> build host tools (imgdump, unpak) into build/tools/
 #    make clean      -> remove build artifacts
 #    make clean_vu   -> remove only assembled VU microprograms
 #
@@ -97,6 +98,13 @@ VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
 VCL_FILES = textured_triangles.vcl
 VU_OBJS   = $(addprefix $(OUTPUT_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
+# Standalone command line tools under src/tools, built with the HOST compiler
+# (not the EE toolchain) since they run on the development machine.
+TOOLS_PATH   = $(SRC_DIR)/tools
+TOOLS_BINS   = $(addprefix $(OUTPUT_DIR)/tools/, imgdump unpak)
+HOST_CC     ?= cc
+HOST_CFLAGS ?= -O2 -Wall
+
 # IOP/IRX modules embedded into the ELF. None are needed for the current
 # boot path; add e.g. usbd.irx here when USB mass-storage loading is wired up.
 IRX_PATH  = $(PS2SDK)/iop/irx
@@ -160,9 +168,9 @@ EE_LIBS += -ldraw -lgraph -lmath3d -lpacket -lpacket2 -ldma -lpad -lpatches -lke
 #  Rules
 # ----------------------------------------------------------------------------
 
-.PHONY: all run clean clean_vu compiledb
+.PHONY: all run tools clean clean_vu compiledb
 
-all: $(EE_BIN)
+all: $(EE_BIN) tools
 
 # Out-of-tree object rules. These static-pattern rules take precedence over the
 # generic %.o rules from Makefile.eeglobal so objects land under build/ mirroring
@@ -188,6 +196,13 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 	bin2c $< $(basename $@).c $(notdir $(basename $@))_irx
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $(basename $@).c -o $@
 
+# Host tools: each is a single self-contained .c compiled straight to a binary.
+tools: $(TOOLS_BINS)
+
+$(TOOLS_BINS): $(OUTPUT_DIR)/tools/%: $(TOOLS_PATH)/%.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) $< -o $@
+
 run: all
 	$(PCSX2) -batch -elf $(abspath $(EE_BIN))
 
@@ -197,7 +212,7 @@ compiledb:
 	@$(MAKE) -Bnk | python3 scripts/gen_compile_commands.py
 
 clean:
-	rm -rf $(OUTPUT_DIR)/src $(OUTPUT_DIR)/vu $(OUTPUT_DIR)/irx $(EE_BIN)
+	rm -rf $(OUTPUT_DIR)/src $(OUTPUT_DIR)/vu $(OUTPUT_DIR)/irx $(OUTPUT_DIR)/tools $(EE_BIN)
 
 clean_vu:
 	rm -rf $(OUTPUT_DIR)/vu

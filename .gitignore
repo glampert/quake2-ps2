@@ -8,6 +8,9 @@
 *.pp.vcl
 *.vsm
 
+# Host tool binaries (built with the project, not checked in).
+build/tools
+
 # Generated per-machine editor tooling:
 compile_commands.json
 

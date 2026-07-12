@@ -290,7 +290,7 @@ void ScrPrintf(const char * format, ...)
         case '\n':
             s_scrCurrX = 0;
             ++s_scrCurrY;
-            if (s_scrCurrY == ScrMaxX)
+            if (s_scrCurrY == ScrMaxY)
             {
                 s_scrCurrY = 0;
             }
@@ -367,7 +367,7 @@ u32 ScrGetTextColor()
 
 void ScrClear()
 {
-    for (int y = 0; y < ScrMaxX; ++y)
+    for (int y = 0; y < ScrMaxY; ++y)
     {
         ScrClearLine(y);
     }

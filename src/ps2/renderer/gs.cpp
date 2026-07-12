@@ -313,7 +313,7 @@ static void SyncGsBeforeVramReuse()
 
 void EnsureTextureResident(const tex::Texture & texture)
 {
-    PS2_Assert(texture.type != tex::ImageType::Null);
+    PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
 
     if (texture.vramAddr != tex::Texture::kNotResident)
     {
@@ -362,7 +362,7 @@ void EnsureTextureResident(const tex::Texture & texture)
 void SetTextureFor2D(const tex::Texture & texture)
 {
     PS2_AssertMsg(s_in2D, "SetTextureFor2D outside the 2D section!");
-    PS2_Assert(texture.type != tex::ImageType::Null);
+    PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
 
     if (&texture == s_currentTex)
     {

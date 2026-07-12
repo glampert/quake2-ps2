@@ -7,6 +7,7 @@
 
 #include "ps2/renderer/texture.h"
 #include "ps2/builtin/builtin.h"
+#include "ps2/small_pool.h"
 
 #include <cstdio>
 #include <cstring>
@@ -157,12 +158,12 @@ public:
         // TODO: Incorporate type into lookup (might have to be a bitflag instead, e.g. image can be Pic & Builtin)
         (void)type;
 
-        Texture * texture = &m_textures[it->second];
+        const Texture & texture = m_texturePool.Slot(it->second);
         // 64-bit FNV-1a collisions are vanishingly rare, but a miss here would
         // silently draw the wrong image - verify the actual name.
-        PS2_AssertMsg(std::strcmp(texture->name, fullname) == 0, "Texture name hash collision!");
+        PS2_AssertMsg(std::strcmp(texture.name, fullname) == 0, "Texture name hash collision!");
 
-        return texture;
+        return &texture;
     }
 
     const Texture & DebugTexture(int index) const
@@ -175,23 +176,25 @@ private:
     Texture & Register(const char * name, const void * pixels, int width, int height,
                        PixelFormat format, TexComponents components);
 
-    static constexpr int kMaxTextures = 32; // Builtins only for now; grows with asset loading.
+    static constexpr u32 kMaxTextures = 32; // Builtins only for now; grows with asset loading.
+    using TexturePool = SmallPool<Texture, kMaxTextures>;
 
-    int m_used = 0;
-    Texture m_textures[kMaxTextures] = {};
+    TexturePool m_texturePool;
     const Texture * m_debugTextures[kNumDebugTextures] = {};
 
-    // Name lookup: FNV-1a hash of the full path -> index into m_textures[].
-    std::unordered_map<u64, int> m_lookup;
+    // Name lookup: FNV-1a hash of the full path -> pool slot of the texture.
+    std::unordered_map<u64, u16> m_lookup;
 };
 
 Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,
                                  PixelFormat format, TexComponents components)
 {
-    PS2_AssertMsg(m_used < kMaxTextures, "Out of texture cache slots!");
     PS2_Assert(width > 0 && height > 0 && pixels != nullptr);
 
-    Texture & texture = m_textures[m_used];
+    const u16 slot = m_texturePool.Alloc();
+    PS2_AssertMsg(slot != TexturePool::kInvalidIndex, "Out of texture cache slots!");
+
+    Texture & texture = m_texturePool.Slot(slot);
 
     texture.pixels     = pixels;
     texture.width      = width;
@@ -205,16 +208,15 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     texture.type       = ImageType::Builtin;
     std::snprintf(texture.name, sizeof(texture.name), "%s", name);
 
-    const auto inserted = m_lookup.emplace(HashStr64(texture.name), m_used);
+    const auto inserted = m_lookup.emplace(HashStr64(texture.name), slot);
     PS2_AssertMsg(inserted.second, "Duplicate texture name!");
 
-    ++m_used;
     return texture;
 }
 
 void TextureCache::Init()
 {
-    PS2_AssertMsg(m_used == 0, "TextureCache::Init called twice!");
+    m_texturePool.Init(); // One-shot; asserts if called twice.
 
     struct BuiltinImage
     {
@@ -255,7 +257,7 @@ void TextureCache::Init()
         PS2_Assert(m_debugTextures[i] != nullptr);
     }
 
-    Com_Printf("Texture cache initialised: %d built-in images registered.\n", m_used);
+    Com_Printf("Texture cache initialised: %u built-in images registered.\n", m_texturePool.UsedCount());
 }
 
 static TextureCache s_cache;

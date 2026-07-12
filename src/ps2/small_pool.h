@@ -52,6 +52,11 @@ public:
         return m_used == 0;
     }
 
+    u32 UsedCount() const
+    {
+        return m_used;
+    }
+
     u16 Alloc()
     {
         if (IsFull())

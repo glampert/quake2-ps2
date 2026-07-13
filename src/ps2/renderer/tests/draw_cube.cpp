@@ -55,14 +55,16 @@ static bool s_cubeBuilt = false;
 
 void EmitVertex(vu1::DrawVertex & vert, int cornerIdx, int uvIdx)
 {
+    constexpr bool kOverrideVertexColors = false;
+
     const Corner & corner = kCorners[cornerIdx];
     vert.x = corner.x;
     vert.y = corner.y;
     vert.z = corner.z;
     vert.w = 1.0f;
-    vert.r = corner.r;
-    vert.g = corner.g;
-    vert.b = corner.b;
+    vert.r = kOverrideVertexColors ? 255 : corner.r;
+    vert.g = kOverrideVertexColors ? 255 : corner.g;
+    vert.b = kOverrideVertexColors ? 255 : corner.b;
     vert.a = 0x80; // 1.0 on the GS
     vert.s = kFaceUVs[uvIdx][0];
     vert.t = kFaceUVs[uvIdx][1];
@@ -89,7 +91,7 @@ void BuildCube()
 
 void DrawRotatingCube()
 {
-    static cvar_t * s_testCube = Cvar_Get("ps2_testcube", "1", 0);
+    static const cvar_t * s_testCube = Cvar_Get("ps2_testcube", "1", 0);
     if (s_testCube->value == 0.0f)
     {
         return;
@@ -117,10 +119,26 @@ void DrawRotatingCube()
     // One debug texture variant per face - 6 tiny batches instead of one - so
     // a single spin of the cube exercises repeated texture switching against
     // the VRAM streaming path.
+    //
+    // With ps2_testcube_vram_tex_eviction on, the faces instead share a
+    // 3-variant window that slides every 2 seconds: the per-frame texture set
+    // keeps changing, and with the heap shrunk (kDebugHeapLimitWords in
+    // vram.cpp) every slide evicts the stalest variant and re-uploads a
+    // previously evicted one - the face colors changing is proof of the
+    // re-uploads. It defaults on to pair with the debug heap limit: the full
+    // 6-variant set (26 pages with the fullscreen console) would assert on
+    // boot at the 24-page test heap, before the cvar could be toggled.
     static_assert(tex::kNumDebugTextures >= 6, "One variant per cube face");
+    static const cvar_t * s_testEviction = Cvar_Get("ps2_testcube_vram_tex_eviction", "0", 0);
+
+    const int tick = Sys_Milliseconds() / 2000;
     for (int face = 0; face < 6; ++face)
     {
-        vu1::DrawTriangles(mvp, tex::DebugTexture(face), &s_cubeVerts[face * 6], 6);
+        const int variant = (s_testEviction->value != 0.0f)
+                          ? ((face % 3) + tick) % tex::kNumDebugTextures
+                          : face;
+
+        vu1::DrawTriangles(mvp, tex::DebugTexture(variant), &s_cubeVerts[face * 6], 6);
     }
 }
 

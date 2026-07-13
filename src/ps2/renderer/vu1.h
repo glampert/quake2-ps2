@@ -27,7 +27,7 @@ namespace ps2::vu1 {
 struct alignas(16) DrawVertex
 {
     float x, y, z, w;   // model-space position; w must be 1.0f
-    u32   r, g, b, a;   // 0-255 per channel; alpha 0x80 = 1.0 on the GS
+    u32   r, g, b, a;   // 0-255 per channel; alpha 0x80 = 1.0 on the GS; TODO: Can we pack all these into a single u32?
     float s, t, q, pad; // texture coords; q must be 1.0f
 };
 static_assert(sizeof(DrawVertex) == 48, "DrawVertex must be exactly 3 qwords");

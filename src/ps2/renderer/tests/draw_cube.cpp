@@ -125,9 +125,9 @@ void DrawRotatingCube()
     // keeps changing, and with the heap shrunk (kDebugHeapLimitWords in
     // vram.cpp) every slide evicts the stalest variant and re-uploads a
     // previously evicted one - the face colors changing is proof of the
-    // re-uploads. It defaults on to pair with the debug heap limit: the full
-    // 6-variant set (26 pages with the fullscreen console) would assert on
-    // boot at the 24-page test heap, before the cvar could be toggled.
+    // re-uploads. Enable it together with the heap limit: the full 6-variant
+    // set (26 pages with the fullscreen console) does not fit a heap that
+    // small, so leaving this off there asserts on boot ("working set").
     static_assert(tex::kNumDebugTextures >= 6, "One variant per cube face");
     static const cvar_t * s_testEviction = Cvar_Get("ps2_testcube_vram_tex_eviction", "0", 0);
 

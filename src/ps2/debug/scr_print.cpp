@@ -261,6 +261,18 @@ void ScrPrintChar(int x, int y, u32 color, int ch)
     DMAWait();
 }
 
+// Advance the ScrPrintf cursor to the start of the next line, clearing it.
+static void ScrNextLine()
+{
+    s_scrCurrX = 0;
+    ++s_scrCurrY;
+    if (s_scrCurrY == ScrMaxY)
+    {
+        s_scrCurrY = 0;
+    }
+    ScrClearLine(s_scrCurrY);
+}
+
 void ScrPrintf(const char * format, ...)
 {
     if (!s_scrIsInit)
@@ -275,8 +287,14 @@ void ScrPrintf(const char * format, ...)
 
     va_list argptr;
     va_start(argptr, format);
-    const int bufsz = vsnprintf(s_tempbuff, sizeof(s_tempbuff), format, argptr);
+    int bufsz = vsnprintf(s_tempbuff, sizeof(s_tempbuff), format, argptr);
     va_end(argptr);
+
+    // vsnprintf returns the untruncated length; clamp to what was actually written.
+    if (bufsz >= static_cast<int>(sizeof(s_tempbuff)))
+    {
+        bufsz = sizeof(s_tempbuff) - 1;
+    }
 
     // Echo to stdout and flush.
     puts(s_tempbuff);
@@ -288,17 +306,12 @@ void ScrPrintf(const char * format, ...)
         switch (c)
         {
         case '\n':
-            s_scrCurrX = 0;
-            ++s_scrCurrY;
-            if (s_scrCurrY == ScrMaxY)
-            {
-                s_scrCurrY = 0;
-            }
-            ScrClearLine(s_scrCurrY);
+            ScrNextLine();
             break;
 
         case '\t':
-            for (int j = 0; j < 4; ++j) // 4 spaces per TAB
+            // 4 spaces per TAB, stopping at the screen edge so the cursor never overshoots ScrMaxX.
+            for (int j = 0; j < 4 && s_scrCurrX < ScrMaxX; ++j)
             {
                 ScrPrintChar(s_scrCurrX, s_scrCurrY, s_scrTextColor, ' ');
                 ++s_scrCurrX;
@@ -306,18 +319,13 @@ void ScrPrintf(const char * format, ...)
             break;
 
         default:
-            ScrPrintChar(s_scrCurrX, s_scrCurrY, s_scrTextColor, c);
-            ++s_scrCurrX;
+            // Wrap lazily so a full line followed by '\n' doesn't leave a blank row.
             if (s_scrCurrX == ScrMaxX)
             {
-                s_scrCurrX = 0;
-                ++s_scrCurrY;
-                if (s_scrCurrY == ScrMaxY)
-                {
-                    s_scrCurrY = 0;
-                }
-                ScrClearLine(s_scrCurrY);
+                ScrNextLine();
             }
+            ScrPrintChar(s_scrCurrX, s_scrCurrY, s_scrTextColor, c);
+            ++s_scrCurrX;
             break;
         } // switch (c)
     }

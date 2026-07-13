@@ -12,9 +12,14 @@
 namespace ps2::debug {
 
 // Char printing invariants.
+// Chars are drawn in cells of ScrCharSize+2 pixels into a 640x224 framebuffer,
+// so only 64 columns and 22 rows fit on screen. Glyphs are uploaded with GS
+// HOST->LOCAL transfers, which the scissor does not clip: anything drawn past
+// the buffer width wraps around in VRAM to the next 32-scanline page row and
+// shows up at the left edge a few text rows below.
 constexpr int ScrCharSize = 8;
-constexpr int ScrMaxX = 80;
-constexpr int ScrMaxY = 40;
+constexpr int ScrMaxX = 64;
+constexpr int ScrMaxY = 22;
 
 // Lazily initialized by first print if not done explicitly.
 void ScrInit();

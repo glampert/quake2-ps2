@@ -34,6 +34,7 @@
 #include <draw.h>
 #include <gif_tags.h>
 #include <gs_gp.h>
+#include <gs_psm.h>
 
 namespace ps2::vu1 {
 
@@ -89,7 +90,11 @@ static bool s_initialized = false;
 // GS context 0 and this renderer alternates contexts per frame.
 u64 MakeTex0Data(const tex::Texture & texture)
 {
-    // No palettized formats in use, so the CLUT fields stay zero (as gs::SetTextureFor2D).
+    // Palettized textures sample through the global-palette CLUT; reloading
+    // the on-chip CLUT cache on every bind is cheap (1 KB). Everything else
+    // leaves the CLUT fields zero (as gs::SetTextureFor2D).
+    const bool palettized = (texture.format == tex::PixelFormat::Palette8);
+
     return GS_SET_TEX0(texture.texbuf.address >> 6,
                        texture.texbuf.width >> 6,
                        texture.texbuf.psm,
@@ -97,7 +102,10 @@ u64 MakeTex0Data(const tex::Texture & texture)
                        texture.texbuf.info.height,
                        texture.texbuf.info.components,
                        texture.texbuf.info.function,
-                       0, 0, CLUT_STORAGE_MODE1, 0, CLUT_NO_LOAD);
+                       palettized ? (gs::GlobalClutAddress() >> 6) : 0,
+                       GS_PSM_32, // CPSM; only read for palettized PSMs (and == 0 anyway)
+                       CLUT_STORAGE_MODE1, 0,
+                       palettized ? CLUT_LOAD : CLUT_NO_LOAD);
 }
 
 u64 MakeTex1Data(const tex::Texture & texture)

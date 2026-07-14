@@ -137,6 +137,10 @@ int TextureFootprintWords(int width, int height, int psm)
         pageWidth  = 64;
         pageHeight = 64;
         break;
+    case GS_PSM_8:
+        pageWidth  = 128;
+        pageHeight = 64;
+        break;
     default:
         PS2_AssertMsg(false, "Unsupported texture PSM!");
         return 0;

@@ -48,8 +48,10 @@ constexpr bool HasFlag(TexFlags flags, TexFlags test)
 // Pixel storage formats we support, mapped to GS PSMs by GsPsm().
 enum class PixelFormat : u8
 {
-    RGBA32, // 4 bytes/texel, 8888.
-    RGB16   // 2 bytes/texel, 5551 (alpha bit present but unused as TexComponents::RGB).
+    RGBA32,  // 4 bytes/texel, 8888.
+    RGB16,   // 2 bytes/texel, 5551 (alpha bit present but unused as TexComponents::RGB).
+    Palette8 // 1 byte/texel: PSMT8 indices into the shared global-palette CLUT
+             // (gs::Init uploads it once; color and alpha come from the palette entry).
 };
 
 // Whether the texture's own alpha participates in the texture function (GS TCC bit).
@@ -68,6 +70,7 @@ struct Texture final
 
     // Residency is a cache managed by gs/vram: binding a const Texture may
     // upload it (or evict others), so these two mutate behind the const API.
+    // TODO: Strongly typed VRamAddr to represent this!
     mutable int         vramAddr; // GS VRAM word address; kNotResident when not uploaded.
     mutable texbuffer_t texbuf;   // libdraw descriptor used when binding (filled on upload).
 
@@ -86,7 +89,7 @@ struct Texture final
     // Later additions when file/asset loading lands: registration sequence for
     // end-of-level eviction, scrap-atlas UVs, per-texture surface chain.
 
-    // TODO: Consider texture mipmaps support and native palettized formats (CLUT).
+    // TODO: Consider texture mipmaps support.
 };
 
 // Mappings from the strongly typed enums above to the plain integer constants

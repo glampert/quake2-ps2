@@ -26,8 +26,9 @@ int GsPsm(PixelFormat format)
 {
     switch (format)
     {
-    case PixelFormat::RGBA32 : return GS_PSM_32;
-    case PixelFormat::RGB16  : return GS_PSM_16;
+    case PixelFormat::RGBA32   : return GS_PSM_32;
+    case PixelFormat::RGB16    : return GS_PSM_16;
+    case PixelFormat::Palette8 : return GS_PSM_8;
     }
     return GS_PSM_32; // Unreachable; keeps GCC's -Wreturn-type happy.
 }
@@ -244,13 +245,17 @@ void TextureCache::Init()
     };
     const BuiltinImage builtins[] =
     {
-        // conchars carries real alpha for the glyph transparency; the rest are opaque RGB16.
-        // TODO: Convert conchars over to RGBA16 5:5:5:1 (PSMCT16/PSMCT16S).
-        { "pics/conchars.pcx",  conchars_data,         conchars_width,  conchars_height,  PixelFormat::RGBA32, TexComponents::RGBA },
-        { "pics/conback.pcx",   conback_data,          conback_width,   conback_height,   PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/backtile.pcx",  backtile_data,         backtile_width,  backtile_height,  PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/inventory.pcx", inventory_data,        inventory_width, inventory_height, PixelFormat::RGB16,  TexComponents::RGB  },
-        { "pics/help.pcx",      help_data,             help_width,      help_height,      PixelFormat::RGB16,  TexComponents::RGB  },
+        // The embedded images are 8-bit palette indices (imgdump "pal" mode)
+        // sampling through the shared global-palette CLUT - a quarter of the
+        // RGBA32 footprint in VRAM. conchars keeps RGBA components: its
+        // transparent pixels are palette index 255 (alpha 0 in the CLUT),
+        // which the alpha test cuts out. Only the generated debug
+        // checkerboards below stay RGB16.
+        { "pics/conchars.pcx",  conchars_data,         conchars_width,  conchars_height,  PixelFormat::Palette8, TexComponents::RGBA },
+        { "pics/conback.pcx",   conback_data,          conback_width,   conback_height,   PixelFormat::Palette8, TexComponents::RGB  },
+        { "pics/backtile.pcx",  backtile_data,         backtile_width,  backtile_height,  PixelFormat::Palette8, TexComponents::RGB  },
+        { "pics/inventory.pcx", inventory_data,        inventory_width, inventory_height, PixelFormat::Palette8, TexComponents::RGB  },
+        { "pics/help.pcx",      help_data,             help_width,      help_height,      PixelFormat::Palette8, TexComponents::RGB  },
         { "pics/debug0.pcx",    MakeCheckerPattern(0), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
         { "pics/debug1.pcx",    MakeCheckerPattern(1), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },
         { "pics/debug2.pcx",    MakeCheckerPattern(2), kCheckerDim,     kCheckerDim,      PixelFormat::RGB16,  TexComponents::RGB  },

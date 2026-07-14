@@ -28,6 +28,7 @@
 #include "ps2/renderer/render_packet.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
+#include "ps2/builtin/builtin.h" // global_palette
 
 #include <dma.h>
 #include <gs_psm.h>
@@ -67,6 +68,9 @@ static int s_packetIdx = 0; // which frame packet is being filled
 static bool s_frameStarted = false;
 static bool s_in2D         = false;
 
+// Screen clean color. Distinctive dark blue.
+static u8 s_clear[3] = { 0x20, 0x20, 0x38 };
+
 // Set when a VRAM allocation evicted a texture: draws already queued (or still
 // rasterising) may reference the freed range, so the next upload must sync the
 // GS first. Sticky until a GS-idle point - a block freed early in the frame
@@ -76,8 +80,25 @@ static bool s_vramReuseHazard = false;
 // Texture bound in the current 2D section.
 static const tex::Texture * s_currentTex = nullptr;
 
-// Screen clean color. Distinctive dark blue.
-static u8 s_clear[3] = { 0x20, 0x20, 0x38 };
+// The global-palette CLUT: Quake's shared 8-bit palette, uploaded once at Init
+// to a fixed VRAM spot (16x16 PSMCT32 image = 4 blocks) that every Palette8
+// texture's TEX0 points at. s_clutData holds the entries in the GS's CSM1
+// arrangement: within each 32-entry group the two middle 8-entry blocks swap
+// (index bits 3 and 4 exchange).
+alignas(16) static u32 s_clutData[256];
+static int s_clutVramAddr = 0;
+
+// Pixel stride the texture occupies VRAM with (the TEX0 TBW and transfer DBW).
+// 8-bit textures must use a multiple of 128 (TBW must be even for PSMT8/4);
+// other formats use their width as-is.
+inline int TextureStridePixels(const tex::Texture & texture, int psm)
+{
+    if (psm == GS_PSM_8)
+    {
+        return (texture.width + 127) & ~127;
+    }
+    return texture.width;
+}
 
 inline RenderPacket & FramePacket()
 {
@@ -93,9 +114,15 @@ inline RenderPacket & FramePacket()
 int Width()  { return kWidth; }
 int Height() { return kHeight; }
 
-int CurrentContext() { return s_drawCtx; }
+int CurrentContext()
+{
+    return s_drawCtx;
+}
 
-int DepthTestMethod() { return static_cast<int>(s_zbuffer.method); }
+int DepthTestMethod()
+{
+    return static_cast<int>(s_zbuffer.method);
+}
 
 void SetClearColor(u8 r, u8 g, u8 b)
 {
@@ -131,9 +158,12 @@ void Init()
     s_zbuffer.zsm     = GS_ZBUF_16S;
     s_zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(kWidth, kHeight, GS_ZBUF_16S, GRAPH_ALIGN_PAGE));
 
-    // Everything after the fixed buffers is the streamed texture heap.
-    vram::Init(static_cast<int>(s_zbuffer.address) +
-               graph_vram_size(kWidth, kHeight, GS_ZBUF_16S, GRAPH_ALIGN_PAGE));
+    // The global-palette CLUT lives with the fixed allocations (a 16x16
+    // PSMCT32 image, 256 words); the streamed texture heap takes everything
+    // after it, rounded up to a page so its footprint math stays page-aligned
+    // (the rest of the CLUT's page is unused).
+    s_clutVramAddr = graph_vram_allocate(16, 16, GS_PSM_32, GRAPH_ALIGN_BLOCK);
+    vram::Init((s_clutVramAddr + ArrayLength(s_clutData) + 2047) & ~2047);
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
     graph_initialize(static_cast<int>(s_frame[0].address), kWidth, kHeight, GS_PSM_32, 0, 0);
@@ -163,8 +193,30 @@ void Init()
     dma_wait_fast();
     draw_wait_finish();
 
+    // Build and upload the global-palette CLUT (it never changes). The CSM1
+    // reorder swaps entry index bits 3 and 4 - the arrangement the GS reads
+    // the CLUT buffer with (see ps2stuff GS::ReorderClut).
+    for (int i = 0; i < ArrayLength(s_clutData); ++i)
+    {
+        const int csm1 = (i & ~0x18) | ((i & 0x08) << 1) | ((i & 0x10) >> 1);
+        s_clutData[csm1] = global_palette[i];
+    }
+
+    RenderPacket & upload = s_texUploadPacket;
+    upload.Reset();
+    upload.TextureTransfer(s_clutData, 16, 16, GS_PSM_32, s_clutVramAddr, 64);
+    upload.TextureFlush();
+
+    upload.SendChain();
+    dma_wait_fast();
+
     s_drawCtx   = 1;
     s_packetIdx = 0;
+}
+
+int GlobalClutAddress()
+{
+    return s_clutVramAddr;
 }
 
 void BeginFrame()
@@ -335,9 +387,13 @@ void EnsureTextureResident(const tex::Texture & texture)
 
     texture.vramAddr = addr;
 
-    // Fill the libdraw descriptor used when binding.
+    // Fill the libdraw descriptor used when binding. The stride (TEX0's TBW)
+    // differs from the width for narrow 8-bit textures; the page-grid footprint
+    // already covers the rounding.
+    const int stride = TextureStridePixels(texture, psm);
+
     texture.texbuf.address         = static_cast<unsigned int>(addr);
-    texture.texbuf.width           = static_cast<unsigned int>(texture.width);
+    texture.texbuf.width           = static_cast<unsigned int>(stride);
     texture.texbuf.psm             = static_cast<unsigned int>(psm);
     texture.texbuf.info.width      = draw_log2(static_cast<unsigned int>(texture.width));
     texture.texbuf.info.height     = draw_log2(static_cast<unsigned int>(texture.height));
@@ -349,7 +405,7 @@ void EnsureTextureResident(const tex::Texture & texture)
     // packet if large streamed assets ever exceed its chain-tag headroom.
     RenderPacket & pkt = s_texUploadPacket;
     pkt.Reset();
-    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, addr);
+    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, addr, stride);
     pkt.TextureFlush();
 
     pkt.SendChain();
@@ -384,13 +440,27 @@ void SetTextureFor2D(const tex::Texture & texture)
     lod.l             = 0;
     lod.k             = 0.0f;
 
-    // No palettized formats in use, so the CLUT slots stay empty.
     clutbuffer_t clut;
-    clut.address      = 0;
-    clut.psm          = 0;
-    clut.storage_mode = CLUT_STORAGE_MODE1;
-    clut.start        = 0;
-    clut.load_method  = CLUT_NO_LOAD;
+    if (texture.format == tex::PixelFormat::Palette8)
+    {
+        // Reload the on-chip CLUT cache from the global palette on every bind:
+        // cheap (1 KB) at the 2D path's bind rate. TODO: CLUT_COMPARE_CBP0
+        // skips redundant reloads - worthwhile once world textures bind per-surface.
+        clut.address      = static_cast<unsigned int>(s_clutVramAddr);
+        clut.psm          = GS_PSM_32;
+        clut.storage_mode = CLUT_STORAGE_MODE1;
+        clut.start        = 0;
+        clut.load_method  = CLUT_LOAD;
+    }
+    else
+    {
+        // Not palettized; the CLUT slots stay empty.
+        clut.address      = 0;
+        clut.psm          = 0;
+        clut.storage_mode = CLUT_STORAGE_MODE1;
+        clut.start        = 0;
+        clut.load_method  = CLUT_NO_LOAD;
+    }
 
     texbuffer_t texbuf = texture.texbuf; // libdraw wants a mutable pointer
 

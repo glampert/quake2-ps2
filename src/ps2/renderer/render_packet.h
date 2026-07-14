@@ -117,11 +117,15 @@ public:
     }
 
     // Emits the DMA chain tags for a texture upload; the pixels are referenced
-    // in place and must stay valid until the transfer completes.
-    void TextureTransfer(const void * pixels, int width, int height, int psm, int vramAddr)
+    // in place and must stay valid until the transfer completes. 'destWidth'
+    // is the VRAM buffer width in pixels (the TBW stride the texture will be
+    // sampled with) - usually just 'width', but 8-bit formats round it up to a
+    // multiple of 128 and the 16x16 CLUT image uses the 64-pixel minimum.
+    void TextureTransfer(const void * pixels, int width, int height, int psm,
+                         int vramAddr, int destWidth)
     {
         m_ptr = draw_texture_transfer(m_ptr, const_cast<void *>(pixels),
-                                      width, height, psm, vramAddr, width);
+                                      width, height, psm, vramAddr, destWidth);
     }
 
     void TextureFlush()

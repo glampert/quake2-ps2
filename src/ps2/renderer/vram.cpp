@@ -35,7 +35,7 @@ constexpr int kDebugHeapLimitWords = 0;
 
 struct Block
 {
-    int                  addrWords;      // absolute GS VRAM word address
+    Address              addrWords;      // absolute GS VRAM word address
     int                  sizeWords;
     const tex::Texture * owner;          // nullptr = free block
     u32                  lastBoundFrame; // LRU stamp; valid while owned
@@ -100,7 +100,7 @@ void Init(int heapBaseWords)
         PS2_Assert(heapEndWords <= kVramTotalWords);
     }
 
-    s_blocks[0] = { heapBaseWords, heapEndWords - heapBaseWords, nullptr, 0 };
+    s_blocks[0] = { Address(heapBaseWords), heapEndWords - heapBaseWords, nullptr, 0 };
     s_blockCount = 1;
 
     Com_Printf("GS texture heap: %d KB of VRAM.\n", s_blocks[0].sizeWords * 4 / 1024);
@@ -151,7 +151,7 @@ int TextureFootprintWords(int width, int height, int psm)
     return pagesX * pagesY * 2048; // one GS page = 8 KB = 2048 words
 }
 
-int Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted)
+Address Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted)
 {
     PS2_AssertMsg(s_blockCount > 0, "vram::Init not called!");
     PS2_AssertMsg(texture.vramAddr == tex::Texture::kNotResident, "Texture already resident!");
@@ -173,9 +173,12 @@ int Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted)
             {
                 // Split off the free remainder.
                 InsertBlockAt(i + 1);
-                s_blocks[i + 1] = { s_blocks[i].addrWords + sizeWords,
-                                    s_blocks[i].sizeWords - sizeWords,
-                                    nullptr, 0 };
+                s_blocks[i + 1] = {
+                    Address(static_cast<int>(s_blocks[i].addrWords) + sizeWords),
+                    s_blocks[i].sizeWords - sizeWords,
+                    nullptr,
+                    0
+                };
                 s_blocks[i].sizeWords = sizeWords;
             }
 

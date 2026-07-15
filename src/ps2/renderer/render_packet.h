@@ -122,10 +122,10 @@ public:
     // sampled with) - usually just 'width', but 8-bit formats round it up to a
     // multiple of 128 and the 16x16 CLUT image uses the 64-pixel minimum.
     void TextureTransfer(const void * pixels, int width, int height, int psm,
-                         int vramAddr, int destWidth)
+                         vram::Address vramAddr, int destWidth)
     {
         m_ptr = draw_texture_transfer(m_ptr, const_cast<void *>(pixels),
-                                      width, height, psm, vramAddr, destWidth);
+                                      width, height, psm, static_cast<int>(vramAddr), destWidth);
     }
 
     void TextureFlush()

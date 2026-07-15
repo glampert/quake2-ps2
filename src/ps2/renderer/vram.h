@@ -13,6 +13,12 @@ namespace ps2::tex { struct Texture; }
 
 namespace ps2::vram {
 
+// 32-bits type to represent VRAM addresses.
+enum struct Address : int
+{
+    Invalid = -1,
+};
+
 // Takes ownership of GS VRAM from 'heapBaseWords' (a word address) up to the 4 MB
 // end. Call once, from gs::Init(), after the framebuffer/z-buffer allocations.
 void Init(int heapBaseWords);
@@ -30,7 +36,7 @@ int TextureFootprintWords(int width, int height, int psm);
 // fit). Evicted textures get vramAddr = kNotResident and self-heal on their next
 // bind. Returns the block's word address; sets *outEvicted when anything was
 // evicted - the caller must sync the GS before writing over reused VRAM.
-int Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted);
+Address Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted);
 
 // Marks the (resident) texture as bound this frame, protecting it from eviction
 // until the next frame.

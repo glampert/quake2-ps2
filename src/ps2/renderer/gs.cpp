@@ -86,7 +86,7 @@ static const tex::Texture * s_currentTex = nullptr;
 // arrangement: within each 32-entry group the two middle 8-entry blocks swap
 // (index bits 3 and 4 exchange).
 alignas(16) static u32 s_clutData[256];
-static int s_clutVramAddr = 0;
+static vram::Address s_clutVramAddr = vram::Address::Invalid;
 
 // Pixel stride the texture occupies VRAM with (the TEX0 TBW and transfer DBW).
 // 8-bit textures must use a multiple of 128 (TBW must be even for PSMT8/4);
@@ -162,8 +162,9 @@ void Init()
     // PSMCT32 image, 256 words); the streamed texture heap takes everything
     // after it, rounded up to a page so its footprint math stays page-aligned
     // (the rest of the CLUT's page is unused).
-    s_clutVramAddr = graph_vram_allocate(16, 16, GS_PSM_32, GRAPH_ALIGN_BLOCK);
-    vram::Init((s_clutVramAddr + ArrayLength(s_clutData) + 2047) & ~2047);
+    const int clutVramAddr = graph_vram_allocate(16, 16, GS_PSM_32, GRAPH_ALIGN_BLOCK);
+    vram::Init((clutVramAddr + ArrayLength(s_clutData) + 2047) & ~2047);
+    s_clutVramAddr = vram::Address(clutVramAddr);
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
     graph_initialize(static_cast<int>(s_frame[0].address), kWidth, kHeight, GS_PSM_32, 0, 0);
@@ -214,7 +215,7 @@ void Init()
     s_packetIdx = 0;
 }
 
-int GlobalClutAddress()
+vram::Address GlobalClutAddress()
 {
     return s_clutVramAddr;
 }
@@ -377,7 +378,7 @@ void EnsureTextureResident(const tex::Texture & texture)
     const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
 
     bool evicted = false;
-    const int addr = vram::Allocate(texture, sizeWords, &evicted);
+    const vram::Address addr = vram::Allocate(texture, sizeWords, &evicted);
 
     s_vramReuseHazard |= evicted;
     if (s_vramReuseHazard)

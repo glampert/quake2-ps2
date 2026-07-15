@@ -102,7 +102,7 @@ u64 MakeTex0Data(const tex::Texture & texture)
                        texture.texbuf.info.height,
                        texture.texbuf.info.components,
                        texture.texbuf.info.function,
-                       palettized ? (gs::GlobalClutAddress() >> 6) : 0,
+                       palettized ? ((int)gs::GlobalClutAddress() >> 6) : 0,
                        GS_PSM_32, // CPSM; only read for palettized PSMs (and == 0 anyway)
                        CLUT_STORAGE_MODE1, 0,
                        palettized ? CLUT_LOAD : CLUT_NO_LOAD);

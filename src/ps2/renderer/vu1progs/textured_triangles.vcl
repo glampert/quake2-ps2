@@ -15,13 +15,18 @@
 ; Batch layout at XTOP:
 ;   +0   header: vertex count in .w
 ;   +1   5 GIF tag qwords (set tag, TEST A+D, TEX1 A+D, TEX0 A+D, prim tag)
-;   +6   vertices, 3 qwords each: position, RGBA, STQ
+;   +6   vertices, 2 qwords each: position, then (rgba, s, t, q)
 ;
 ; The GS packet (the 5 GIF tags + 3 output qwords per vertex: ST,
 ; RGBAQ, XYZ2) is built right after the input vertices in the same
-; buffer and sent with XGKICK. Clipping is a whole-triangle guard
-; band reject: clipw flags outside the scaled |w| range set the ADC
-; bit on all 3 vertices so the GS skips the drawing kick.
+; buffer and sent with XGKICK. The color arrives packed in the .x
+; word of the second input qword and is raw-copied into an A+D
+; qword: the native RGBAQ register layout is exactly that u32 with
+; Q in the word above, so the bytes never need spreading apart (and
+; Q rides inline, independent of the GIF's ST-latched Q). Clipping
+; is a whole-triangle guard band reject: clipw flags outside the
+; scaled |w| range set the ADC bit on all 3 vertices so the GS
+; skips the drawing kick.
 ;--------------------------------------------------------------------
 
 ; Batch offsets, relative to XTOP:
@@ -29,20 +34,22 @@
 #define kGifTags     1
 #define kVertexData  6
 
-; Transforms one vertex: 3 input qwords at offPos/offColor/offStq from
-; iInPtr become the ST, RGBAQ and XYZ2 output qwords at the same offsets
-; from iOutPtr (the offsets coincide because both formats are 3 qwords).
-; Leaves this vertex's clipw flags as the newest entry in the clip flag
-; register; the caller judges whole triangles with fcand after 3 calls
-; and writes the XYZ2 .w ADC bit.
+; Transforms one vertex: 2 input qwords at offPos/offStq from iInPtr
+; become the ST, RGBAQ (via A+D) and XYZ2 output qwords at offST/offAD/
+; offXyz from iOutPtr (input is 2 qwords per vertex but output is 3, so
+; the offsets no longer coincide). Leaves this vertex's clipw flags as
+; the newest entry in the clip flag register; the caller judges whole
+; triangles with fcand after 3 calls and writes the XYZ2 .w ADC bit.
+;
+; The packed color is moved with raw copies only (lq/sq.x): FMAC ops
+; would flush denormal color bit patterns (e.g. 0x800000FF) to zero.
 ;
 ; C-like pseudo-code ('in'/'out' are the qword arrays at iInPtr/iOutPtr):
 ;
-;   void DoVertex(int offPos, int offColor, int offStq)
+;   void DoVertex(int offPos, int offStq, int offST, int offAD, int offXyz)
 ;   {
-;       vec4 pos   = in[offPos];
-;       vec4 color = in[offColor];
-;       vec4 stq   = in[offStq];
+;       vec4 pos = in[offPos];
+;       vec4 stq = in[offStq]; // (rgba, s, t, q); raw packed color in .x
 ;
 ;       // Object space to clip space (row-vector MVP):
 ;       pos = pos.x * mvp[0] + pos.y * mvp[1]
@@ -54,24 +61,27 @@
 ;       vec3 judge = pos.xyz * clipScale.xyz;
 ;       clipFlagQueue.push(judge, abs(pos.w));
 ;
-;       // Perspective divide; STQ shares the 1/w so the GS gets
-;       // (s/w, t/w, 1/w) for perspective-correct interpolation:
+;       // Perspective divide; the STQ words share the 1/w so the GS
+;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
+;       // The color bits get scaled too - garbage, but the rotate
+;       // below moves it into the ST qword's ignored .w:
 ;       float q  = 1.0f / pos.w;
-;       pos.xyz *= q; // now NDC
-;       stq     *= q;
+;       pos.xyz *= q;                    // now NDC
+;       vec4 stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
 ;
 ;       // NDC to GS window coordinates, in 12.4 fixed point:
 ;       pos.xyz = ftoi4(gsOffset.xyz + pos.xyz * gsScale.xyz);
 ;
-;       out[offPos]     = stq;     // ST    (.z carries Q = 1/w)
-;       out[offColor]   = color;   // RGBAQ
-;       out[offStq].xyz = pos.xyz; // XYZ   (.w ADC bit set by caller)
+;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
+;       out[offAD].x    = stq.x;          // native RGBAQ: packed color...
+;       out[offAD].y    = q;              // ...with Q in the word above
+;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
+;       out[offXyz].xyz = pos.xyz;        // XYZ (.w ADC bit set by caller)
 ;   }
-#macro DoVertex: offPos, offColor, offStq
+#macro DoVertex: offPos, offStq, offST, offAD, offXyz
 
-    lq fPos,   offPos(iInPtr)
-    lq fColor, offColor(iInPtr)
-    lq fStq,   offStq(iInPtr)
+    lq fPos, offPos(iInPtr)
+    lq fStq, offStq(iInPtr)
 
     ; Position to clip space (row-vector MVP):
     mul  acc,  fMVP0, fPos[x]
@@ -85,19 +95,25 @@
 
     ; Perspective divide, with the same 1/w multiplied onto the texture
     ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
-    ; interpolation.
-    div     q,    vf00[w], fPos[w]
-    mul.xyz fPos, fPos,    q
-    mulq    fStq, fStq,    q
+    ; interpolation - and captured into .y for the A+D RGBAQ qword.
+    div        q,          vf00[w], fPos[w]
+    mul.xyz    fPos,       fPos,    q
+    mulq       fStqScaled, fStq,    q
+    addq.y     fQ,         vf00,    q
 
     ; NDC to GS window coordinates, in 12.4 fixed point:
     mula.xyz  acc,  fGSOffset, vf00[w]
     madd.xyz  fPos, fPos, fGSScale
     ftoi4.xyz fPos, fPos
 
-    sq     fStq,   offPos(iOutPtr)
-    sq     fColor, offColor(iOutPtr)
-    sq.xyz fPos,   offStq(iOutPtr)
+    ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
+    mr32 fST, fStqScaled
+
+    sq     fST,  offST(iOutPtr)
+    sq.x   fStq, offAD(iOutPtr)
+    sq.y   fQ,   offAD(iOutPtr)
+    isw.z  iRegRGBAQ, offAD(iOutPtr)
+    sq.xyz fPos, offXyz(iOutPtr)
 
 #endmacro
 
@@ -115,10 +131,10 @@
 ;       // This batch, in the current double buffer:
 ;       qword* batch    = &vuMem[XTOP];
 ;       int    numVerts = batch[kBatchHeader].w;
-;       qword* in       = &batch[kVertexData]; // 3 qwords per vertex
+;       qword* in       = &batch[kVertexData]; // 2 qwords per vertex
 ;
 ;       // The GS packet starts right after the input vertices:
-;       qword* kick = in + (numVerts * 3);
+;       qword* kick = in + (numVerts * 2);
 ;       qword* out  = kick;
 ;
 ;       // Packet head: the 5 GIF tag qwords prepared by the EE:
@@ -127,9 +143,9 @@
 ;
 ;       do // One triangle per iteration:
 ;       {
-;           DoVertex(0, 1, 2); // in[0..2] -> out[0..2]
-;           DoVertex(3, 4, 5); // in[3..5] -> out[3..5]
-;           DoVertex(6, 7, 8); // in[6..8] -> out[6..8]
+;           DoVertex(0, 1,  0, 1, 2); // in[0..1] -> out[0..2]
+;           DoVertex(2, 3,  3, 4, 5); // in[2..3] -> out[3..5]
+;           DoVertex(4, 5,  6, 7, 8); // in[4..5] -> out[6..8]
 ;
 ;           // Whole-triangle guard band reject: if any of the 18 clip
 ;           // flags of the 3 vertices above is set, adc becomes 0x8000,
@@ -140,7 +156,7 @@
 ;           out[5].w = adc;
 ;           out[8].w = adc;
 ;
-;           in  += 9;
+;           in  += 6;
 ;           out += 9;
 ;           numVerts -= 3;
 ;       }
@@ -162,6 +178,10 @@
     lq fGSOffset,  5(vi00)
     lq fClipScale, 6(vi00)
 
+    ; A+D destination address the per-vertex color qwords carry in .z
+    ; (0x01 = the RGBAQ register):
+    iaddiu iRegRGBAQ, vi00, 1
+
     ; Current double buffer and this batch's pointers:
     xtop   iBase
     ilw.w  iNumVerts, kBatchHeader(iBase)
@@ -169,7 +189,6 @@
 
     ; Output (the GS packet) starts right after the input vertices:
     iadd   iKick, iInPtr, iNumVerts
-    iadd   iKick, iKick,  iNumVerts
     iadd   iKick, iKick,  iNumVerts
 
     ; The GIF tags were prepared by the EE; copy them to the packet head:
@@ -189,9 +208,9 @@
     ; One triangle per iteration:
     lTriangleLoop:
 
-        DoVertex{ 0, 1, 2 }
-        DoVertex{ 3, 4, 5 }
-        DoVertex{ 6, 7, 8 }
+        DoVertex{ 0, 1, 0, 1, 2 }
+        DoVertex{ 2, 3, 3, 4, 5 }
+        DoVertex{ 4, 5, 6, 7, 8 }
 
         ; Judge the whole triangle from the last 3 clipw results: if any
         ; vertex left the guard band, 0x7FFF + flags reaches bit 15 (the
@@ -203,7 +222,7 @@
         isw.w  iADC, 5(iOutPtr)
         isw.w  iADC, 8(iOutPtr)
 
-        iaddiu iInPtr,    iInPtr,     9
+        iaddiu iInPtr,    iInPtr,     6
         iaddiu iOutPtr,   iOutPtr,    9
         iaddi  iNumVerts, iNumVerts, -3
         ibne   iNumVerts, vi00, lTriangleLoop

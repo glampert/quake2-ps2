@@ -17,7 +17,7 @@
  *      8-999  the two XTOP double buffers (VIF1 BASE=8, OFFSET=496)
  *
  *  Batch layout inside a double buffer (relative to XTOP): input is one header
- *  qword (vertex count in .w), 5 GIF/AD tag qwords, then 3 qwords per vertex;
+ *  qword (vertex count in .w), 5 GIF/AD tag qwords, then 2 qwords per vertex;
  *  the microprogram builds the GS packet in the same buffer after the input.
  *  The A+D block programs TEST as well as TEX0/TEX1, so a batch draws with the
  *  proper z-test no matter what state the surrounding 2D packets left behind.
@@ -61,6 +61,16 @@ constexpr int kDrawPacketQwords = 64;
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
 constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
+
+// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an
+// A+D qword because the native RGBAQ layout is the vertex's packed color u32
+// with Q in the word above - the VU raw-copies the color instead of spreading
+// one byte per word as the PACKED RGBAQ descriptor would want. Q rides in the
+// A+D data, so nothing relies on the ST-latched Q. XYZ2 last: it kicks the
+// vertex with whatever ST/RGBAQ hold.
+constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
+                               (u64(GIF_REG_AD)   << 4) |
+                               (u64(GIF_REG_XYZ2) << 8);
 
 // Guard band: the clip judgement multiplies x/y by this before clipw tests
 // them against |w|, so triangles survive out to |ndc| = 0.8 - about 5x the
@@ -196,14 +206,14 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         pkt.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0 + ctx));
 
         // ...then the drawing tag: gouraud textured triangle list, STQ mapping,
-        // ST before RGBAQ so the GS latches Q for perspective-correct texturing.
+        // with the per-vertex registers of kVertexRegList.
         const u128 prim = VU_GS_PRIM(PRIM_TRIANGLE, 1, 1, 0, 0, 0, 0, ctx, 0);
         pkt.AddQword(VU_GS_GIFTAG(static_cast<u64>(vertCount), 1, 1, prim, 0, 3),
-                     DRAW_STQ2_REGLIST);
+                     kVertexRegList);
     }
     pkt.CloseInlineUnpack();
 
-    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 3), true);
+    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
     pkt.AddStartProgram(0);
     pkt.AddFlush(); // so Wait() covers the VU run and its XGKICKs, not just the DMA

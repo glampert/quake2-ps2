@@ -9,6 +9,7 @@
 #include "ps2/renderer/tests/draw_cube.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
+#include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
 
 namespace ps2::test {
@@ -62,14 +63,12 @@ void EmitVertex(vu1::DrawVertex & vert, int cornerIdx, int uvIdx)
     vert.y = corner.y;
     vert.z = corner.z;
     vert.w = 1.0f;
-    vert.r = kOverrideVertexColors ? 255 : corner.r;
-    vert.g = kOverrideVertexColors ? 255 : corner.g;
-    vert.b = kOverrideVertexColors ? 255 : corner.b;
-    vert.a = 0x80; // 1.0 on the GS
+    vert.rgba = kOverrideVertexColors
+              ? vu1::PackColorRGBA(255, 255, 255, 0x80)
+              : vu1::PackColorRGBA(corner.r, corner.g, corner.b, 0x80); // 0x80 = alpha 1.0 on the GS
     vert.s = kFaceUVs[uvIdx][0];
     vert.t = kFaceUVs[uvIdx][1];
     vert.q = 1.0f;
-    vert.pad = 0.0f;
 }
 
 void BuildCube()
@@ -112,7 +111,8 @@ void DrawRotatingCube()
                               Vec3{ 0.0f, 0.0f, 0.0f },
                               Vec3{ 0.0f, 1.0f, 0.0f });
     const Mat4 proj  = PerspectiveProjection(DegToRad(60.0f), 4.0f / 3.0f,
-                                             640.0f, 448.0f, 2.0f, 2000.0f);
+                                             static_cast<float>(gs::Width()), static_cast<float>(gs::Height()),
+                                             2.0f, 2000.0f);
 
     const Mat4 mvp = model * view * proj;
 

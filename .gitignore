@@ -19,3 +19,6 @@ compile_commands.json
 
 # MacOS stuff:
 .DS_Store
+
+# Clangd source code parsing caches.
+.cache

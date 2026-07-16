@@ -20,27 +20,27 @@ extern "C" {
 extern const unsigned int global_palette[256];
 
 /* conchars.pcx: 8x8-pixel console glyphs in a 16x16 grid.
- * RGBA-32; transparent texels have alpha 0. */
+ * Palette8 RGBA; transparent texels have alpha 0. */
 extern const int conchars_width;
 extern const int conchars_height;
 extern const unsigned char conchars_data[];
 
-/* conback.pcx: console background artwork. RGB-16 (5-5-5-1). */
+/* conback.pcx: console background artwork. Palette8 RGB. */
 extern const int conback_width;
 extern const int conback_height;
 extern const unsigned char conback_data[];
 
-/* backtile.pcx: tileable background used by DrawTileClear. RGB-16 (5-5-5-1). */
+/* backtile.pcx: tileable background used by DrawTileClear. Palette8 RGB. */
 extern const int backtile_width;
 extern const int backtile_height;
 extern const unsigned char backtile_data[];
 
-/* inventory.pcx: inventory screen frame. RGB-16 (5-5-5-1). */
+/* inventory.pcx: inventory screen frame. Palette8 RGB. */
 extern const int inventory_width;
 extern const int inventory_height;
 extern const unsigned char inventory_data[];
 
-/* help.pcx: help/computer screen frame. RGB-16 (5-5-5-1). */
+/* help.pcx: help/computer screen frame. Palette8 RGB. */
 extern const int help_width;
 extern const int help_height;
 extern const unsigned char help_data[];

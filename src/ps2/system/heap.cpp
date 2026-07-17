@@ -55,7 +55,7 @@ void operator delete[](void * p, size_t n, std::align_val_t) noexcept { PS2_MemF
 // C linkage (declared extern "C" in heap.h) so common.c can call these.
 // ------------------------------------------------------------------------------------------------
 
-struct Ps2MemCounters
+struct MemoryStats
 {
     size_t totalBytes;
     size_t totalAllocs;
@@ -64,7 +64,7 @@ struct Ps2MemCounters
     size_t largestAlloc;
 };
 
-static Ps2MemCounters s_memTagCounts[MEMTAG_COUNT] = {};
+static MemoryStats s_memTagCounts[MEMTAG_COUNT] = {};
 
 // NOTE: These should match the Ps2MemTag declaration order!
 static const char * const s_memTagNames[MEMTAG_COUNT] = {
@@ -86,7 +86,7 @@ static inline size_t MemTagToIndex(PS2MemTag tag)
 
 static inline void AccountAlloc(PS2MemTag tag, size_t bytes)
 {
-    Ps2MemCounters * c = &s_memTagCounts[MemTagToIndex(tag)];
+    MemoryStats * c = &s_memTagCounts[MemTagToIndex(tag)];
     c->totalBytes  += bytes;
     c->totalAllocs += 1u;
     if (c->smallestAlloc == 0u || bytes < c->smallestAlloc) { c->smallestAlloc = bytes; }
@@ -128,7 +128,7 @@ void * PS2_MemAllocAligned(size_t alignment, size_t sizeBytes, PS2MemTag tag)
 void PS2_MemFree(void * ptr, size_t sizeBytes, PS2MemTag tag)
 {
     if (ptr == nullptr) { return; }
-    Ps2MemCounters * c = &s_memTagCounts[MemTagToIndex(tag)];
+    MemoryStats * c = &s_memTagCounts[MemTagToIndex(tag)];
     c->totalFrees += 1u;
     if (sizeBytes != 0u)
     {

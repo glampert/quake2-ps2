@@ -4,9 +4,14 @@
  *
  *  Modelled on the ps2sdk "draw/vu1" sample. Each DrawTriangles call builds one VIF1
  *  source chain: frame constants (MVP + GS screen mapping) unpacked to fixed low VU
- *  addresses, then the batch (header, GIF tags, vertices) unpacked at the current
- *  double buffer, then FLUSH + MSCAL to run the microprogram, which transforms,
- *  clips and XGKICKs the triangles to the GS over PATH1.
+ *  addresses, then, per chunk of up to kMaxVertsPerBatch vertices, the batch (header,
+ *  GIF tags, vertices) unpacked at the current double buffer plus FLUSH + MSCAL to
+ *  run the microprogram, which transforms, clips and XGKICKs the triangles to the GS
+ *  over PATH1. XTOP flips on every MSCAL, so the VIF unpacks one chunk into a buffer
+ *  half while the VU still transforms the previous one. No extra syncs are needed
+ *  between chunks: MSCAL stalls the VIF while a program runs, and each program's
+ *  XGKICK stalls until the previous kick drained, which keeps a half's output area
+ *  safe from the next-but-one program until the GS is done reading it.
  *
  *  VU1 data memory layout (1024 qwords; addresses in qwords):
  *      0-3    MVP matrix rows
@@ -42,6 +47,12 @@ PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_TexturedTriangles);
 
 namespace {
 
+// Vertices per VU run: DrawTriangles splits larger draws into chunks of this
+// size. Bounded by the VU double buffer: input (6 + 2n) plus output (5 + 3n)
+// qwords must fit in one 496-qword buffer half, so n <= 97 - and chunks are
+// whole triangles, hence 96.
+constexpr int kMaxVertsPerBatch = 96;
+
 // VIF1 double-buffer registers: two 496-qword buffers above the constants.
 constexpr int kDoubleBufferBase   = 8;
 constexpr int kDoubleBufferOffset = 496;
@@ -54,9 +65,17 @@ constexpr int kBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kGifTagsAddr     = 1; // 5 qwords: GIF set tag, TEST, TEX1, TEX0, prim tag
 constexpr int kVertexDataAddr  = kGifTagsAddr + 5;
 
-// The chain is tags plus one small inline unpack; constants and vertices are
-// referenced in place.
-constexpr int kDrawPacketQwords = 64;
+// The chain is tags plus small per-chunk inline unpacks; constants and
+// vertices are referenced in place. Sized so a DrawTriangles call fits ~30
+// chunks (~2900 verts) before it must flush the chain mid-call.
+constexpr int kDrawPacketQwords = 512;
+
+// Conservative chain footprint of one chunk segment (header/tags inline
+// unpack, vertex REF unpack, FLUSH + MSCAL; ~11 qwords in practice) and of
+// the chain tail (trailing FLUSH + END tag). DrawTriangles flushes the packet
+// when the next chunk plus the tail might not fit.
+constexpr int kChunkChainQwords = 16;
+constexpr int kChainTailQwords  = 4;
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
@@ -135,6 +154,52 @@ u64 MakeTestData()
                        DRAW_ENABLE, gs::DepthTestMethod());
 }
 
+// Emits one chunk into the chain: batch header and GIF tags unpacked inline
+// to the current double buffer, the vertex data referenced in place, and the
+// MSCAL that runs the microprogram over it.
+void AddBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
+                   const DrawVertex * verts, int vertCount)
+{
+    PS2_Assert(vertCount > 0 && vertCount <= kMaxVertsPerBatch && (vertCount % 3) == 0);
+    pkt.EnsureSpace(kChunkChainQwords + kChainTailQwords);
+
+    pkt.OpenInlineUnpack(kBatchHeaderAddr, true);
+    {
+        pkt.AddU32(0);
+        pkt.AddU32(0);
+        pkt.AddU32(0);
+        pkt.AddU32(static_cast<u32>(vertCount));
+
+        // Three A+D register writes: pixel tests and the texture bind for
+        // this context...
+        pkt.AddQword(GIF_SET_TAG(3, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
+        pkt.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + ctx));
+        pkt.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1 + ctx));
+        pkt.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0 + ctx));
+
+        // ...then the drawing tag: gouraud textured triangle list, STQ mapping,
+        // with the per-vertex registers of kVertexRegList.
+        const u128 prim = VU_GS_PRIM(PRIM_TRIANGLE, 1, 1, 0, 0, 0, 0, ctx, 0);
+        pkt.AddQword(VU_GS_GIFTAG(static_cast<u64>(vertCount), 1, 1, prim, 0, 3),
+                     kVertexRegList);
+    }
+    pkt.CloseInlineUnpack();
+
+    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
+
+    pkt.AddStartProgram(0);
+}
+
+// FLUSH so a DMA wait covers the VU runs and their XGKICKs, then terminate
+// and send the chain, blocking until it is fully consumed.
+void SendChainAndWait(VifPacket & pkt)
+{
+    pkt.AddFlush();
+    pkt.AddEndTag();
+    pkt.Send();
+    pkt.Wait();
+}
+
 } // namespace
 
 // ------------------------------------------------------------------------------------------------
@@ -170,7 +235,6 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
     PS2_AssertMsg(!gs::In2DMode(), "No 3D drawing inside the 2D section!");
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawTriangles wants whole triangles!");
-    PS2_AssertMsg(vertCount <= kMaxVertsPerBatch, "Batch too large for the VU double buffer!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(verts) & 15u) == 0, "Vertex data must be 16-byte aligned!");
 
     gs::EnsureTextureResident(texture);
@@ -190,37 +254,26 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
 
-    // Batch header and the GIF tags the microprogram prepends to its output.
-    pkt.OpenInlineUnpack(kBatchHeaderAddr, true);
+    // One chunk per VU run; the double buffer overlaps each chunk's unpack
+    // with the previous chunk's transform.
+    for (int firstVert = 0; firstVert < vertCount; firstVert += kMaxVertsPerBatch)
     {
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(static_cast<u32>(vertCount));
+        // If the next chunk plus the chain tail might not fit the packet,
+        // send what we have and open a fresh, self-contained chain. The
+        // Wait() makes this safe: everything referenced so far was consumed.
+        if (pkt.QwordCount() + kChunkChainQwords + kChainTailQwords > kDrawPacketQwords)
+        {
+            SendChainAndWait(pkt);
+            pkt.Reset();
+            pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
+        }
 
-        // Three A+D register writes: pixel tests and the texture bind for
-        // this context...
-        pkt.AddQword(GIF_SET_TAG(3, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
-        pkt.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + ctx));
-        pkt.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1 + ctx));
-        pkt.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0 + ctx));
-
-        // ...then the drawing tag: gouraud textured triangle list, STQ mapping,
-        // with the per-vertex registers of kVertexRegList.
-        const u128 prim = VU_GS_PRIM(PRIM_TRIANGLE, 1, 1, 0, 0, 0, 0, ctx, 0);
-        pkt.AddQword(VU_GS_GIFTAG(static_cast<u64>(vertCount), 1, 1, prim, 0, 3),
-                     kVertexRegList);
+        const int remaining  = vertCount - firstVert;
+        const int chunkVerts = (remaining < kMaxVertsPerBatch) ? remaining : kMaxVertsPerBatch;
+        AddBatchChunk(pkt, texture, ctx, verts + firstVert, chunkVerts);
     }
-    pkt.CloseInlineUnpack();
 
-    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
-
-    pkt.AddStartProgram(0);
-    pkt.AddFlush(); // so Wait() covers the VU run and its XGKICKs, not just the DMA
-    pkt.AddEndTag();
-
-    pkt.Send();
-    pkt.Wait();
+    SendChainAndWait(pkt);
 }
 
 } // namespace ps2::vu1

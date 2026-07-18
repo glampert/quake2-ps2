@@ -43,20 +43,18 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
     return r | (g << 8) | (b << 16) | (a << 24);
 }
 
-// Largest batch one DrawTriangles call accepts. Bounded by the VU double
-// buffer: input (6 + 2n) plus output (5 + 3n) qwords must fit in one 496-qword
-// buffer half, so n <= 97 - and batches are whole triangles, hence 96.
-constexpr int kMaxVertsPerBatch = 96;
-
 // Brings up the VIF1 DMA channel, uploads the microprogram to VU1 micro memory
 // and programs the double-buffer registers. Call once, after gs::Init().
 void Init();
 
 // Draws a batch of triangles (3 verts each, triangle list) through VU1 with
-// the given transform and texture (uploaded to GS VRAM on demand). Synchronous
-// for now: returns once the GS has consumed the batch, so the vertex data only
-// needs to stay valid for the duration of the call. Call between
-// gs::Begin/EndFrame but outside the gs::Begin2D/End2D section.
+// the given transform and texture (uploaded to GS VRAM on demand). Any whole-
+// triangle count works: draws beyond kMaxVertsPerBatch are split into chunks
+// submitted back to back in the same DMA chain, overlapping each chunk's
+// upload with the previous one's transform. Synchronous for now: returns once
+// the GS has consumed the batch, so the vertex data only needs to stay valid
+// for the duration of the call. Call between gs::Begin/EndFrame but outside
+// the gs::Begin2D/End2D section.
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount);
 

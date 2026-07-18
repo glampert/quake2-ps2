@@ -37,6 +37,10 @@ public:
         m_packet = packet_init(maxQwords, PACKET_NORMAL);
         PS2_AssertMsg(m_packet != nullptr, "packet_init failed!");
         m_ptr = m_packet->data;
+
+        // packet_init mallocs the header struct plus the qword buffer; neither goes
+        // through the tagged allocators, so account for them here. Never freed.
+        PS2_TagsAddMem(MEMTAG_RENDERER, sizeof(packet_t) + (static_cast<size_t>(maxQwords) * sizeof(qword_t)));
     }
 
     // Rewinds the write cursor to the start of the buffer.

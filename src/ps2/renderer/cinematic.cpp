@@ -49,6 +49,7 @@ static tex::Texture s_frameTexture = {
     .minFilter   = tex::TexFilter::Linear,
     .type        = tex::ImageType::Pic,
     .flags       = tex::TexFlags::None,
+    .regSequence = 0, // never in the texture cache; not part of the registration cycle
     .name        = "cinematic_frame",
 };
 

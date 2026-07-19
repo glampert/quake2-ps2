@@ -2,9 +2,11 @@
  * File: ref.cpp
  * Brief: The refexport_t implementation - the functions the Quake II client calls
  *        to draw. This pass implements the full 2D overlay path (console, HUD,
- *        menus) on top of the built-in textures - pics, glyphs, tile fills, solid
- *        fills and fades - plus cinematic playback (cinematic.cpp). The 3D world
- *        is stubbed and lands in the next milestones.
+ *        menus) - pics, glyphs, tile fills, solid fills and fades - plus
+ *        cinematic playback (cinematic.cpp) and the image registration cycle
+ *        (textures load from disk on first use and are freed when a level stops
+ *        referencing them). The 3D world is stubbed and lands in the next
+ *        milestones.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -162,11 +164,23 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 void PS2_RefShutdown() {}
 
 // ------------------------------------------------------------------------------------------------
-// Registration (no file-loaded assets yet - built-ins only)
+// Registration: textures load from disk on first use (PCX/WAL/TGA); the
+// Begin/End pair brackets a level change and frees the level assets it no
+// longer references. Models are still pending (next milestone).
 // ------------------------------------------------------------------------------------------------
 
-void PS2_BeginRegistration(const char * map_name) { (void)map_name; }
-void PS2_EndRegistration() {}
+void PS2_BeginRegistration(const char * map_name)
+{
+    // The world model isn't loaded yet, but textures already take part in the
+    // registration sequence so stale level assets free at EndRegistration.
+    (void)map_name;
+    ps2::tex::BeginRegistration();
+}
+
+void PS2_EndRegistration()
+{
+    ps2::tex::EndRegistration();
+}
 
 struct model_s * PS2_RegisterModel(const char * name) { (void)name; return nullptr; }
 void PS2_SetSky(const char * name, float rotate, vec3_t axis) { (void)name; (void)rotate; (void)axis; }

@@ -2,8 +2,10 @@
 /* ================================================================================================
  * File: texture.h
  * Brief: Texture/image objects for the PS2 renderer and the cache that owns them.
- *        For now only the embedded built-in images (console font/background, HUD
- *        tiles) are registered; file loading (PCX/TGA/WAL) plugs in here later.
+ *        The embedded built-in images (console font/background, HUD tiles) are
+ *        registered up front; everything else loads from disk (PCX/TGA/WAL) on
+ *        the first Find and is freed by the registration sequence when a level
+ *        change stops referencing it.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -18,7 +20,8 @@ namespace ps2::tex {
 
 // What a texture is used for by the game. Mirrors the image classes of the
 // original renderers and is part of the cache lookup key, so the same file
-// may be cached once per type; later also drives end-of-level eviction.
+// may be cached once per type; it also drives end-of-level eviction (level
+// asset types are freed when unused, Pics stick around - see EndRegistration).
 enum class ImageType : u8
 {
     Null,   // Free slot in the cache.
@@ -75,7 +78,7 @@ struct Texture final
     mutable texbuffer_t   texbuf;      // libdraw descriptor used when binding (filled on upload).
     mutable bool          dirtyPixels; // CPU rewrote 'pixels'; the next bind re-uploads them.
 
-    const void *  pixels; // Pixel data in EE RAM (static memory for built-ins).
+    const void *  pixels; // Pixel data in EE RAM (static memory for built-ins, heap for file loads).
     int           width;  // In pixels, > 0.
     int           height; // In pixels, > 0.
     PixelFormat   format;
@@ -85,17 +88,21 @@ struct Texture final
     TexFilter     minFilter;
     ImageType     type;
     TexFlags      flags;
+    u32           regSequence;     // Registration sequence the texture was last found in;
+                                   // stale level assets are freed at EndRegistration().
     char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx".
 
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
     // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
     void MarkPixelsDirty() const { dirtyPixels = true; }
 
-    // Later additions when file/asset loading lands: registration sequence for
-    // end-of-level eviction, scrap-atlas UVs, per-texture surface chain.
+    // Later additions for world rendering: scrap-atlas UVs, per-texture surface chain.
 
     // TODO: Consider texture mipmaps support.
 };
+
+// Bytes of EE RAM one texel occupies in each PixelFormat (Palette8 = 1).
+int BytesPerTexel(PixelFormat format);
 
 // Mappings from the strongly typed enums above to the plain integer constants
 // libdraw/GS registers expect. SDK constants stay out of the rest of the backend.
@@ -109,11 +116,22 @@ int GsMinFilter(TexFilter filter);
 // Call once, after gs::Init().
 void Init();
 
-// Looks up a texture by game name and type; the type is part of the cache
-// key, so the same file may live in the cache once per ImageType. Bare names
-// expand Quake-style to "pics/<name>.pcx"; a leading '/' or '\' means the
-// full path was given. Returns nullptr if nothing matches (no file loading yet).
+// Looks up a texture by game name and type, loading it from disk (PCX/WAL/TGA,
+// by extension) on a cache miss; the type is part of the cache key, so the same
+// file may live in the cache once per ImageType. Pic names follow the ref_gl
+// convention: bare names expand to "pics/<name>.pcx", a leading '/' or '\'
+// means the full path was given. Other types always give the full path.
+// Returns nullptr when the file is missing or fails to decode.
 const Texture * Find(const char * name, ImageType type);
+
+// Level asset lifetimes, driven by the engine's registration sequence:
+// BeginRegistration starts a new sequence (level load); every texture found
+// or loaded afterwards is stamped with it. EndRegistration then frees the
+// level assets (Skin/Sprite/Wall/Sky) left with an older stamp - pixel memory,
+// GS VRAM and cache slot. Pics are exempt like in ref_gl (the client caches
+// pointers to them across levels), and built-ins are permanent.
+void BeginRegistration();
+void EndRegistration();
 
 // Number of built-in debug checkerboard variants (distinct colors).
 constexpr int kNumDebugTextures = 6;

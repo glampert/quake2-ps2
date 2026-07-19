@@ -109,14 +109,7 @@ inline RenderPacket & FramePacket()
 // Bytes of EE RAM the texture's pixel buffer occupies (linear width*height texels).
 inline int PixelBufferBytes(const tex::Texture & texture)
 {
-    int bytesPerTexel = 0;
-    switch (texture.format)
-    {
-    case tex::PixelFormat::RGBA32   : bytesPerTexel = 4; break;
-    case tex::PixelFormat::RGB16    : bytesPerTexel = 2; break;
-    case tex::PixelFormat::Palette8 : bytesPerTexel = 1; break;
-    }
-    return texture.width * texture.height * bytesPerTexel;
+    return texture.width * texture.height * tex::BytesPerTexel(texture.format);
 }
 
 } // namespace
@@ -459,6 +452,14 @@ void EnsureTextureResident(const tex::Texture & texture)
 
 void ReleaseTexture(const tex::Texture & texture)
 {
+    // Never leave the TEX0 dedupe pointing at a released texture: a rebind in
+    // the same 2D section must go through EnsureTextureResident again, and the
+    // cache may recycle the slot for a different image entirely.
+    if (s_currentTex == &texture)
+    {
+        s_currentTex = nullptr;
+    }
+
     if (texture.vramAddr == tex::Texture::kNotResident)
     {
         return;

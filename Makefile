@@ -28,36 +28,37 @@ EE_BIN = $(OUTPUT_DIR)/quake2.elf
 #  Source files
 # ----------------------------------------------------------------------------
 
-# New PS2 backend, modern C++ (clean-slate rewrite of src/ps2):
-PS2_CXX_SRC = \
-	ps2/system/main.cpp        \
-	ps2/system/sys.cpp         \
-	ps2/system/iop_boot.cpp    \
-	ps2/system/heap.cpp        \
-	ps2/math/math.cpp          \
-	ps2/math/vec_mat.cpp       \
-	ps2/net/net.cpp            \
-	ps2/input/input.cpp        \
-	ps2/input/pad.cpp          \
-	ps2/renderer/gs.cpp        \
-	ps2/renderer/vram.cpp      \
-	ps2/renderer/texture.cpp   \
-	ps2/renderer/cinematic.cpp \
-	ps2/renderer/vid.cpp       \
-	ps2/renderer/ref.cpp       \
-	ps2/renderer/vu1.cpp       \
+# New PS2 backend, modern C++:
+PS2_CXX_SRC =                         \
+	ps2/system/main.cpp               \
+	ps2/system/sys.cpp                \
+	ps2/system/iop_boot.cpp           \
+	ps2/system/heap.cpp               \
+	ps2/math/math.cpp                 \
+	ps2/math/vec_mat.cpp              \
+	ps2/net/net.cpp                   \
+	ps2/input/input.cpp               \
+	ps2/input/pad.cpp                 \
+	ps2/renderer/gs.cpp               \
+	ps2/renderer/vram.cpp             \
+	ps2/renderer/texture.cpp          \
+	ps2/renderer/image_load.cpp       \
+	ps2/renderer/cinematic.cpp        \
+	ps2/renderer/vid.cpp              \
+	ps2/renderer/ref.cpp              \
+	ps2/renderer/vu1.cpp              \
 	ps2/renderer/tests/draw_cube.cpp  \
 	ps2/renderer/tests/cinematics.cpp \
 	ps2/debug/scr_print.cpp
 
 # Doug Lea's allocator + a small amount of embedded data kept as plain C:
 PS2_C_SRC = \
-	ps2/system/dlmalloc/dlmalloc.c \
-	ps2/builtin/palette.c   \
-	ps2/builtin/conchars.c  \
-	ps2/builtin/conback.c   \
-	ps2/builtin/backtile.c  \
-	ps2/builtin/inventory.c \
+	ps2/system/dlmalloc/dlmalloc.c    \
+	ps2/builtin/palette.c             \
+	ps2/builtin/conchars.c            \
+	ps2/builtin/conback.c             \
+	ps2/builtin/backtile.c            \
+	ps2/builtin/inventory.c           \
 	ps2/builtin/help.c
 
 # Stock Quake II engine / game / server - untouched C, statically linked.

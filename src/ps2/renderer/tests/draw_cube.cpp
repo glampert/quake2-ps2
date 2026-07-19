@@ -124,7 +124,7 @@ int EmitFace(vu1::DrawVertex * destVerts, const int corners[4], int tess)
 
 void DrawRotatingCube()
 {
-    static const cvar_t * s_testCube = Cvar_Get("ps2_testcube", "1", 0);
+    static const cvar_t * s_testCube = Cvar_Get("ps2_testcube", "0", 0);
     if (s_testCube->value == 0.0f)
     {
         return;

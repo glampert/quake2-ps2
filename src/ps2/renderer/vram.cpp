@@ -230,4 +230,41 @@ void Touch(const tex::Texture & texture)
     PS2_AssertMsg(false, "Resident texture has no VRAM block!");
 }
 
+bool BoundThisFrame(const tex::Texture & texture)
+{
+    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "BoundThisFrame on a non-resident texture!");
+
+    for (int i = 0; i < s_blockCount; ++i)
+    {
+        if (s_blocks[i].owner == &texture)
+        {
+            return s_blocks[i].lastBoundFrame == s_frame;
+        }
+    }
+
+    PS2_AssertMsg(false, "Resident texture has no VRAM block!");
+    return false;
+}
+
+void Free(const tex::Texture & texture)
+{
+    if (texture.vramAddr == tex::Texture::kNotResident)
+    {
+        return;
+    }
+
+    for (int i = 0; i < s_blockCount; ++i)
+    {
+        if (s_blocks[i].owner == &texture)
+        {
+            texture.vramAddr  = tex::Texture::kNotResident;
+            s_blocks[i].owner = nullptr;
+            CoalesceFreeAt(i);
+            return;
+        }
+    }
+
+    PS2_AssertMsg(false, "Resident texture has no VRAM block!");
+}
+
 } // namespace ps2::vram

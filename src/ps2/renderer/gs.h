@@ -64,10 +64,17 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a);
 // Ensures the texture's pixels are resident in GS VRAM: on a miss, allocates
 // heap space (evicting the least-recently-bound textures when full) and
 // DMA-uploads synchronously; when already resident it only refreshes the LRU
-// stamp, so binding stays a plain register write. SetTextureFor2D and
-// vu1::DrawTriangles call this implicitly; also usable to prefetch. The
+// stamp, so binding stays a plain register write - unless the pixels were
+// marked dirty (Texture::MarkPixelsDirty), which re-uploads them in place
+// (dynamic textures: cinematic frames, lightmaps/scrap). SetTextureFor2D
+// and vu1::DrawTriangles call this implicitly; also usable to prefetch. The
 // pixels must stay valid in EE RAM for re-uploads after eviction.
 void EnsureTextureResident(const tex::Texture & texture);
+
+// Returns the texture's VRAM to the heap (no-op when not resident). For
+// dynamic textures whose useful life has ended (e.g. the cinematic frame when
+// playback stops); it self-heals via re-upload if bound again later.
+void ReleaseTexture(const tex::Texture & texture);
 
 // Selects the texture sampled by subsequent DrawTexturedRect calls, uploading
 // it first if needed (which may flush the accumulated 2D packet when reusing

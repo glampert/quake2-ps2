@@ -42,4 +42,14 @@ Address Allocate(const tex::Texture & texture, int sizeWords, bool * outEvicted)
 // until the next frame.
 void Touch(const tex::Texture & texture);
 
+// True when the (resident) texture was already bound this frame - its draws may
+// still be queued in the unsent frame packet, so overwriting its VRAM (dynamic
+// texture re-upload) must sync the GS first.
+bool BoundThisFrame(const tex::Texture & texture);
+
+// Returns the texture's block to the heap and marks it non-resident (no-op when
+// not resident). The freed range may be handed out without an eviction, so the
+// caller must treat it like evicted VRAM: sync the GS before writing over it.
+void Free(const tex::Texture & texture);
+
 } // namespace ps2::vram

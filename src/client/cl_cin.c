@@ -708,8 +708,10 @@ qboolean CinematicTest_PlayDirect(const char * filename)
 
     Com_DPrintf("Trying to play cinematic '%s' ...\n", filename);
 
+    // Open through the Quake filesystem so the same engine-relative path
+    // ("video/xyz.cin") works on any base path (host:, mass:) or even a pak.
     cl.cinematicframe = 0;
-    cl.cinematic_file = fopen(filename, "rb");
+    FS_FOpenFile(filename, &cl.cinematic_file);
 
     if (cl.cinematic_file == NULL)
     {
@@ -758,12 +760,15 @@ CinematicTest_RunFrame
 
 LAMPERT 2015-10-23
 Used in combination with CinematicTest_PlayDirect for testing cinematics in the PS2 port.
-It will unconditionally run the next cinematic frame, then draw it to screen. Must be called
-inside a BeginFrame/EndFrame loop.
+Draws the current cinematic frame, advancing to the next one at the 14 fps cadence the
+.cin format is authored for (same pacing as SCR_RunCinematic). Must be called every
+frame inside a BeginFrame/EndFrame loop.
 ==================
 */
 qboolean CinematicTest_RunFrame(void)
 {
+    int frame;
+
     //
     // SCR_DrawCinematic:
     //
@@ -781,6 +786,12 @@ qboolean CinematicTest_RunFrame(void)
     //
     // SCR_RunCinematic:
     //
+
+    frame = (Sys_Milliseconds() - cl.cinematictime) * 14.0 / 1000;
+    if (frame <= cl.cinematicframe)
+    {
+        return true; // Not time for the next frame yet; redrawn above.
+    }
 
     if (cin.pic != NULL)
     {

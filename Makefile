@@ -30,21 +30,24 @@ EE_BIN = $(OUTPUT_DIR)/quake2.elf
 
 # New PS2 backend, modern C++ (clean-slate rewrite of src/ps2):
 PS2_CXX_SRC = \
-	ps2/system/main.cpp      \
-	ps2/system/sys.cpp       \
-	ps2/system/heap.cpp      \
-	ps2/math/math.cpp        \
-	ps2/math/vec_mat.cpp     \
-	ps2/net/net.cpp          \
-	ps2/input/input.cpp      \
-	ps2/input/pad.cpp        \
-	ps2/renderer/gs.cpp      \
-	ps2/renderer/vram.cpp    \
-	ps2/renderer/texture.cpp \
-	ps2/renderer/vid.cpp     \
-	ps2/renderer/ref.cpp     \
-	ps2/renderer/vu1.cpp     \
-	ps2/renderer/tests/draw_cube.cpp \
+	ps2/system/main.cpp        \
+	ps2/system/sys.cpp         \
+	ps2/system/iop_boot.cpp    \
+	ps2/system/heap.cpp        \
+	ps2/math/math.cpp          \
+	ps2/math/vec_mat.cpp       \
+	ps2/net/net.cpp            \
+	ps2/input/input.cpp        \
+	ps2/input/pad.cpp          \
+	ps2/renderer/gs.cpp        \
+	ps2/renderer/vram.cpp      \
+	ps2/renderer/texture.cpp   \
+	ps2/renderer/cinematic.cpp \
+	ps2/renderer/vid.cpp       \
+	ps2/renderer/ref.cpp       \
+	ps2/renderer/vu1.cpp       \
+	ps2/renderer/tests/draw_cube.cpp  \
+	ps2/renderer/tests/cinematics.cpp \
 	ps2/debug/scr_print.cpp
 
 # Doug Lea's allocator + a small amount of embedded data kept as plain C:
@@ -105,10 +108,10 @@ TOOLS_BINS   = $(addprefix $(OUTPUT_DIR)/tools/, imgdump unpak)
 HOST_CC     ?= cc
 HOST_CFLAGS ?= -O2 -Wall
 
-# IOP/IRX modules embedded into the ELF. None are needed for the current
-# boot path; add e.g. usbd.irx here when USB mass-storage loading is wired up.
+# IOP/IRX modules embedded into the ELF: the BDM USB mass-storage stack, booted
+# by ps2/system/iop_boot.cpp when the game data isn't on host: (real hardware).
 IRX_PATH  = $(PS2SDK)/iop/irx
-IRX_FILES =
+IRX_FILES = iomanX.irx fileXio.irx bdm.irx bdmfs_fatfs.irx usbd.irx usbmass_bd.irx
 IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o))
 
 EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS)
@@ -164,7 +167,7 @@ EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
 	$(EE_CXX_WARNFLAGS) $(EE_CXX_SYSINCS) \
 	-MMD -MP
 
-EE_LIBS += -ldraw -lgraph -lmath3d -lpacket -lpacket2 -ldma -lpad -lpatches -lkernel
+EE_LIBS += -ldraw -lgraph -lmath3d -lpacket -lpacket2 -ldma -lpad -lpatches -lfileXio -lkernel
 
 # ----------------------------------------------------------------------------
 #  Rules
@@ -205,7 +208,12 @@ $(TOOLS_BINS): $(OUTPUT_DIR)/tools/%: $(TOOLS_PATH)/%.c
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) $< -o $@
 
-run: all
+# PCSX2 exposes the ELF's directory as host:, so the game data must be
+# reachable as build/baseq2. A symlink back to the repo's baseq2/ does it.
+$(OUTPUT_DIR)/baseq2:
+	ln -sfn $(abspath baseq2) $@
+
+run: all $(OUTPUT_DIR)/baseq2
 	$(PCSX2) -batch -elf $(abspath $(EE_BIN))
 
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact

@@ -55,9 +55,10 @@ int Sys_Milliseconds()
 
 void Sys_Init()
 {
-    // The ps2dev crt0 already brings up SIF/RPC and the main thread, so nothing
-    // is required here yet. IOP module loading (pad, audio) will be added with
-    // those subsystems.
+    // Nothing to do: IOP bring-up (reset + USB mass-storage modules when
+    // needed) happens in main() via ps2::sys::DetectBasePathAndBootIop -
+    // FS_InitFilesystem runs before Sys_Init and already needs file IO - and
+    // the pad driver loads its rom0: modules later, at IN_Init.
     Com_Printf("------- Sys_Init (PS2) -------\n");
 }
 

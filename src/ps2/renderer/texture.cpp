@@ -210,18 +210,19 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     const u16 slot = m_texturePool.Alloc();
     PS2_AssertMsg(slot != TexturePool::kInvalidIndex, "Out of texture cache slots!");
 
-    Texture & texture  = m_texturePool.Slot(slot);
-    texture.pixels     = pixels;
-    texture.width      = width;
-    texture.height     = height;
-    texture.vramAddr   = Texture::kNotResident;
-    texture.format     = format;
-    texture.components = components;
-    texture.function   = TexFunction::Modulate;
-    texture.magFilter  = TexFilter::Nearest;
-    texture.minFilter  = TexFilter::Nearest;
-    texture.type       = ImageType::Pic;    // All built-ins are 2D UI images. TODO: File loading has to set this accordingly!
-    texture.flags      = TexFlags::Builtin; // TODO: File-loaded textures won't have this flag!
+    Texture & texture   = m_texturePool.Slot(slot);
+    texture.pixels      = pixels;
+    texture.width       = width;
+    texture.height      = height;
+    texture.vramAddr    = Texture::kNotResident;
+    texture.dirtyPixels = false;
+    texture.format      = format;
+    texture.components  = components;
+    texture.function    = TexFunction::Modulate;
+    texture.magFilter   = TexFilter::Nearest;
+    texture.minFilter   = TexFilter::Nearest;
+    texture.type        = ImageType::Pic;    // All built-ins are 2D UI images. TODO: File loading has to set this accordingly!
+    texture.flags       = TexFlags::Builtin; // TODO: File-loaded textures won't have this flag!
     std::snprintf(texture.name, sizeof(texture.name), "%s", name);
 
     const auto inserted = m_lookup.emplace(LookupKey(texture.name, texture.type), slot);

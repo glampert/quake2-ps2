@@ -33,6 +33,7 @@
 #include <dma.h>
 #include <gs_psm.h>
 #include <graph.h>
+#include <kernel.h> // SyncDCache
 #include <draw.h>
 #include <draw2d.h>
 #include <draw_buffers.h>
@@ -103,6 +104,19 @@ inline int TextureStridePixels(const tex::Texture & texture, int psm)
 inline RenderPacket & FramePacket()
 {
     return s_framePacket[s_packetIdx];
+}
+
+// Bytes of EE RAM the texture's pixel buffer occupies (linear width*height texels).
+inline int PixelBufferBytes(const tex::Texture & texture)
+{
+    int bytesPerTexel = 0;
+    switch (texture.format)
+    {
+    case tex::PixelFormat::RGBA32   : bytesPerTexel = 4; break;
+    case tex::PixelFormat::RGB16    : bytesPerTexel = 2; break;
+    case tex::PixelFormat::Palette8 : bytesPerTexel = 1; break;
+    }
+    return texture.width * texture.height * bytesPerTexel;
 }
 
 } // namespace
@@ -368,52 +382,93 @@ void EnsureTextureResident(const tex::Texture & texture)
 {
     PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
 
-    if (texture.vramAddr != tex::Texture::kNotResident)
-    {
-        vram::Touch(texture); // protect from eviction until the next frame
-        return;
-    }
-
-    const int psm       = tex::GsPsm(texture.format);
-    const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
-
-    bool evicted = false;
-    const vram::Address addr = vram::Allocate(texture, sizeWords, &evicted);
-
-    s_vramReuseHazard |= evicted;
-    if (s_vramReuseHazard)
-    {
-        SyncGsBeforeVramReuse();
-    }
-
-    texture.vramAddr = addr;
-
-    // Fill the libdraw descriptor used when binding. The stride (TEX0's TBW)
-    // differs from the width for narrow 8-bit textures; the page-grid footprint
-    // already covers the rounding.
+    const int psm    = tex::GsPsm(texture.format);
     const int stride = TextureStridePixels(texture, psm);
 
-    texture.texbuf.address         = static_cast<unsigned int>(addr);
-    texture.texbuf.width           = static_cast<unsigned int>(stride);
-    texture.texbuf.psm             = static_cast<unsigned int>(psm);
-    texture.texbuf.info.width      = draw_log2(static_cast<unsigned int>(texture.width));
-    texture.texbuf.info.height     = draw_log2(static_cast<unsigned int>(texture.height));
-    texture.texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(texture.components));
-    texture.texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(texture.function));
+    if (texture.vramAddr != tex::Texture::kNotResident)
+    {
+        if (!texture.dirtyPixels)
+        {
+            vram::Touch(texture); // protect from eviction until the next frame
+            return;
+        }
+
+        // Dynamic texture with rewritten pixels: re-upload over its own block.
+        // Draws queued earlier this frame would sample the new texels instead
+        // of the ones they were issued with - drain the GS first. (Its block
+        // is still owned, so the eviction/reuse hazard does not apply here.)
+        const bool boundThisFrame = vram::BoundThisFrame(texture);
+        vram::Touch(texture);
+        if (boundThisFrame)
+        {
+            SyncGsBeforeVramReuse();
+        }
+    }
+    else
+    {
+        const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
+
+        bool evicted = false;
+        const vram::Address addr = vram::Allocate(texture, sizeWords, &evicted);
+
+        s_vramReuseHazard |= evicted;
+        if (s_vramReuseHazard)
+        {
+            SyncGsBeforeVramReuse();
+        }
+
+        texture.vramAddr = addr;
+
+        // Fill the libdraw descriptor used when binding. The stride (TEX0's TBW)
+        // differs from the width for narrow 8-bit textures; the page-grid footprint
+        // already covers the rounding.
+        texture.texbuf.address         = static_cast<unsigned int>(addr);
+        texture.texbuf.width           = static_cast<unsigned int>(stride);
+        texture.texbuf.psm             = static_cast<unsigned int>(psm);
+        texture.texbuf.info.width      = draw_log2(static_cast<unsigned int>(texture.width));
+        texture.texbuf.info.height     = draw_log2(static_cast<unsigned int>(texture.height));
+        texture.texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(texture.components));
+        texture.texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(texture.function));
+
+        Com_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
+                    texture.width, texture.height, sizeWords * 4 / 1024);
+    }
+
+    if (texture.dirtyPixels)
+    {
+        // The CPU just wrote these pixels; part of them may still sit in the
+        // data cache, and SendChain only writes back the chain-tag buffer, not
+        // REF'd data - flush the range or the GS reads stale texels. Built-ins
+        // are never dirty (the ELF loader wrote them) and skip this.
+        void * pixels = const_cast<void *>(texture.pixels);
+        SyncDCache(pixels, static_cast<u8 *>(pixels) + PixelBufferBytes(texture));
+        texture.dirtyPixels = false;
+    }
 
     // Synchronous DMA upload; the chain references the pixels in EE RAM.
     // TODO: TextureTransfer has no EnsureSpace - revisit the 128-qword scratch
     // packet if large streamed assets ever exceed its chain-tag headroom.
     RenderPacket & pkt = s_texUploadPacket;
     pkt.Reset();
-    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, addr, stride);
+    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
     pkt.TextureFlush();
 
     pkt.SendChain();
     dma_wait_fast();
+}
 
-    Com_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
-                texture.width, texture.height, sizeWords * 4 / 1024);
+void ReleaseTexture(const tex::Texture & texture)
+{
+    if (texture.vramAddr == tex::Texture::kNotResident)
+    {
+        return;
+    }
+
+    vram::Free(texture);
+
+    // Queued or in-flight draws may still sample the freed range; the next
+    // upload that lands there must sync the GS first, same as an eviction.
+    s_vramReuseHazard = true;
 }
 
 void SetTextureFor2D(const tex::Texture & texture)
@@ -421,9 +476,9 @@ void SetTextureFor2D(const tex::Texture & texture)
     PS2_AssertMsg(s_in2D, "SetTextureFor2D outside the 2D section!");
     PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
 
-    if (&texture == s_currentTex)
+    if (&texture == s_currentTex && !texture.dirtyPixels)
     {
-        return; // already bound (and made resident) this section
+        return; // already bound (and made resident); EE RAM pixels not dirty.
     }
 
     EnsureTextureResident(texture);

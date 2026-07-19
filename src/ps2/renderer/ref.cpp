@@ -2,9 +2,9 @@
  * File: ref.cpp
  * Brief: The refexport_t implementation - the functions the Quake II client calls
  *        to draw. This pass implements the full 2D overlay path (console, HUD,
- *        menus) on top of the built-in textures: pics, glyphs, tile fills, solid
- *        fills and fades. Cinematics and the 3D world are stubbed and land in
- *        the next milestones.
+ *        menus) on top of the built-in textures - pics, glyphs, tile fills, solid
+ *        fills and fades - plus cinematic playback (cinematic.cpp). The 3D world
+ *        is stubbed and lands in the next milestones.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -12,8 +12,10 @@
 #include "ps2/common.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/cinematic.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/tests/draw_cube.h"
+#include "ps2/renderer/tests/cinematics.h"
 #include "ps2/builtin/builtin.h"
 
 #include <cstdio>
@@ -146,6 +148,10 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
     PS2_Assert(s_texConchars != nullptr && s_texBacktile != nullptr);
 
+    // Seed the cinematic palette from the game palette (the engine normally
+    // sets a real one before the first frame; this covers stray draws).
+    ps2::cin::SetPalette(nullptr);
+
     viddef.width  = ps2::gs::Width();
     viddef.height = ps2::gs::Height();
 
@@ -240,15 +246,20 @@ void PS2_DrawFadeScreen()
 }
 
 // ------------------------------------------------------------------------------------------------
-// Cinematics (stub)
+// Cinematics
 // ------------------------------------------------------------------------------------------------
 
 void PS2_DrawStretchRaw(int x, int y, int w, int h, int cols, int rows, const byte * data)
 {
-    (void)x; (void)y; (void)w; (void)h; (void)cols; (void)rows; (void)data;
+    // Called every frame while a cinematic plays, always inside the 2D
+    // section (opened in PS2_BeginFrame) - draw immediately, no deferral.
+    ps2::cin::DrawFrame(x, y, w, h, cols, rows, data);
 }
 
-void PS2_CinematicSetPalette(const unsigned char * palette) { (void)palette; }
+void PS2_CinematicSetPalette(const unsigned char * palette)
+{
+    ps2::cin::SetPalette(palette);
+}
 
 // ------------------------------------------------------------------------------------------------
 // Frame + app state
@@ -268,13 +279,18 @@ void PS2_BeginFrame(float camera_separation)
 
 void PS2_EndFrame()
 {
+    // Cinematic playback test: must run inside the 2D section (the movie quad
+    // is a 2D draw), at its end so the picture lands over the fullscreen
+    // console but under the FPS counter. Enable with cvar "ps2_testcin 1".
+    ps2::test::RunCinematics();
+
     DrawFpsCounter();
     ps2::gs::End2D();
 
     // VU1 bring-up scene: drawn outside the 2D section (3D inside it would
     // assert), after the overlay so it stays visible over the fullscreen
     // console that Quake forces while disconnected (its batch programs its
-    // own z-test). Disable with "ps2_testcube 0".
+    // own z-test). Enable with cvar "ps2_testcube 1".
     ps2::test::DrawRotatingCube();
 
     ps2::gs::EndFrame();

@@ -11,6 +11,9 @@
 # Host tool binaries (built with the project, not checked in).
 build/tools
 
+# bin2c-generated IRX embedding intermediates:
+build/irx
+
 # Quake2 game asset files, not part of this repository.
 baseq2
 

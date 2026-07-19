@@ -67,12 +67,13 @@ enum class TexFilter : u8 { Nearest, Linear };
 // A texture or 2D image. Plain data; owned by the internal texture cache.
 struct Texture final
 {
-    static constexpr vram::Address kNotResident = vram::Address::Invalid;
+    static constexpr auto kNotResident = vram::Address::Invalid;
 
     // Residency is a cache managed by gs/vram: binding a const Texture may
-    // upload it (or evict others), so these two mutate behind the const API.
-    mutable vram::Address vramAddr; // GS VRAM word address; kNotResident when not uploaded.
-    mutable texbuffer_t   texbuf;   // libdraw descriptor used when binding (filled on upload).
+    // upload it (or evict others), so these mutate behind the const API.
+    mutable vram::Address vramAddr;    // GS VRAM word address; kNotResident when not uploaded.
+    mutable texbuffer_t   texbuf;      // libdraw descriptor used when binding (filled on upload).
+    mutable bool          dirtyPixels; // CPU rewrote 'pixels'; the next bind re-uploads them.
 
     const void *  pixels; // Pixel data in EE RAM (static memory for built-ins).
     int           width;  // In pixels, > 0.
@@ -85,6 +86,10 @@ struct Texture final
     ImageType     type;
     TexFlags      flags;
     char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx".
+
+    // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
+    // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
+    void MarkPixelsDirty() const { dirtyPixels = true; }
 
     // Later additions when file/asset loading lands: registration sequence for
     // end-of-level eviction, scrap-atlas UVs, per-texture surface chain.

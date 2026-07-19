@@ -7,13 +7,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
-
-// Default filesystem prefix. PCSX2 exposes the ELF's directory as "host:"; a real
-// console typically loads from USB mass storage ("mass:"). Override at build time
-// with -DPS2_FS_BASE_PATH=\"...\" if needed.
-#ifndef PS2_FS_BASE_PATH
-    #define PS2_FS_BASE_PATH "host:"
-#endif
+#include "ps2/system/iop_boot.h"
 
 int main()
 {
@@ -21,7 +15,15 @@ int main()
     static char s_arg0[] = "quake2.elf";
     static char * s_argv[] = { s_arg0, nullptr };
 
+    // Locate the game data - host: under PCSX2, USB mass: on a real console
+    // (which needs the IOP module bring-up) - before Qcommon_Init runs
+    // FS_InitFilesystem. A build with -DPS2_FS_BASE_PATH=\"...\" pins the
+    // base path and skips the detection, for debugging.
+#ifdef PS2_FS_BASE_PATH
     FS_SetDefaultBasePath(PS2_FS_BASE_PATH);
+#else
+    FS_SetDefaultBasePath(ps2::sys::DetectBasePathAndBootIop());
+#endif
 
     Qcommon_Init(1, s_argv);
 

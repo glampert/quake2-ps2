@@ -189,7 +189,7 @@ class TextureCache final
 {
 public:
     void Init();
-    const Texture * Find(const char * name, const ps2::tex::ImageType type);
+    const Texture * Find(const char * name, const ImageType type);
     const Texture & DebugTexture(int index) const;
 
     void BeginRegistration();
@@ -220,7 +220,7 @@ private:
     std::unordered_map<u64, u16> m_lookup;
 };
 
-const Texture * TextureCache::Find(const char * name, const ps2::tex::ImageType type)
+const Texture * TextureCache::Find(const char * name, const ImageType type)
 {
     PS2_Assert(name != nullptr && *name != '\0');
     PS2_Assert(type != ImageType::Null);
@@ -245,7 +245,7 @@ const Texture * TextureCache::Find(const char * name, const ps2::tex::ImageType 
     return &texture;
 }
 
-const Texture * TextureCache::LoadFromFile(const char * fullname, ImageType type)
+const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageType type)
 {
     const char * extension = std::strrchr(fullname, '.');
     if (extension == nullptr)
@@ -275,8 +275,7 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, ImageType type
         }
 
         format     = PixelFormat::Palette8;
-        components = HasTransparentTexels(pic8, width * height) ? TexComponents::RGBA
-                                                                : TexComponents::RGB;
+        components = HasTransparentTexels(pic8, width * height) ? TexComponents::RGBA : TexComponents::RGB;
         pixels     = pic8;
     }
     else if (std::strcmp(extension, ".tga") == 0)
@@ -467,7 +466,7 @@ void Init()
     s_cache.Init();
 }
 
-const Texture * Find(const char * name, const ps2::tex::ImageType type)
+const Texture * Find(const char * name, const ImageType type)
 {
     return s_cache.Find(name, type);
 }

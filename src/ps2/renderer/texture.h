@@ -88,8 +88,7 @@ struct Texture final
     TexFilter     minFilter;
     ImageType     type;
     TexFlags      flags;
-    u32           regSequence;     // Registration sequence the texture was last found in;
-                                   // stale level assets are freed at EndRegistration().
+    u32           regSequence;     // Registration sequence the texture was last found in; stale level assets are freed at EndRegistration().
     char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx".
 
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
@@ -97,7 +96,6 @@ struct Texture final
     void MarkPixelsDirty() const { dirtyPixels = true; }
 
     // Later additions for world rendering: scrap-atlas UVs, per-texture surface chain.
-
     // TODO: Consider texture mipmaps support.
 };
 

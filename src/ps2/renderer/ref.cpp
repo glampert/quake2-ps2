@@ -13,9 +13,10 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/renderer/vu1.h"
+#include "ps2/renderer/model.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/cinematic.h"
-#include "ps2/renderer/vu1.h"
 #include "ps2/renderer/tests/draw_cube.h"
 #include "ps2/renderer/tests/cinematics.h"
 #include "ps2/builtin/builtin.h"
@@ -145,6 +146,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::gs::Init();
     ps2::tex::Init();
     ps2::vu1::Init();
+    ps2::mod::Init();
 
     s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
     s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
@@ -162,28 +164,37 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 }
 
 void PS2_RefShutdown() {}
+void PS2_AppActivate(qboolean activate) { (void)activate; }
 
 // ------------------------------------------------------------------------------------------------
 // Registration: textures load from disk on first use (PCX/WAL/TGA); the
 // Begin/End pair brackets a level change and frees the level assets it no
-// longer references. Models are still pending (next milestone).
+// longer references. Same for models.
 // ------------------------------------------------------------------------------------------------
 
-void PS2_BeginRegistration(const char * map_name)
+void PS2_BeginRegistration(const char * mapName)
 {
-    // The world model isn't loaded yet, but textures already take part in the
-    // registration sequence so stale level assets free at EndRegistration.
-    (void)map_name;
     ps2::tex::BeginRegistration();
+    ps2::mod::BeginRegistration(mapName);
 }
 
 void PS2_EndRegistration()
 {
+    ps2::mod::EndRegistration();
     ps2::tex::EndRegistration();
 }
 
-struct model_s * PS2_RegisterModel(const char * name) { (void)name; return nullptr; }
-void PS2_SetSky(const char * name, float rotate, vec3_t axis) { (void)name; (void)rotate; (void)axis; }
+void PS2_SetSky(const char * name, float rotate, vec3_t axis)
+{
+    (void)name; (void)rotate; (void)axis;
+    // TODO
+}
+
+struct model_s * PS2_RegisterModel(const char * name)
+{
+    return const_cast<struct model_s*>(
+        reinterpret_cast<const struct model_s *>(ps2::mod::Find(name)));
+}
 
 struct image_s * PS2_RegisterSkin(const char * name)
 {
@@ -276,12 +287,12 @@ void PS2_CinematicSetPalette(const unsigned char * palette)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Frame + app state
+// Frame rendering
 // ------------------------------------------------------------------------------------------------
 
-void PS2_BeginFrame(float camera_separation)
+void PS2_BeginFrame(float cameraSeparation)
 {
-    (void)camera_separation;
+    (void)cameraSeparation;
     ps2::gs::BeginFrame();
 
     // The engine draws its 2D overlay (console, HUD) right after BeginFrame -
@@ -309,7 +320,5 @@ void PS2_EndFrame()
 
     ps2::gs::EndFrame();
 }
-
-void PS2_AppActivate(qboolean activate) { (void)activate; }
 
 } // extern "C"

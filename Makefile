@@ -43,6 +43,8 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
 	ps2/renderer/image_load.cpp       \
+	ps2/renderer/model.cpp            \
+	ps2/renderer/model_load.cpp       \
 	ps2/renderer/cinematic.cpp        \
 	ps2/renderer/vid.cpp              \
 	ps2/renderer/ref.cpp              \

@@ -15,7 +15,7 @@ extern "C" {
 // refexport_t implementations from ref.cpp:
 qboolean PS2_RefInit(void * hinstance, void * wndproc);
 void PS2_RefShutdown();
-void PS2_BeginRegistration(const char * map_name);
+void PS2_BeginRegistration(const char * mapName);
 struct model_s * PS2_RegisterModel(const char * name);
 struct image_s * PS2_RegisterSkin(const char * name);
 struct image_s * PS2_RegisterPic(const char * name);
@@ -31,7 +31,7 @@ void PS2_DrawFill(int x, int y, int w, int h, int c);
 void PS2_DrawFadeScreen();
 void PS2_DrawStretchRaw(int x, int y, int w, int h, int cols, int rows, const byte * data);
 void PS2_CinematicSetPalette(const unsigned char * palette);
-void PS2_BeginFrame(float camera_separation);
+void PS2_BeginFrame(float cameraSeparation);
 void PS2_EndFrame();
 void PS2_AppActivate(qboolean activate);
 

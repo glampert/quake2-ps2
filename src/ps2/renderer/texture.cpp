@@ -466,16 +466,6 @@ void Init()
     s_cache.Init();
 }
 
-const Texture * Find(const char * name, const ImageType type)
-{
-    return s_cache.Find(name, type);
-}
-
-const Texture & DebugTexture(int index)
-{
-    return s_cache.DebugTexture(index);
-}
-
 void BeginRegistration()
 {
     s_cache.BeginRegistration();
@@ -484,6 +474,16 @@ void BeginRegistration()
 void EndRegistration()
 {
     s_cache.EndRegistration();
+}
+
+const Texture * Find(const char * name, const ImageType type)
+{
+    return s_cache.Find(name, type);
+}
+
+const Texture & DebugTexture(int index)
+{
+    return s_cache.DebugTexture(index);
 }
 
 } // namespace ps2::tex

@@ -36,21 +36,21 @@ alignas(16) static u32 s_palette[256];
 // The frame texture, drawn through the regular 2D texture path. Linear
 // filtering smooths the stretch to screen size (the GS does the upscale).
 static tex::Texture s_frameTexture = {
-    .vramAddr    = tex::Texture::kNotResident,
-    .texbuf      = {},
-    .dirtyPixels = false,
+    .name        = "cinematic_frame",
+    .regSequence = 0, // never in the texture cache; not part of the registration cycle.
     .pixels      = s_frameBuffer,
     .width       = kFrameDim,
     .height      = kFrameDim,
+    .type        = tex::ImageType::Pic,
+    .flags       = tex::TexFlags::None,
     .format      = tex::PixelFormat::RGB16,
     .components  = tex::TexComponents::RGB,
     .function    = tex::TexFunction::Modulate,
     .magFilter   = tex::TexFilter::Linear,
     .minFilter   = tex::TexFilter::Linear,
-    .type        = tex::ImageType::Pic,
-    .flags       = tex::TexFlags::None,
-    .regSequence = 0, // never in the texture cache; not part of the registration cycle
-    .name        = "cinematic_frame",
+    .vramAddr    = tex::Texture::kNotResident,
+    .texbuf      = {},
+    .dirtyPixels = false,
 };
 
 } // namespace

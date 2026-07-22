@@ -70,26 +70,25 @@ enum class TexFilter : u8 { Nearest, Linear };
 // A texture or 2D image. Plain data; owned by the internal texture cache.
 struct Texture final
 {
-    static constexpr auto kNotResident = vram::Address::Invalid;
-
-    // Residency is a cache managed by gs/vram: binding a const Texture may
-    // upload it (or evict others), so these mutate behind the const API.
-    mutable vram::Address vramAddr;    // GS VRAM word address; kNotResident when not uploaded.
-    mutable texbuffer_t   texbuf;      // libdraw descriptor used when binding (filled on upload).
-    mutable bool          dirtyPixels; // CPU rewrote 'pixels'; the next bind re-uploads them.
-
-    const void *  pixels; // Pixel data in EE RAM (static memory for built-ins, heap for file loads).
-    int           width;  // In pixels, > 0.
-    int           height; // In pixels, > 0.
+    char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx" (must be the first field - game code assumes this).
+    u32           regSequence;     // Registration sequence the texture was last found in; stale level assets are freed at EndRegistration().
+    const void *  pixels;          // Pixel data in EE RAM (static memory for built-ins, heap for file loads).
+    int           width;           // In pixels, > 0.
+    int           height;          // In pixels, > 0.
+    ImageType     type;
+    TexFlags      flags;
     PixelFormat   format;
     TexComponents components;
     TexFunction   function;
     TexFilter     magFilter;
     TexFilter     minFilter;
-    ImageType     type;
-    TexFlags      flags;
-    u32           regSequence;     // Registration sequence the texture was last found in; stale level assets are freed at EndRegistration().
-    char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx".
+
+    // Residency is a cache managed by gs/vram: binding a const Texture may
+    // upload it (or evict others), so these mutate behind the const API.
+    static constexpr auto kNotResident = vram::Address::Invalid;
+    mutable vram::Address vramAddr;    // GS VRAM word address; kNotResident when not uploaded.
+    mutable texbuffer_t   texbuf;      // libdraw descriptor used when binding (filled on upload).
+    mutable bool          dirtyPixels; // CPU rewrote 'pixels'; the next bind re-uploads them.
 
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
     // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
@@ -114,14 +113,6 @@ int GsMinFilter(TexFilter filter);
 // Call once, after gs::Init().
 void Init();
 
-// Looks up a texture by game name and type, loading it from disk (PCX/WAL/TGA,
-// by extension) on a cache miss; the type is part of the cache key, so the same
-// file may live in the cache once per ImageType. Pic names follow the ref_gl
-// convention: bare names expand to "pics/<name>.pcx", a leading '/' or '\'
-// means the full path was given. Other types always give the full path.
-// Returns nullptr when the file is missing or fails to decode.
-const Texture * Find(const char * name, ImageType type);
-
 // Level asset lifetimes, driven by the engine's registration sequence:
 // BeginRegistration starts a new sequence (level load); every texture found
 // or loaded afterwards is stamped with it. EndRegistration then frees the
@@ -130,6 +121,14 @@ const Texture * Find(const char * name, ImageType type);
 // pointers to them across levels), and built-ins are permanent.
 void BeginRegistration();
 void EndRegistration();
+
+// Looks up a texture by game name and type, loading it from disk (PCX/WAL/TGA,
+// by extension) on a cache miss; the type is part of the cache key, so the same
+// file may live in the cache once per ImageType. Pic names follow the ref_gl
+// convention: bare names expand to "pics/<name>.pcx", a leading '/' or '\'
+// means the full path was given. Other types always give the full path.
+// Returns nullptr when the file is missing or fails to decode.
+const Texture * Find(const char * name, ImageType type);
 
 // Number of built-in debug checkerboard variants (distinct colors).
 constexpr int kNumDebugTextures = 6;

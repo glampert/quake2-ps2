@@ -130,6 +130,12 @@ void EndRegistration();
 // Returns nullptr when the file is missing or fails to decode.
 const Texture * Find(const char * name, ImageType type);
 
+// Re-stamps an already-resolved texture as used in the current registration
+// cycle, so EndRegistration() won't evict it. The model cache calls this when
+// a model is found in-cache: its texture pointers are reused directly, without
+// a Find() to refresh their sequence number.
+void TouchTexture(const Texture & texture);
+
 // Number of built-in debug checkerboard variants (distinct colors).
 constexpr int kNumDebugTextures = 6;
 

@@ -10,6 +10,7 @@
 #include "ps2/renderer/gs.h" // gs::ReleaseTexture (end-of-level eviction)
 #include "ps2/builtin/builtin.h"
 #include "ps2/small_pool.h"
+#include "ps2/hash.h" // HashStr64 / kFnvPrime (shared with the model cache)
 
 #include <cstdio>
 #include <cstring>
@@ -71,28 +72,6 @@ int BytesPerTexel(PixelFormat format)
 // ------------------------------------------------------------------------------------------------
 
 namespace {
-
-constexpr u64 kFnvSeed  = 14695981039346656037ull;
-constexpr u64 kFnvPrime = 1099511628211ull;
-
-// 64-bit FNV-1a. Local to the texture module for now; move to a shared
-// utils header when a second user appears.
-constexpr u64 HashStr64(const char * str)
-{
-    if (str == nullptr || *str == '\0')
-    {
-        return 0;
-    }
-
-    u64 hash = kFnvSeed;
-    while (*str != '\0')
-    {
-        hash ^= static_cast<u8>(*str++);
-        hash *= kFnvPrime;
-    }
-
-    return hash;
-}
 
 // Cache lookup key: the name hash continued with the image type as one extra
 // FNV-1a byte, so the same file may be cached independently per ImageType.
@@ -194,6 +173,12 @@ public:
 
     void BeginRegistration();
     void EndRegistration();
+
+    // Stamp a texture as used this registration cycle (see tex::TouchTexture).
+    void MarkReferenced(const Texture & texture)
+    {
+        const_cast<Texture &>(texture).regSequence = m_regSequence;
+    }
 
 private:
     Texture & Register(const char * name, const void * pixels, int width, int height,
@@ -479,6 +464,11 @@ void EndRegistration()
 const Texture * Find(const char * name, const ImageType type)
 {
     return s_cache.Find(name, type);
+}
+
+void TouchTexture(const Texture & texture)
+{
+    s_cache.MarkReferenced(texture);
 }
 
 const Texture & DebugTexture(int index)

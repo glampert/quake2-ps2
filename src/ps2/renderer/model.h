@@ -13,9 +13,6 @@
 
 #include <tamtypes.h>
 
-struct cplane_s;
-struct dvis_s;
-
 namespace ps2::mod {
 
 // ------------------------------------------------------------------------------------------------
@@ -33,13 +30,25 @@ enum class PlaneSides : u32
 
 enum class SurfaceFlags : u32
 {
-    // Misc surface flags (same values used by ref_gl)
+    // Misc surface flags (same values used by ref_gl). These are the renderer's
+    // own per-surface flags, distinct from the SURF_* texinfo flags on disk.
+    None           = 0,
     PlaneBack      = 2,
     DrawSky        = 4,
     DrawTurb       = 16,
     DrawBackground = 64,
     Underwater     = 128,
 };
+
+constexpr SurfaceFlags operator|(SurfaceFlags lhs, SurfaceFlags rhs)
+{
+    return SurfaceFlags(static_cast<u32>(lhs) | static_cast<u32>(rhs));
+}
+
+constexpr bool HasFlag(SurfaceFlags flags, SurfaceFlags test)
+{
+    return (static_cast<u32>(flags) & static_cast<u32>(test)) != 0;
+}
 
 enum class ModelType : u8
 {
@@ -137,14 +146,14 @@ struct ModelSurface
     int visFrame; // should be drawn when node is crossed.
 
     cplane_s * plane;
-    int flags;
+    SurfaceFlags flags;
     u32 color;
 
     int firstEdge; // look up in model->surfEdges[], negative numbers are backwards edges.
     int numEdges;
 
-    u16 textureMins[2];
-    u16 extents[2];
+    s16 textureMins[2]; // signed: turbulent surfaces use negative mins.
+    s16 extents[2];
 
     // lightmap tex coordinates.
     int light_s;
@@ -240,8 +249,8 @@ struct ModelInstance final
     // True if from the inline models pool.
     bool isInline;
 
+    // Number of animation frames (usually = 2 for brush models: regular and alternate animation).
     int numFrames;
-    int flags;
 
     // Volume occupied by the model graphics.
     Vec3 mins;
@@ -289,10 +298,18 @@ struct ModelInstance final
     int numMarkSurfaces;
     ModelSurface ** markSurfaces;
 
-    dvis_s * vis;
+    void * vis; // Raw visibility (PVS) lump; cast to dvis_t at the use site.
     u8 * lightData;
 
     const tex::Texture * skins[kMaxMD2Skins]; // For alias models and skins.
+
+    // Backing store for everything loaded above: one heap block that all the
+    // pointers index into, sized up front by a pre-pass and filled by a bump
+    // allocator (see model_load.cpp). Freed in one shot on eviction. Only the
+    // model that allocated it owns it; inline submodels alias the world model's
+    // block and leave hunkBase null so they never double-free.
+    void * hunkBase;
+    u32 hunkSize;
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -301,7 +318,7 @@ struct ModelInstance final
 
 void Init();
 
-void BeginRegistration(const char * map_name);
+void BeginRegistration(const char * mapName);
 void EndRegistration();
 
 const ModelInstance * Find(const char * name);

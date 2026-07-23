@@ -8,4 +8,10 @@
 
 namespace ps2::mod {
 
+struct ModelInstance;
+
+bool LoadBrushModel(ModelInstance & outModel, const void * modelData, int dataLenBytes);
+bool LoadSpriteModel(ModelInstance & outModel, const void * modelData, int dataLenBytes);
+bool LoadAliasMD2Model(ModelInstance & outModel, const void * modelData, int dataLenBytes);
+
 } // namespace ps2::mod

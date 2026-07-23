@@ -37,6 +37,18 @@ void PS2_TagsAddMem(PS2MemTag tag, size_t sizeBytes);
 // Formatter for printing the memory tags.
 const char * PS2_FormatMemoryUnit(size_t memorySizeInBytes, int abbreviated);
 
+typedef struct
+{
+    size_t totalBytes;
+    size_t totalAllocs;
+    size_t totalFrees;
+    size_t smallestAlloc;
+    size_t largestAlloc;
+} PS2MemStats;
+
+const PS2MemStats* PS2_GetStatsForMemTag(PS2MemTag tag);
+const char* PS2_GetNameForMemTag(PS2MemTag tag);
+
 #ifdef __cplusplus
 } // extern "C"
 #endif // __cplusplus

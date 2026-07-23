@@ -31,6 +31,9 @@ constexpr int kGlyphSize = 8;
 // Vertex colour applied to textured 2D (GS modulate: 128 = texels unchanged).
 constexpr u8 kUiBrightness = 128;
 
+static const cvar_t * s_showFpsCount = nullptr;
+static const cvar_t * s_showMemStats = nullptr;
+
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
 static const ps2::tex::Texture * s_texBacktile = nullptr;
@@ -92,6 +95,11 @@ void DrawInternalString(int x, int y, const char * str)
 // Averages a few frames to smooth changes out a bit.
 void DrawFpsCounter()
 {
+    if (s_showFpsCount->value == 0.0f)
+    {
+        return;
+    }
+
     constexpr int kMaxFpsHist = 4;
     static struct
     {
@@ -130,6 +138,55 @@ void DrawFpsCounter()
     DrawInternalString(viddef.width - 64, 4, text);
 }
 
+// Memory usage overlay in the lower-right corner: one line per PS2MemTag with
+// its running byte total, followed by the grand total across all tags.
+void DrawMemUsageOverlay()
+{
+    if (s_showMemStats->value == 0.0f)
+    {
+        return;
+    }
+
+    constexpr int kLineHeight = kGlyphSize + 2;   // Matches DrawInternalString spacing.
+    constexpr int kNumLines   = MEMTAG_COUNT + 2; // Header + one per tag + total.
+    constexpr int kPanelWidth = 176;
+    constexpr int kPadding    = 4;
+
+    const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
+    const int panelX = viddef.width  - kPanelWidth;
+    const int panelY = viddef.height - panelHeight;
+
+    // A black background to give the text more contrast.
+    ps2::gs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = panelX + kPadding;
+    int textY = panelY + kPadding;
+
+    DrawInternalString(textX, textY, "MEM USAGE");
+    textY += kLineHeight;
+
+    char line[64];
+    size_t totalBytes = 0;
+    for (int i = 0; i < MEMTAG_COUNT; ++i)
+    {
+        const PS2MemTag tag = static_cast<PS2MemTag>(i);
+        const size_t tagBytes = PS2_GetStatsForMemTag(tag)->totalBytes;
+        totalBytes += tagBytes;
+
+        // PS2_FormatMemoryUnit returns a shared static buffer, so it must be
+        // consumed by this one snprintf before the next iteration reuses it.
+        std::snprintf(line, sizeof(line), "%-10s %s",
+                      PS2_GetNameForMemTag(tag),
+                      PS2_FormatMemoryUnit(tagBytes, true));
+
+        DrawInternalString(textX, textY, line);
+        textY += kLineHeight;
+    }
+
+    std::snprintf(line, sizeof(line), "%-10s %s", "Total", PS2_FormatMemoryUnit(totalBytes, true));
+    DrawInternalString(textX, textY, line);
+}
+
 } // namespace
 
 extern "C" {
@@ -147,6 +204,9 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::tex::Init();
     ps2::vu1::Init();
     ps2::mod::Init();
+
+    s_showFpsCount = Cvar_Get("ps2_show_fps", "1", 0);
+    s_showMemStats = Cvar_Get("ps2_show_memstats", "1", 0);
 
     s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
     s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
@@ -310,6 +370,8 @@ void PS2_EndFrame()
     ps2::test::RunCinematics();
 
     DrawFpsCounter();
+    DrawMemUsageOverlay();
+
     ps2::gs::End2D();
 
     // VU1 bring-up scene: drawn outside the 2D section (3D inside it would

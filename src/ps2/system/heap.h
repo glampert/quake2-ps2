@@ -46,8 +46,9 @@ typedef struct
     size_t largestAlloc;
 } PS2MemStats;
 
-const PS2MemStats* PS2_GetStatsForMemTag(PS2MemTag tag);
-const char* PS2_GetNameForMemTag(PS2MemTag tag);
+const PS2MemStats * PS2_GetStatsForMemTag(PS2MemTag tag);
+const char * PS2_GetNameForMemTag(PS2MemTag tag);
+const char * PS2_DumpMemTags(void);
 
 #ifdef __cplusplus
 } // extern "C"

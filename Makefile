@@ -231,6 +231,10 @@ EE_INCS += -I$(SRC_DIR)
 # id's C89 engine sources under GCC 15: force C89, restore -fcommon, and
 # downgrade the constructs GCC 14+ promoted to hard errors so the untouched
 # engine still compiles.
+#
+# TODO: Look into addressing and fixing some of these warnings, some are likely real bugs
+# that need patching (aggressive-loop-optimizations, maybe-uninitialized, dangling-else, etc).
+#
 EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing $(COMMON_DEFS) \
 	-Wno-implicit-function-declaration -Wno-implicit-int -Wno-maybe-uninitialized \
 	-Wno-int-conversion -Wno-int-to-pointer-cast -Wno-pointer-sign \
@@ -324,6 +328,7 @@ $(CXX_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
 $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # VU1 microprograms.
+# TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
 $(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl
 	@mkdir -p $(dir $@)
 	vclpp $< $(basename $@).pp.vcl -j

@@ -38,7 +38,7 @@ static u32 palette[256];
 // unpalettizing to RGB. Defaults to RGB.
 static bool g_palettized = false;
 
-// Directory the source .pcx images are read from (the generated .c files
+// Directory the source .pcx images are read from (the generated .cpp files
 // still go to the CWD). Defaults to the CWD.
 static const char * g_images_path = ".";
 

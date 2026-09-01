@@ -190,6 +190,18 @@ inline int TextureStridePixels(const Texture & texture, int psm)
     return texture.width;
 }
 
+// TODO: Replace draw_log2 instances with this inline version instead.
+inline u8 Log2(u32 x)
+{
+    u8 res;
+    asm volatile ("plzcw %0, %1\n\t" : "=r" (res) : "r" (x));
+
+    res = 31 - (res + 1);
+    res += (x > (u32)(1 << res) ? 1 : 0);
+
+    return res;
+}
+
 // Registers the built-in images (they stream into GS VRAM on first bind).
 // Call once, after gs::Init().
 void Init();

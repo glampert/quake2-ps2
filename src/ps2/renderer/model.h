@@ -234,6 +234,7 @@ struct SubModelInfo
     Vec3 maxs;
     Vec3 origin;
     float radius;
+    // TODO: Compress these to s16/u16?
     int headNode;
     int firstFace;
     int numFaces;
@@ -267,6 +268,8 @@ struct ModelInstance final
     // Solid volume for clipping.
     Vec3 clipMins;
     Vec3 clipMaxs;
+
+    // TODO: Compress all counts/indices below to s16/u16 and retune the model hunk size with bspinfo!
 
     // Brush model.
     int firstModelSurface;

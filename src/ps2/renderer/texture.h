@@ -190,16 +190,18 @@ inline int TextureStridePixels(const Texture & texture, int psm)
     return texture.width;
 }
 
-// TODO: Replace draw_log2 instances with this inline version instead.
+// Inline replacement for draw_log2() from libdraw.
 inline u8 Log2(u32 x)
 {
-    u8 res;
-    asm volatile ("plzcw %0, %1\n\t" : "=r" (res) : "r" (x));
+    // plzcw counts the leading zeros of x minus one, so 30 - lzc is
+    // the index of the highest set bit (floor of the base 2 log).
+    u32 lzc;
+    asm volatile ("plzcw %0, %1\n\t" : "=r" (lzc) : "r" (x));
 
-    res = 31 - (res + 1);
-    res += (x > (u32)(1 << res) ? 1 : 0);
+    u32 res = 30 - lzc;
+    res += (x > (1u << res)) ? 1u : 0u; // Round up for non-power-of-two x.
 
-    return res;
+    return static_cast<u8>(res);
 }
 
 // Registers the built-in images (they stream into GS VRAM on first bind).

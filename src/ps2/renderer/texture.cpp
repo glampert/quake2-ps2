@@ -694,10 +694,10 @@ const Texture & ParticleTexture(bool highQuality)
 
 void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT)
 {
-    // draw_log2 rounds up, and it is the same call gs.cpp fills TEX0's TW/TH
+    // tex::Log2 rounds up, and it is the same call gs.cpp fills TEX0's TW/TH
     // with - so this stays exact whatever the texture is, resident or not.
-    const int potWidth  = 1 << draw_log2(static_cast<unsigned int>(texture.width));
-    const int potHeight = 1 << draw_log2(static_cast<unsigned int>(texture.height));
+    const int potWidth  = 1 << tex::Log2(static_cast<u32>(texture.width));
+    const int potHeight = 1 << tex::Log2(static_cast<u32>(texture.height));
 
     *outScaleS = static_cast<float>(texture.width)  / static_cast<float>(potWidth);
     *outScaleT = static_cast<float>(texture.height) / static_cast<float>(potHeight);

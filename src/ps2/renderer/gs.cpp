@@ -818,8 +818,8 @@ void SetTextureFor2D(const tex::Texture & texture)
     texbuf.address         = static_cast<unsigned int>(bindTex.vramAddr);
     texbuf.width           = static_cast<unsigned int>(stride);
     texbuf.psm             = static_cast<unsigned int>(psm);
-    texbuf.info.width      = draw_log2(static_cast<unsigned int>(bindTex.width));
-    texbuf.info.height     = draw_log2(static_cast<unsigned int>(bindTex.height));
+    texbuf.info.width      = tex::Log2(static_cast<u32>(bindTex.width));
+    texbuf.info.height     = tex::Log2(static_cast<u32>(bindTex.height));
     texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(bindTex.components));
     texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(bindTex.function));
 

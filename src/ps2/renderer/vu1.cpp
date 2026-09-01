@@ -210,8 +210,8 @@ inline u64 MakeTex0Data(const tex::Texture & texture)
     texbuf.address         = static_cast<unsigned int>(texture.vramAddr);
     texbuf.width           = static_cast<unsigned int>(stride);
     texbuf.psm             = static_cast<unsigned int>(psm);
-    texbuf.info.width      = draw_log2(static_cast<unsigned int>(texture.width));
-    texbuf.info.height     = draw_log2(static_cast<unsigned int>(texture.height));
+    texbuf.info.width      = tex::Log2(static_cast<u32>(texture.width));
+    texbuf.info.height     = tex::Log2(static_cast<u32>(texture.height));
     texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(texture.components));
     texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(texture.function));
 

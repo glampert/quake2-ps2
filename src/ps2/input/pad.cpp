@@ -29,6 +29,8 @@ inline float NormalizeAxis(unsigned char raw)
 
 } // namespace
 
+// TODO: Pad actuators for controller rumble!
+
 bool GamePad::Connected(int state)
 {
     return (state == PAD_STATE_STABLE) || (state == PAD_STATE_FINDCTP1);

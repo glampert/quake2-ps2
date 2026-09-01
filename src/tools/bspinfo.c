@@ -130,6 +130,7 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
 #define HUNK_ALIGN 16
 
 /* sizeof() on the EE (32-bit pointers), from model.h via DWARF. */
+/* TODO/FIXME: Use actual sizeof(Struct) here rather than this. Change bspinfo.c to .cpp so we can include model.h here. */
 #define SZ_MODEL_VERTEX     12
 #define SZ_MODEL_EDGE        4
 #define SZ_SURF_EDGE         4  /* int */

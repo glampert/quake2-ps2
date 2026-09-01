@@ -1,6 +1,5 @@
 /* ================================================================================================
- * -*- C -*-
- * File: unpak.c
+ * File: unpak.cpp
  * Created on: 26/10/15
  * Brief: Very simple command line tool to unpack a Quake 2 PAK archive into a normal directory.
  *
@@ -136,7 +135,7 @@ static bool unpak(FILE * pak_file, const pak_header_t * pak_header, const char *
         // Allow it to continue.
     }
 
-    pak_file_entries = malloc(num_files_in_pak * sizeof(pak_file_t));
+    pak_file_entries = (pak_file_t *)malloc(num_files_in_pak * sizeof(pak_file_t));
     if (pak_file_entries == NULL)
     {
         fprintf(stderr, "Out-of-memory in unpak!\n");
@@ -168,7 +167,7 @@ static bool unpak(FILE * pak_file, const pak_header_t * pak_header, const char *
     return true;
 }
 
-int main(int argc, const char * argv[])
+int main(int argc, char * argv[])
 {
     if (argc <= 1)
     {

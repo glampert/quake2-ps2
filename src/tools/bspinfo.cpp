@@ -1,6 +1,5 @@
 /* ================================================================================================
- * -*- C -*-
- * File: bspinfo.c
+ * File: bspinfo.cpp
  * Created on: 27/08/26
  * Brief: Reports the largest value each BSP lump reaches across a set of maps, next to the
  *        MAX_MAP_* cap the engine reserves a static array for.
@@ -130,7 +129,8 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
 #define HUNK_ALIGN 16
 
 /* sizeof() on the EE (32-bit pointers), from model.h via DWARF. */
-/* TODO/FIXME: Use actual sizeof(Struct) here rather than this. Change bspinfo.c to .cpp so we can include model.h here. */
+/* TODO/FIXME: Use actual sizeof(Struct) here rather than this, now that this tool is C++ and
+   could include model.h - it needs the EE include chain untangled from the host build first. */
 #define SZ_MODEL_VERTEX     12
 #define SZ_MODEL_EDGE        4
 #define SZ_SURF_EDGE         4  /* int */
@@ -766,7 +766,7 @@ static void print_hunk_report(void)
     }
 }
 
-int main(int argc, const char * argv[])
+int main(int argc, char * argv[])
 {
     struct stat path_stat;
     const char * path;

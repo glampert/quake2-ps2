@@ -84,7 +84,7 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
        config.cfg
    ```
 
-   A loose-file tree works as well as the `.pak`; [src/tools/unpak.c](src/tools/unpak.c)
+   A loose-file tree works as well as the `.pak`; [src/tools/unpak.cpp](src/tools/unpak.cpp)
    builds a small extractor for that.
 
 ### Building
@@ -134,19 +134,19 @@ The host tools and the assembled VU microprograms are config-independent (no EE 
 flag reaches either), so they are built once and shared, outside `build/<config>/`.
 
 Useful variable overrides: `BUILD=`, `STRIP_ELF=`, `PS2DEV=`, `PS2SDK=`, `PCSX2=`,
-`HOST_CC=`, and `-DPS2_FS_BASE_PATH=\"host:.\"` in `COMMON_DEFS` to pin the game data path
+`HOST_CXX=`, and `-DPS2_FS_BASE_PATH=\"host:.\"` in `COMMON_DEFS` to pin the game data path
 and skip autodetection.
 
 #### Host tools
 
-Built with the *host* compiler, not the EE toolchain (`symbolize` is a Python 3 script and
-is simply copied into place):
+Built with the *host* C++ compiler, not the EE toolchain (`symbolize` is a Python 3 script
+and is simply copied into place):
 
 - `build/tools/symbolize` — turns a stack trace dump printed by the running game into
   function names, files and line numbers. See [Reading a stack trace](#reading-a-stack-trace)
   below.
 - `build/tools/unpak` — extracts a Quake II `.pak` archive into a normal directory.
-- `build/tools/imgdump` — dumps `.pcx` images into C byte arrays (RGB or raw 8-bit
+- `build/tools/imgdump` — dumps `.pcx` images into C++ byte arrays (RGB or raw 8-bit
   palettized), which is how the built-in console font, console background, HUD backtile and
   the global palette under [src/ps2/builtin/](src/ps2/builtin/) were generated. Those are
   compiled into the ELF so the executable can boot and print errors before any game data

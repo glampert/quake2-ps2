@@ -8,7 +8,7 @@
 #    make release     -> optimized   -> build/release/quake2.elf
 #    make run         -> build + launch in PCSX2  (VSCode: F5)
 #    make release run -> the same, with the release build
-#    make tools       -> build host tools (imgdump, unpak) into build/tools/
+#    make tools       -> build host tools (imgdump, unpak, bspinfo) into build/tools/
 #    make clean       -> remove build artifacts (both configs)
 #    make clean_vu    -> remove only assembled VU microprograms
 #
@@ -100,15 +100,15 @@ PS2_CXX_SRC =                         \
 	ps2/tests/map_cycle.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
-	ps2/debug/exception_handler.cpp
+	ps2/debug/exception_handler.cpp   \
+	ps2/builtin/palette.cpp           \
+	ps2/builtin/conchars.cpp          \
+	ps2/builtin/conback.cpp           \
+	ps2/builtin/backtile.cpp
 
-# Doug Lea's allocator + a small amount of embedded data kept as plain C:
-PS2_C_SRC = \
-	ps2/system/dlmalloc/dlmalloc.c    \
-	ps2/builtin/palette.c             \
-	ps2/builtin/conchars.c            \
-	ps2/builtin/conback.c             \
-	ps2/builtin/backtile.c
+# Doug Lea's allocator: vendored third-party C, left as C on purpose (see the
+# note at the top of dlmalloc.c). Everything else of ours is C++.
+PS2_C_SRC = ps2/system/dlmalloc/dlmalloc.c
 
 # Stock Quake II engine / game / server - untouched C, statically linked.
 # The null/* stub stands in for CD audio: Quake II streams its music off CDDA tracks
@@ -181,15 +181,15 @@ VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
 VCL_FILES = textured_triangles.vcl lerped_triangles.vcl
 VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
-# Standalone command line tools under src/tools, built with the HOST compiler
+# Standalone command line tools under src/tools, built with the HOST C++ compiler
 # (not the EE toolchain) since they run on the development machine. Being host
 # binaries they are config-independent, so they live outside build/<config>/.
-TOOLS_PATH    = $(SRC_DIR)/tools
-TOOLS_CC_BINS = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo)
-TOOLS_PY_BINS = $(addprefix $(BUILD_DIR)/tools/, symbolize)
-TOOLS_BINS    = $(TOOLS_CC_BINS) $(TOOLS_PY_BINS)
-HOST_CC      ?= cc
-HOST_CFLAGS  ?= -O2 -Wall
+TOOLS_PATH     = $(SRC_DIR)/tools
+TOOLS_CXX_BINS = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo)
+TOOLS_PY_BINS  = $(addprefix $(BUILD_DIR)/tools/, symbolize)
+TOOLS_BINS     = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
+HOST_CXX      ?= c++
+HOST_CXXFLAGS ?= -std=gnu++20 -O2 -Wall
 
 # IOP/IRX modules embedded into the ELF: the BDM USB mass-storage stack, booted
 # by ps2/system/iop_boot.cpp when the game data isn't on host: (real hardware),
@@ -228,9 +228,10 @@ COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS)
 
 EE_INCS += -I$(SRC_DIR)
 
-# id's C89 engine sources under GCC 15: force C89, restore -fcommon, and
-# downgrade the constructs GCC 14+ promoted to hard errors so the untouched
-# engine still compiles.
+# The C side of the build is now just id's C89 engine sources, the vendored
+# dlmalloc and the bin2c IRX blobs - everything of ours is C++. Under GCC 15
+# that C needs C89 forced, -fcommon restored, and the constructs GCC 14+
+# promoted to hard errors downgraded so the untouched engine still compiles.
 #
 # TODO: Look into addressing and fixing some of these warnings, some are likely real bugs
 # that need patching (aggressive-loop-optimizations, maybe-uninitialized, dangling-else, etc).
@@ -313,6 +314,9 @@ endif
 # Out-of-tree object rules. These static-pattern rules take precedence over the
 # generic %.o rules from Makefile.eeglobal so objects land under build/<config>/
 # mirroring the src/ tree. ($(EE_BIN) link rule comes from Makefile.eeglobal_cpp.)
+#
+# One rule per language: the C one is only reached by the engine and dlmalloc,
+# every backend source goes through the C++ one.
 $(C_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $< -o $@
@@ -341,12 +345,12 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 	bin2c $< $(basename $@).c $(notdir $(basename $@))_irx
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $(basename $@).c -o $@
 
-# Host tools: each is a single self-contained .c compiled straight to a binary.
+# Host tools: each is a single self-contained .cpp compiled straight to a binary.
 tools: $(TOOLS_BINS)
 
-$(TOOLS_CC_BINS): $(BUILD_DIR)/tools/%: $(TOOLS_PATH)/%.c
+$(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(TOOLS_PATH)/%.cpp
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CFLAGS) $< -o $@
+	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
 
 # Script tools are published into build/tools/ under the same extensionless names
 # as the compiled ones, so everything in there is invoked the same way.

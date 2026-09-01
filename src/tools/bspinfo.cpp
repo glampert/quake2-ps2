@@ -128,22 +128,23 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
 
 #define HUNK_ALIGN 16
 
-/* sizeof() on the EE (32-bit pointers), from model.h via DWARF. */
-/* TODO/FIXME: Use actual sizeof(Struct) here rather than this, now that this tool is C++ and
-   could include model.h - it needs the EE include chain untangled from the host build first. */
+/* sizeof() on the EE (32-bit pointers), from model.h via DWARF
+   (we can't easily include model.h here because of ps2sdk header dependencies,
+   but also, pointers on the EE are 32 bits and this a host 64 bits executable,
+   so all sizes would be wrong!). */
 #define SZ_MODEL_VERTEX     12
 #define SZ_MODEL_EDGE        4
 #define SZ_SURF_EDGE         4  /* int */
 #define SZ_CPLANE           20
-#define SZ_MODEL_TEXINFO    48
-#define SZ_MODEL_SURFACE    88
+#define SZ_MODEL_TEXINFO    44
+#define SZ_MODEL_SURFACE    84
 #define SZ_MODEL_POLY       16
 #define SZ_POLY_VERTEX      28
 #define SZ_MODEL_TRIANGLE    3
 #define SZ_MARK_SURFACE      4  /* ModelSurface * */
 #define SZ_MODEL_LEAF       52
 #define SZ_MODEL_NODE       52
-#define SZ_SUBMODEL_INFO    52
+#define SZ_SUBMODEL_INFO    48
 
 /* From model.h / q_files.h. */
 #define SUBDIVIDE_SIZE      64

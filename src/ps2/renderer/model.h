@@ -116,11 +116,11 @@ struct ModelEdge
 //
 struct ModelTexInfo
 {
+    const tex::Texture * texture;
+    const ModelTexInfo * next; // Texture animation chain.
     float vecs[2][4];
     u16 flags; // SURF_SKY | SURF_TRANS33 | SURF_TRANS66 | SURF_WARP | etc
     u16 numFrames;
-    const tex::Texture * texture;
-    const ModelTexInfo * next; // Texture animation chain.
 };
 
 //
@@ -222,7 +222,7 @@ struct ModelLeaf
     int area;
 
     ModelSurface ** firstMarkSurface;
-    int numMarkSurfaces;
+    u16 numMarkSurfaces;
 };
 
 //
@@ -234,10 +234,9 @@ struct SubModelInfo
     Vec3 maxs;
     Vec3 origin;
     float radius;
-    // TODO: Compress these to s16/u16?
-    int headNode;
-    int firstFace;
-    int numFaces;
+    s16 headNode;
+    u16 firstFace;
+    u16 numFaces;
 };
 
 //
@@ -269,41 +268,33 @@ struct ModelInstance final
     Vec3 clipMins;
     Vec3 clipMaxs;
 
-    // TODO: Compress all counts/indices below to s16/u16 and retune the model hunk size with bspinfo!
-
     // Brush model.
-    int firstModelSurface;
-    int numModelSurfaces;
+    u16 firstModelSurface;
+    u16 numModelSurfaces;
 
-    int numSubModels;
+    // Sizes of the arrays that follow.
+    u16 numSubModels;
+    u16 numPlanes;
+    u16 numLeafs; // Number of visible leafs, not counting 0.
+    u16 numVertexes;
+    u16 numEdges;
+    u16 numNodes;
+    s16 firstNode;
+    u16 numTexInfos;
+    u16 numSurfaces;
+    u16 numSurfEdges;
+    u16 numMarkSurfaces;
+
+    // Arrays sized by the above counts.
     SubModelInfo * subModels;
-
-    int numPlanes;
     cplane_s * planes;
-
-    int numLeafs; // Number of visible leafs, not counting 0.
     ModelLeaf * leafs;
-
-    int numVertexes;
     ModelVertex * vertexes;
-
-    int numEdges;
     ModelEdge * edges;
-
-    int numNodes;
-    int firstNode;
     ModelNode * nodes;
-
-    int numTexInfos;
     ModelTexInfo * texInfos;
-
-    int numSurfaces;
     ModelSurface * surfaces;
-
-    int numSurfEdges;
     int * surfEdges;
-
-    int numMarkSurfaces;
     ModelSurface ** markSurfaces;
 
     // No visibility lump here: the collision model already holds it verbatim in

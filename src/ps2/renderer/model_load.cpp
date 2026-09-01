@@ -47,7 +47,7 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // ------------------------------------------------------------------------------------------------
 // World arena
 //
-// The world hunk is the largest single allocation the program makes - 6.85 MB on
+// The world hunk is the largest single allocation the program makes - 6.67 MB on
 // power2 - and it is allocated and freed on every map change. dlmalloc cannot move
 // live blocks, so once a few hundred longer-lived allocations have settled into the
 // holes left behind, no contiguous run that big survives.
@@ -60,12 +60,13 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // Both capacities come from build/tools/bspinfo, which mirrors the sizers here and
 // reports the worst case over a map set:
 //
-//     WORST HUNK   : power2.bsp needs 7177824 bytes (6.85 MB)
+//     WORST HUNK   : power2.bsp needs 6991792 bytes (6.67 MB)
 //     WORST SCRATCH: lab.bsp    needs  954048 bytes (0.91 MB)
 //
-// with ~10% on top for maps that are not in pak0. Re-run bspinfo after adding a
-// mission pack or custom maps; a map that does not fit says so and stops, rather
-// than falling back to the heap and quietly reintroducing the problem.
+// with ~4% on top for maps that are not in pak0. Re-run bspinfo after adding a
+// mission pack or custom maps, or after changing any struct the hunk holds; a map
+// that does not fit says so and stops, rather than falling back to the heap and
+// quietly reintroducing the problem.
 // ------------------------------------------------------------------------------------------------
 
 // Alignment of every hunk sub-allocation. Rounding each allocation up keeps the
@@ -78,8 +79,8 @@ constexpr u32 kHunkAlign = 16;
 // out to be the tighter of the two - an earlier 10% margin cost 384 KB and moved the
 // failure from the world hunk to a 1 MB model load. A map that overruns either
 // capacity says so and names the constant to raise, so being wrong is loud.
-constexpr u32 kWorldHunkCapacity    = 7168u * 1024u; // 7.00 MB, power2.bsp + 4.2%
-constexpr u32 kWorldScratchCapacity = 972u * 1024u;  // 0.95 MB, lab.bsp + 4.3%
+constexpr u32 kWorldHunkCapacity    = 7100u * 1024u; // 6.94 MB, power2.bsp + 4.0%
+constexpr u32 kWorldScratchCapacity = 972u  * 1024u; // 0.95 MB, lab.bsp + 4.3%
 constexpr u32 kWorldArenaBytes      = kWorldHunkCapacity + kWorldScratchCapacity;
 
 // Reserved once by ReserveWorldArena, never freed. The hunk occupies the first
@@ -520,6 +521,24 @@ inline const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
     return mdl.vertexes[mdl.edges[-surfEdgeIndex].v[1]].position;
 }
 
+inline u16 ToU16(const int value)
+{
+    if (value < 0 || value > UINT16_MAX) [[unlikely]]
+    {
+        Sys_Error("%i cannot be represented as u16!", value);
+    }
+    return static_cast<u16>(value);
+}
+
+inline s16 ToS16(const int value)
+{
+    if (value < INT16_MIN || value > INT16_MAX) [[unlikely]]
+    {
+        Sys_Error("%i cannot be represented as s16!", value);
+    }
+    return static_cast<s16>(value);
+}
+
 // ------------------------------------------------------------------------------------------------
 // Brush model lumps
 // ------------------------------------------------------------------------------------------------
@@ -531,7 +550,7 @@ void LoadVertexes(ModelInstance & mdl, HunkAllocator & hunk, const void * const 
 
     ModelVertex * out = hunk.AllocArray<ModelVertex>(count);
     mdl.vertexes    = out;
-    mdl.numVertexes = count;
+    mdl.numVertexes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -547,7 +566,7 @@ void LoadEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
     // One extra sentinel edge, matching ref_gl.
     ModelEdge * out = hunk.AllocArray<ModelEdge>(count + 1);
     mdl.edges    = out;
-    mdl.numEdges = count;
+    mdl.numEdges = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -563,7 +582,7 @@ void LoadSurfEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const
 
     int * out = hunk.AllocArray<int>(count);
     mdl.surfEdges    = out;
-    mdl.numSurfEdges = count;
+    mdl.numSurfEdges = ToU16(count);
 
     std::memcpy(out, in, static_cast<size_t>(count) * sizeof(int));
 }
@@ -594,7 +613,7 @@ void LoadPlanes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lu
     // like it was meant to back opposite planes that were never implemented.
     cplane_t * out = hunk.AllocArray<cplane_t>(count);
     mdl.planes    = out;
-    mdl.numPlanes = count;
+    mdl.numPlanes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -620,7 +639,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
 
     ModelTexInfo * out = hunk.AllocArray<ModelTexInfo>(count);
     mdl.texInfos    = out;
-    mdl.numTexInfos = count;
+    mdl.numTexInfos = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -630,8 +649,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
             out[i].vecs[1][j] = in[i].vecs[1][j];
         }
 
-        PS2_Assert(in[i].flags <= UINT16_MAX);
-        out[i].flags = static_cast<u16>(in[i].flags);
+        out[i].flags = ToU16(in[i].flags);
 
         const int next = in[i].nexttexinfo;
         out[i].next = (next > 0) ? (mdl.texInfos + next) : nullptr;
@@ -1153,7 +1171,7 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
 
     ModelSurface * out = hunk.AllocArray<ModelSurface>(count);
     mdl.surfaces    = out;
-    mdl.numSurfaces = count;
+    mdl.numSurfaces = ToU16(count);
 
     // Drops the previous map's lightmap atlases and opens a fresh one to pack
     // this map's faces into (ref_gl's GL_BeginBuildingLightmaps).
@@ -1231,7 +1249,7 @@ void LoadMarkSurfaces(ModelInstance & mdl, HunkAllocator & hunk, const void * co
 
     ModelSurface ** out = hunk.AllocArray<ModelSurface *>(count);
     mdl.markSurfaces    = out;
-    mdl.numMarkSurfaces = count;
+    mdl.numMarkSurfaces = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1253,7 +1271,7 @@ void LoadLeafs(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
 
     ModelLeaf * out = hunk.AllocArray<ModelLeaf>(count);
     mdl.leafs    = out;
-    mdl.numLeafs = count;
+    mdl.numLeafs = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1307,7 +1325,7 @@ void LoadNodes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
 
     ModelNode * out = hunk.AllocArray<ModelNode>(count);
     mdl.nodes    = out;
-    mdl.numNodes = count;
+    mdl.numNodes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1357,7 +1375,7 @@ void LoadSubModels(ModelInstance & mdl, HunkAllocator & hunk, const void * const
 
     SubModelInfo * out = hunk.AllocArray<SubModelInfo>(count);
     mdl.subModels    = out;
-    mdl.numSubModels = count;
+    mdl.numSubModels = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1367,9 +1385,9 @@ void LoadSubModels(ModelInstance & mdl, HunkAllocator & hunk, const void * const
         out[i].origin = ToVec3(in[i].origin);
 
         out[i].radius    = RadiusFromBounds(out[i].mins, out[i].maxs);
-        out[i].headNode  = in[i].headnode;
-        out[i].firstFace = in[i].firstface;
-        out[i].numFaces  = in[i].numfaces;
+        out[i].headNode  = ToS16(in[i].headnode);
+        out[i].firstFace = ToU16(in[i].firstface);
+        out[i].numFaces  = ToU16(in[i].numfaces);
     }
 }
 
@@ -1658,8 +1676,7 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     {
         mdl.skins[i] = tex::Find(out->frames[i].name, tex::ImageType::Sprite);
     }
-    PS2_Assert(out->numframes >= 0 && out->numframes <= UINT16_MAX);
-    mdl.numFrames = static_cast<u16>(out->numframes);
+    mdl.numFrames = ToU16(out->numframes);
 
     if (kVerboseModelLoading)
     {
@@ -1743,9 +1760,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     // Default bounds (MD2s carry no bounds; the game clips against these).
     mdl.mins = { -32.0f, -32.0f, -32.0f };
     mdl.maxs = {  32.0f,  32.0f,  32.0f };
-
-    PS2_Assert(out->num_frames >= 0 && out->num_frames <= UINT16_MAX);
-    mdl.numFrames = static_cast<u16>(out->num_frames);
+    mdl.numFrames = ToU16(out->num_frames);
 
     for (int i = 0; i < out->num_skins; ++i)
     {

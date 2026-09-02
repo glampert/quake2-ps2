@@ -973,8 +973,12 @@ void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSur
     surf.polys = poly;
 
     const ModelTexInfo * const tex = surf.texInfo;
-    const float texW = static_cast<float>(tex->texture->width);
-    const float texH = static_cast<float>(tex->texture->height);
+    // The size the texture had on disk: a non-power-of-two wall was stretched
+    // to the next power of two on load, and dividing by the stretched size
+    // would tile it every 256 world units where the map wants 240 (see
+    // tex::Texture::srcWidth).
+    const float texW = static_cast<float>(tex->texture->srcWidth);
+    const float texH = static_cast<float>(tex->texture->srcHeight);
 
     for (int i = 0; i < numVerts; ++i)
     {

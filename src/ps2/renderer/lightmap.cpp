@@ -228,6 +228,8 @@ void LightmapManager::NextAtlas()
     atlas.pixels       = m_alpha[index];
     atlas.width        = kLightmapTextureWidth;
     atlas.height       = kLightmapTextureHeight;
+    atlas.srcWidth     = kLightmapTextureWidth;  // never resampled: already a power of two
+    atlas.srcHeight    = kLightmapTextureHeight;
     atlas.dirtyPixels  = true; // CPU-written; the first upload has to flush the dcache
     atlas.type         = tex::ImageType::Wall; // world data; only has to not read as a free slot
     atlas.flags        = tex::TexFlags::None;

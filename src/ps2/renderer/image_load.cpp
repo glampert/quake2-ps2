@@ -152,20 +152,6 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 // WAL
 // ------------------------------------------------------------------------------------------------
 
-// TODO: Non-power-of-two wall textures sample wrong and need resampling here.
-// The GS spreads normalized ST over the TEX0 TW/TH extent - the image size
-// rounded UP to a power of two - so a 240x128 wall wraps every 256 texels with
-// 16 columns of VRAM garbage per tile, and each tile is stretched 6.7%. baseq2
-// has 33 such textures out of 2118 (240x128, 320x128, 96x32, 128x176, ...),
-// which is why this has gone unnoticed.
-//
-// A coordinate scale cannot fix it the way it fixes model skins (see
-// tex::StScaleFor): those clamp within [0, 1], while wall UVs tile and the
-// wrap happens at the power-of-two extent regardless. The fix is what ref_gl
-// does for every image in GL_Upload8 - resample to the next power of two on
-// load and keep the UVs normalized against the original size, so one tile
-// still spans the original width in world units. Applies to any tiling
-// texture, so PCX/TGA walls would need the same treatment.
 bool LoadWal(const char * filename, u8 ** outPic, int * outWidth, int * outHeight)
 {
     *outPic = nullptr;

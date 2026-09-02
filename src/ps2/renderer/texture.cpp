@@ -141,6 +141,79 @@ u8 * DownsampleIndexed2x(u8 * pic8, int * width, int * height)
     return scaled;
 }
 
+// Stretches an image up to the next power of two in both dimensions, into a
+// fresh allocation, for the textures that tile: the GS spreads normalized ST
+// over the TEX0 extent - the image size rounded UP to a power of two - so a
+// 240x128 wall would wrap every 256 texels, over 16 columns of whatever else
+// happens to be in VRAM, with each tile stretched 6.7% besides. Filling the
+// extent is what makes the wrap land on the image's own edge again, and the
+// world's texture coordinates keep dividing by the size the image had on disk
+// (Texture::srcWidth), so a tile still spans the world units it used to.
+//
+// Point sampling, for the same reason DownsampleIndexed2x above uses it: an
+// 8-bit image is palette indices, and the weighted mean of two indices is an
+// unrelated colour. Upscaling only ever duplicates rows and columns - no texel
+// is dropped - so an image's transparent texels (index 255) all survive, and
+// the duplication is invisible under bilinear sampling at PS2 resolutions.
+//
+// Frees 'pixels' and returns the replacement, or leaves it alone and returns
+// it unchanged when both dimensions are already powers of two.
+u8 * ResampleToPowerOfTwo(u8 * pixels, int * width, int * height, const int bytesPerTexel)
+{
+    const int srcW = *width;
+    const int srcH = *height;
+    const int dstW = 1 << tex::Log2(static_cast<u32>(srcW));
+    const int dstH = 1 << tex::Log2(static_cast<u32>(srcH));
+
+    if (srcW == dstW && srcH == dstH)
+    {
+        return pixels;
+    }
+
+    u8 * const scaled = static_cast<u8 *>(
+        ps2::heap::AllocAligned(ps2::heap::MemAlign(16),
+                                static_cast<size_t>(dstW * dstH * bytesPerTexel),
+                                ps2::heap::MemTag::TexImage));
+
+    // 16.16 fixed-point steps through the source image. The destination never
+    // shrinks, so both steps are <= 1.0 and the accumulators stay in bounds.
+    const u32 stepS = (static_cast<u32>(srcW) << 16) / static_cast<u32>(dstW);
+    const u32 stepT = (static_cast<u32>(srcH) << 16) / static_cast<u32>(dstH);
+
+    const int srcPitch = srcW * bytesPerTexel;
+    const int dstPitch = dstW * bytesPerTexel;
+
+    u32 accT = 0;
+    for (int y = 0; y < dstH; ++y, accT += stepT)
+    {
+        const u8 * const srcRow = pixels + (static_cast<int>(accT >> 16) * srcPitch);
+        u8 * const       dstRow = scaled + (y * dstPitch);
+
+        if (srcW == dstW) // Only the height grew; rows copy whole.
+        {
+            std::memcpy(dstRow, srcRow, static_cast<size_t>(srcPitch));
+            continue;
+        }
+
+        u32 accS = 0;
+        for (int x = 0; x < dstW; ++x, accS += stepS)
+        {
+            const u8 * const srcTexel = srcRow + (static_cast<int>(accS >> 16) * bytesPerTexel);
+            u8 * const       dstTexel = dstRow + (x * bytesPerTexel);
+            for (int b = 0; b < bytesPerTexel; ++b)
+            {
+                dstTexel[b] = srcTexel[b];
+            }
+        }
+    }
+
+    ps2::heap::Free(pixels, static_cast<size_t>(srcW * srcH * bytesPerTexel), ps2::heap::MemTag::TexImage);
+
+    *width  = dstW;
+    *height = dstH;
+    return scaled;
+}
+
 // Checkerboards for the DebugTexture() variants, RGB16. Variant 0 (pink) is
 // the classic missing-image stand-in; the others give test scenes several
 // distinct textures to exercise VRAM streaming.
@@ -259,6 +332,10 @@ const u8 * MakeParticleHdPattern()
     return s_buffer;
 }
 
+// ------------------------------------------------------------------------------------------------
+// TextureCache
+// ------------------------------------------------------------------------------------------------
+
 // Owns the texture pool and the name lookup. Internal singleton (s_cache);
 // the module API below is the public face.
 class TextureCache final
@@ -337,15 +414,15 @@ const Texture * TextureCache::Find(const char * name, const ImageType type)
 const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageType type)
 {
     const char * extension = std::strrchr(fullname, '.');
-    if (extension == nullptr)
+    if (extension == nullptr) [[unlikely]]
     {
         Com_DPrintf("WARNING: Image '%s' has no file extension!\n", fullname);
         return nullptr;
     }
 
-    const void * pixels = nullptr;
-    int width  = 0;
-    int height = 0;
+    u8 * pixels = nullptr;
+    int width   = 0;
+    int height  = 0;
     PixelFormat format;
     TexComponents components;
 
@@ -435,13 +512,27 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
             ScaleTexelsForIntensity(pic32, width * height, gs::IntensityScale());
         }
     }
-    else
+    else [[unlikely]]
     {
         Com_DPrintf("WARNING: Unsupported image format '%s'!\n", fullname);
         return nullptr;
     }
 
-    return &Register(fullname, pixels, width, height, format, components, type, TexFlags::None);
+    // World textures are the ones that tile, so they are the ones that have to
+    // be a power of two; everything else samples within [0, 1] and is served by
+    // a coordinate scale instead. Keep the size the file had: the BSP's texture
+    // coordinates normalize against it, not against what was uploaded.
+    const int srcWidth  = width;
+    const int srcHeight = height;
+    if (type == ImageType::Wall)
+    {
+        pixels = ResampleToPowerOfTwo(pixels, &width, &height, BytesPerTexel(format));
+    }
+
+    Texture & texture = Register(fullname, pixels, width, height, format, components, type, TexFlags::None);
+    texture.srcWidth  = static_cast<s16>(srcWidth);
+    texture.srcHeight = static_cast<s16>(srcHeight);
+    return &texture;
 }
 
 void TextureCache::Unload(u16 slot)
@@ -542,6 +633,8 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     texture.pixels       = pixels;
     texture.width        = static_cast<s16>(width);
     texture.height       = static_cast<s16>(height);
+    texture.srcWidth     = static_cast<s16>(width);  // LoadFromFile overrides these when it resamples
+    texture.srcHeight    = static_cast<s16>(height);
     texture.type         = type;
     texture.flags        = flags;
     texture.format       = format;

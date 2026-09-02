@@ -93,8 +93,10 @@ struct Texture final
     char          name[MAX_QPATH]; // Game path, e.g. "pics/conback.pcx" (must be the first field - game code assumes this).
     u32           regSequence;     // Registration sequence the texture was last found in; stale level assets are freed at EndRegistration().
     const void *  pixels;          // Pixel data in EE RAM (static memory for built-ins, heap for file loads).
-    s16           width;           // In pixels, > 0.
-    s16           height;          // In pixels, > 0.
+    s16           width;           // Of 'pixels', in pixels, > 0.
+    s16           height;          // Of 'pixels', in pixels, > 0.
+    s16           srcWidth;        // Size the image had on disk. Tiling world textures are resampled to the next power of two on load, width/height
+    s16           srcHeight;       // hold the scaled size, what actually sits in memory and VRAM. Same as width/height for images that didn't need resampling.
     mutable bool  dirtyPixels;     // CPU rewrote 'pixels'; the next bind re-uploads them.
     ImageType     type;
     TexFlags      flags;
@@ -119,8 +121,8 @@ struct Texture final
     s16             atlasX;
     s16             atlasY;
 
-    // Residency is a cache managed by gs/vram: binding a const Texture may
-    // upload it (or evict others), so these mutate behind the const API.
+    // Residency is a cache managed by GS/VRAM: binding a const Texture may
+    // upload it (or evict others), so vramAddr mutates behind the const API.
     static constexpr auto kNotResident = vram::Address::Invalid;
     mutable vram::Address vramAddr; // GS VRAM word address; kNotResident when not uploaded.
 
@@ -274,8 +276,9 @@ const Texture & ParticleTexture(bool highQuality);
 // true right/bottom edge; both come back 1.0 for power-of-two images.
 //
 // Only valid for coordinates that stay within [0, 1]. A tiling texture still
-// wraps at the power-of-two extent, so non-power-of-two world textures need
-// resampling on load, not a coordinate scale.
+// wraps at the power-of-two extent, so a coordinate scale cannot fix one; the
+// world textures are resampled on load instead (see Texture::srcWidth), which
+// is why they come back 1.0 here.
 void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT);
 
 } // namespace ps2::tex

@@ -60,6 +60,8 @@ bool NextScrap()
     texture.pixels       = scrap.pixels;
     texture.width        = kScrapWidth;
     texture.height       = kScrapHeight;
+    texture.srcWidth     = kScrapWidth;  // never resampled: already a power of two
+    texture.srcHeight    = kScrapHeight;
     texture.dirtyPixels  = true; // CPU-written; the first upload has to flush the dcache
     texture.type         = tex::ImageType::Pic;
     texture.flags        = tex::TexFlags::None;

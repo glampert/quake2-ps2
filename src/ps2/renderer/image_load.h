@@ -17,6 +17,11 @@ namespace ps2::img {
 // ps2::heap::AllocAligned(16, ...) - DMA-ready - that the caller
 // owns and frees with ps2::heap::Free (size = width * height * bytes per texel).
 // On failure they warn via Com_DPrintf and return false with nothing allocated.
+//
+// The image comes back at the size the file gives it, powers of two or not.
+// Making a non-power-of-two image sampleable belongs to the texture cache,
+// which knows what the image is for: the tiling ones are resampled up to the
+// GS's TEX0 extent, the rest take a coordinate scale (see tex::StScaleFor).
 
 // PCX: 8-bit palette indices, 1 byte/texel. The palette embedded in the file is
 // ignored - all Quake II art indexes the shared global palette, the same way

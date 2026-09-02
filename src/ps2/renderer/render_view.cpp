@@ -831,9 +831,11 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
 
     // ref_gl divides by a hardcoded 64 at this point. Every warp texture in
     // pak0 is 64x64, so these agree on the real data, and this one stays
-    // right if some mod ships another size.
-    const float invWidth  = 1.0f / static_cast<float>(texture.width);
-    const float invHeight = 1.0f / static_cast<float>(texture.height);
+    // right if some mod ships another size. The size on disk, like the BSP's
+    // own texture coordinates: a stretched wall still tiles at its original
+    // size (see tex::Texture::srcWidth).
+    const float invWidth  = 1.0f / static_cast<float>(texture.srcWidth);
+    const float invHeight = 1.0f / static_cast<float>(texture.srcHeight);
 
     for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
     {

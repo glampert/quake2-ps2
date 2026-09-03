@@ -101,6 +101,7 @@ PS2_CXX_SRC =                         \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/exception_handler.cpp   \
+	ps2/debug/profile.cpp             \
 	ps2/builtin/palette.cpp           \
 	ps2/builtin/conchars.cpp          \
 	ps2/builtin/conback.cpp           \
@@ -165,7 +166,8 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/tests/map_cycle.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
-	ps2/debug/exception_handler.cpp
+	ps2/debug/exception_handler.cpp   \
+	ps2/debug/profile.cpp
 
 SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.o))
 
@@ -213,15 +215,16 @@ DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d)
 # Makefile.eeglobal_cpp defaults them with ?= (to -O2 and -gdwarf-2 -gz), so
 # whatever is set here wins - including setting the debug info to empty.
 #
-# PS2_QUAKE_DEBUG and PS2_QUAKE_ASSERTS are always defined to 0 or 1, never undefined.
+# PS2_QUAKE_DEBUG, PS2_QUAKE_ASSERTS and PS2_QUAKE_PROFILE are always defined to 0 or 1,
+# never undefined.
 ifeq ($(BUILD),release)
     EE_OPTFLAGS     = -O3
     EE_DBGINFOFLAGS =
-    CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=0 -DPS2_QUAKE_ASSERTS=0 -DNDEBUG
+    CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=0 -DPS2_QUAKE_ASSERTS=0 -DPS2_QUAKE_PROFILE=0 -DNDEBUG
 else
     EE_OPTFLAGS     = -O2
     EE_DBGINFOFLAGS = -gdwarf-2 -gz
-    CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=1 -DPS2_QUAKE_ASSERTS=1
+    CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=1 -DPS2_QUAKE_ASSERTS=1 -DPS2_QUAKE_PROFILE=1
 endif
 
 COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS)

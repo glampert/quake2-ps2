@@ -9,14 +9,15 @@
 
 #include "ps2/common.h"
 #include "ps2/debug/scr_print.h"
+#include "ps2/debug/profile.h"
 #include "ps2/system/iop_boot.h"
 
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
-#include <ctime>
 
 #include <kernel.h> // SleepThread
+#include <timer.h>  // GetTimerSystemTime / kBUSCLKBY256
 
 extern "C" {
 
@@ -33,20 +34,42 @@ extern void * GetGameAPI(void * import);
 // Timing
 // ------------------------------------------------------------------------------------------------
 
+// Deliberately not clock(): the R5900 has no DMULT/DDIV, so every 64-bit
+// multiply or divide - even by a constant - becomes a libgcc __muldi3 /
+// __udivdi3 call. clock() pays two of those inside TimerBusClock2USec before
+// we get a number, then the microseconds-to-milliseconds conversion pays a
+// third. Reading the system timer directly and converting in 32-bit costs none.
 int Sys_Milliseconds()
 {
-    static clock_t s_base = 0;
-    static bool s_initialized = false;
+    // The EE system timer (T2) is clocked at BUSCLK/256, and GetTimerSystemTime
+    // scales its count back up into BUSCLK units, so the low 8 bits are always
+    // zero. Shifting them off recovers the raw 576000Hz tick - exactly 576 per
+    // millisecond - which is also the timer's true 1.736us resolution.
+    constexpr u32 kTicksPerMillisec = kBUSCLKBY256 / 1000; // 576
 
-    const clock_t now = clock();
+    static u64  s_lastBusClk    = 0;
+    static u32  s_tickRemainder = 0;
+    static int  s_millisecs     = 0;
+    static bool s_initialized   = false;
+
+    const u64 nowBusClk = GetTimerSystemTime();
     if (!s_initialized)
     {
-        s_base = now;
+        s_lastBusClk  = nowBusClk;
         s_initialized = true;
     }
 
-    const long long ticks = static_cast<long long>(now - s_base);
-    curtime = static_cast<int>((ticks * 1000LL) / static_cast<long long>(CLOCKS_PER_SEC));
+    // Only the delta stays 64-bit (a single dsubu) and it narrows safely: 32
+    // bits of 576kHz ticks is over two hours between calls.
+    const u32 deltaTicks = static_cast<u32>((nowBusClk - s_lastBusClk) >> 8);
+    s_lastBusClk = nowBusClk;
+
+    // Carry the sub-millisecond remainder so truncation doesn't lose time.
+    s_tickRemainder += deltaTicks;
+    s_millisecs     += static_cast<int>(s_tickRemainder / kTicksPerMillisec);
+    s_tickRemainder %= kTicksPerMillisec;
+
+    curtime = s_millisecs;
     return curtime;
 }
 
@@ -65,6 +88,19 @@ void Sys_Init()
     Cmd_AddCommand("ps2_dump_iop_mods", []() {
         ps2::sys::PrintLoadedIopModules(40, &Com_Printf);
     });
+
+#if PS2_QUAKE_PROFILE
+    // Learn the real COP0 Count rate before any probe can fire (~8ms spin).
+    ps2::debug::ProfileCalibrate();
+
+    Cmd_AddCommand("ps2_profile", []() {
+        ps2::debug::ProfileDump(&Com_Printf);
+    });
+
+    Cmd_AddCommand("ps2_profile_reset", []() {
+        ps2::debug::ProfileReset();
+    });
+#endif // PS2_QUAKE_PROFILE
 }
 
 __attribute__((cold))

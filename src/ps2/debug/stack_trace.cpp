@@ -308,8 +308,7 @@ int WalkStack(u32 pc, u32 sp, u32 * outFrames, int maxFrames)
 
 } // namespace detail
 
-__attribute__((cold))
-void PrintStackTrace()
+Q_COLD_FUNC void PrintStackTrace()
 {
     u32 frames[kStackTraceMaxFrames];
     const int count = CaptureStackTrace(frames, kStackTraceMaxFrames);

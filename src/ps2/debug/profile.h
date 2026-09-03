@@ -68,7 +68,7 @@ struct Event final
 #define PS2_PROFILE_EVENT_INIT(label) { (label), 0, ~0u, 0, 0, nullptr, false }
 
 // Links an event into the registry. Cold - runs once per site, ever.
-void ProfileRegister(Event * ev) __attribute__((cold));
+void ProfileRegister(Event * ev) Q_COLD_FUNC;
 
 // Nominal EE core clock. ProfileCalibrate() replaces this with a measured value.
 constexpr u32 kNominalCyclesPerMillisec = 294912;

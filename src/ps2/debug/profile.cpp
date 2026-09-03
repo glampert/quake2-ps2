@@ -55,8 +55,7 @@ u32 CyclesToMicrosec(u64 cycles)
 
 } // anonymous namespace
 
-__attribute__((cold))
-void ProfileRegister(Event * ev)
+Q_COLD_FUNC void ProfileRegister(Event * ev)
 {
     ev->linked  = true;
     ev->next    = s_eventList;

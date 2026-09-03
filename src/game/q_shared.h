@@ -73,8 +73,10 @@ typedef enum
 
 #if defined(__GNUC__) || defined(__clang__)
 #define Q_PRINTF_FUNC(fmtIndex, varIndex) __attribute__((format(printf, fmtIndex, varIndex)))
+#define Q_COLD_FUNC __attribute__((cold))
 #else // !GNU && !Clang
 #define Q_PRINTF_FUNC(fmtIndex, varIndex) /* unimplemented */
+#define Q_COLD_FUNC /* unimplemented */
 #endif // GNU/Clang
 
 // angle indexes
@@ -314,7 +316,7 @@ char * Sys_FindNext(unsigned musthave, unsigned canthave);
 void Sys_FindClose(void);
 
 // this is only here so the functions in q_shared.c and q_shwin.c can link
-void Sys_Error(const char * error, ...) Q_PRINTF_FUNC(1, 2) __attribute__((cold));
+void Sys_Error(const char * error, ...) Q_PRINTF_FUNC(1, 2) Q_COLD_FUNC;
 void Com_Printf(const char * msg, ...) Q_PRINTF_FUNC(1, 2);
 
 /*

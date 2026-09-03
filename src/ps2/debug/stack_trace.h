@@ -6,6 +6,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/common.h"
 #include <tamtypes.h>
 
 namespace ps2::debug {
@@ -58,6 +59,6 @@ int CaptureStackTrace(u32 * outFrames, int maxFrames)
 // Captures the stack and writes it to stdout, one "#N 0x00000000" line per frame
 // inside a banner, followed by the addr2line invocation that resolves them.
 // Flushes stdout, since the callers of this do not intend to come back.
-void PrintStackTrace() __attribute__((cold));
+void PrintStackTrace() Q_COLD_FUNC;
 
 } // namespace ps2::debug

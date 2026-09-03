@@ -837,7 +837,7 @@ char * Sys_ConsoleInput(void);
 void Sys_ConsoleOutput(const char * string);
 void Sys_SendKeyEvents(void);
 
-void Sys_Quit(void) __attribute__((cold));
+void Sys_Quit(void) Q_COLD_FUNC;
 
 char * Sys_GetClipboardData(void);
 void Sys_CopyProtect(void);

@@ -103,16 +103,14 @@ void Sys_Init()
 #endif // PS2_QUAKE_PROFILE
 }
 
-__attribute__((cold))
-void Sys_Quit()
+Q_COLD_FUNC void Sys_Quit()
 {
     Qcommon_Shutdown();
     std::fflush(stdout);
     std::exit(0);
 }
 
-__attribute__((cold))
-void Sys_Error(const char * error, ...)
+Q_COLD_FUNC void Sys_Error(const char * error, ...)
 {
     va_list argptr;
     char tempbuff[2048];

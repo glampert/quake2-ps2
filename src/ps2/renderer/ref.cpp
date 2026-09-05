@@ -164,13 +164,14 @@ void DrawFpsCounter()
 
 // Per-event frame time overlay, stacked under the FPS counter in the top-right
 // corner: one line per PS2_PROFILE_SCOPED site flagged kScreenOverlay, showing
-// what that site cost in the frame just rendered.
+// what that site cost over one frame.
 //
-// This is the last completed frame's cost, not a running total or an average -
-// PS2_EndFrame rolls the accumulators over just before this draws, so the number
-// tracks what the view is doing right now. A site that never ran this frame
-// (RenderAlphaSurfaces with nothing translucent in view, say) reads 0.000, and
-// one that ran several times shows the sum of its calls.
+// The numbers are the previous frame's, not a running total or an average:
+// PS2_BeginFrame rolls the accumulators over, so the frame being reported is
+// complete by the time this draws - down to the probes that only close after
+// it (VSync, Frame). A site that never ran in that frame (RenderAlphaSurfaces
+// with nothing translucent in view, say) reads 0.000, and one that ran several
+// times shows the sum of its calls.
 void DrawProfileOverlay()
 {
 #if PS2_QUAKE_PROFILE
@@ -235,7 +236,7 @@ void DrawProfileOverlay()
                       ps2::debug::ProfileFormatMillisec(ev->lastFrameCycles, millisec, sizeof(millisec)));
 
         const u8* color = kUiBrightness;
-        if (ev->sortKey == 0) // Sort key 0 = "Frame" root
+        if (ev->sortKey == 0) // Sort key 0 = the "Frame" root
         {
             const auto ms = ev->FrameMilliseconds();
             color = kGreen;
@@ -632,10 +633,19 @@ void PS2_CinematicSetPalette(const unsigned char * palette)
 void PS2_BeginFrame(float cameraSeparation)
 {
     (void)cameraSeparation;
-    ps2::gs::BeginFrame();
+
+    // Close the frame the profile probes have been charging into, before any of
+    // this frame's work is measured. This has to happen here rather than at the
+    // end of PS2_EndFrame: the probes that close last - gs::EndFrame's vsync
+    // wait, and the Frame scope around Qcommon_Frame - would otherwise be
+    // charged to the frame after the one they measured, pairing each frame's
+    // view cost with the previous frame's wait.
+    ps2::debug::ProfileNewFrame();
+
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
-    // each 2D->3D boundary and in gs::EndFrame() - no explicit bracket here.
+    // each 2D->3D boundary and in gs::EndFrame().
+    ps2::gs::BeginFrame();
 }
 
 void PS2_EndFrame()
@@ -658,11 +668,6 @@ void PS2_EndFrame()
     // be reached once per frame.
     ps2::test::RunMapCycle();
 #endif // PS2_QUAKE_DEBUG
-
-    // Close the frame the profile probes have been charging into before any
-    // overlay reads it. RenderFrame and everything it brackets is already done
-    // by now, and the overlay draws below are not themselves instrumented.
-    ps2::debug::ProfileNewFrame();
 
     DrawFpsCounter();
     DrawProfileOverlay();

@@ -39,6 +39,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/builtin/builtin.h" // global_palette
+#include "ps2/debug/profile.h"
 
 #include <dma.h>
 #include <gs_gp.h>
@@ -873,7 +874,11 @@ void EndFrame()
     // in the common case) so it lands on top before the buffer is displayed.
     FlushPending2D();
 
-    graph_wait_vsync();
+    {
+        PS2_PROFILE_SCOPED("VSync", kScreenOverlay, 1);
+        graph_wait_vsync();
+    }
+
     graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[s_drawCtx].address),
                                    static_cast<int>(s_frameBuffer[s_drawCtx].width),
                                    static_cast<int>(s_frameBuffer[s_drawCtx].psm), 0, 0);

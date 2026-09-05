@@ -146,8 +146,10 @@ void ProfileDump(void (*printer)(const char *, ...));
 u32 ProfileCyclesPerMillisec();
 
 // Closes the frame every event has been charging into: rolls frameCycles over to
-// lastFrameCycles and clears it. Call once per frame, after the instrumented
-// work and before anything reads lastFrameCycles.
+// lastFrameCycles and clears it. Call once per frame, at the very top: probes
+// that close late - a vsync wait trailing the last draw, a scope wrapping the
+// whole frame - then still land in the frame they measured, and readers of
+// lastFrameCycles get a completed frame rather than a half-filled current one.
 void ProfileNewFrame();
 
 // Head of the registry, for callers that want to walk the events themselves (the

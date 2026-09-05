@@ -8,6 +8,7 @@
 
 #include "ps2/common.h"
 #include "ps2/system/iop_boot.h"
+#include "ps2/debug/profile.h"
 #include "ps2/debug/exception_handler.h"
 
 int main()
@@ -52,7 +53,12 @@ int main()
             frametime = newtime - oldtime;
         } while (frametime < 1);
 
-        Qcommon_Frame(frametime);
+        // The whole frame - server, client, renderer and the vsync wait.
+        {
+            PS2_PROFILE_SCOPED("Frame", kScreenOverlay, 0);
+            Qcommon_Frame(frametime);
+        }
+
         oldtime = newtime;
     }
 }

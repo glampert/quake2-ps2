@@ -85,10 +85,12 @@ static const cvar_t * s_polyblend         = nullptr;
 // (cl_main.c), which forwards it to the server in each usercmd.
 static cvar_t * s_lightLevel = nullptr;
 
-// Sort order of our profile events/tags in the on-screen overlay.
+// Sort order of our profile events/tags in the on-screen overlay. Numbering
+// starts at 2: sort keys 0 and 1 are reserved for the "Frame" root in main.cpp
+// and "VSync" in gs.cpp.
 enum ProfTag : u8
 {
-    ProfTag_Frame = 0,
+    ProfTag_View = 2, // 0=Frame, 1=VSync
     ProfTag_World,
     ProfTag_Vis,
     ProfTag_TexChains,
@@ -2359,7 +2361,7 @@ bool FrustumCullsPoints(const vec3_t * points, int numPoints)
 
 void RenderFrame(const refdef_t & viewDef)
 {
-    PROFILE(Frame);
+    PROFILE(View);
 
     PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
     s_drawStats              = {};

@@ -15,6 +15,17 @@
 
 namespace ps2::debug {
 
+// Nominal EE core clock. ProfileCalibrate() replaces this with a measured value.
+constexpr u32 kNominalCyclesPerMillisec = 294912;
+
+enum ProfileFlags : u8
+{
+    kProfileNoFlags = 0,
+
+    // Adds profile event to the on-screen profile overlay.
+    kScreenOverlay  = 1 << 0,
+};
+
 // ------------------------------------------------------------------------------------------------
 // Cycle counter
 // ------------------------------------------------------------------------------------------------
@@ -34,15 +45,17 @@ namespace ps2::debug {
 //     for the CP0 timer interrupt, so emulators have to implement it).
 //
 // Count is 32-bit and free-running, so it wraps roughly every 14.5 seconds at
-// 294.912MHz. The unsigned subtraction in ~EventScoped() stays correct across one
-// wrap, which caps a single measured scope at ~14.5s - far beyond anything you
-// would put a scope timer around.
-using Time = u32;
+// 294.912MHz. The unsigned subtraction in ~ProfileEventScoped() stays correct
+// across one wrap, which caps a single measured scope at ~14.5s - far beyond
+// anything you would put a scope timer around.
+using CpuCycles = u32;
 
-inline Time ReadCycles()
+inline CpuCycles ReadCycles()
 {
     return get_mips_cop_reg(0, static_cast<u32>(COP0_REG_Count));
 }
+
+#if PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // Profile events
@@ -54,41 +67,46 @@ inline Time ReadCycles()
 // function-local static, and an all-constant initializer keeps it out of the
 // guarded-static path. (-fno-threadsafe-statics drops the locking but a
 // non-constant initializer would still cost a guard load and branch on entry.)
-struct Event final
+struct ProfileEvent final
 {
-    const char * name;
-    u64          totalCycles;
-    Time         minCycles;
-    Time         maxCycles;
-    u32          callCount;
-    Event *      next; // Dump registry chain; linked on first hit.
-    bool         linked;
+    const char *   name;
+    u64            totalCycles;
+    CpuCycles      minCycles;
+    CpuCycles      maxCycles;
+    CpuCycles      frameCycles;
+    CpuCycles      lastFrameCycles;
+    u32            callCount;
+    ProfileEvent * next;    // Profile registry chain; linked on first hit.
+    bool           linked;
+    ProfileFlags   flags;
+    u8             sortKey; // Sorting key for the on screen overlay.
+
+    u32 FrameMilliseconds() const;
 };
 
-#define PS2_PROFILE_EVENT_INIT(label) { (label), 0, ~0u, 0, 0, nullptr, false }
+#define PS2_PROFILE_EVENT_INIT(label, flags, sortKey) \
+    { (label), 0, ~0u, 0, 0, 0, 0, nullptr, false, (flags), (sortKey) }
 
 // Links an event into the registry. Cold - runs once per site, ever.
-void ProfileRegister(Event * ev) Q_COLD_FUNC;
-
-// Nominal EE core clock. ProfileCalibrate() replaces this with a measured value.
-constexpr u32 kNominalCyclesPerMillisec = 294912;
+void ProfileRegister(ProfileEvent * ev) Q_COLD_FUNC;
 
 // RAII probe. Reads the counter on entry, folds the delta into the event on
 // exit. Everything after the closing read is outside the measured window.
-class EventScoped final
+class ProfileEventScoped final
 {
 public:
-    explicit EventScoped(Event * ev)
+    explicit ProfileEventScoped(ProfileEvent * ev)
         : m_event(ev)
         , m_start(ReadCycles())
     { }
 
-    ~EventScoped()
+    ~ProfileEventScoped()
     {
-        const Time elapsed = ReadCycles() - m_start;
-        Event * const ev = m_event;
+        const CpuCycles elapsed = ReadCycles() - m_start;
+        ProfileEvent * const ev = m_event;
 
         ev->totalCycles += elapsed;
+        ev->frameCycles += elapsed;
         ev->callCount   += 1;
 
         if (elapsed < ev->minCycles) { ev->minCycles = elapsed; }
@@ -98,19 +116,17 @@ public:
         if (!ev->linked) [[unlikely]] { ProfileRegister(ev); }
     }
 
-    EventScoped(const EventScoped &) = delete;
-    EventScoped & operator = (const EventScoped &) = delete;
+    ProfileEventScoped(const ProfileEventScoped &) = delete;
+    ProfileEventScoped & operator = (const ProfileEventScoped &) = delete;
 
 private:
-    Event * const m_event;
-    const Time    m_start;
+    ProfileEvent * const m_event;
+    const CpuCycles m_start;
 };
 
 // ------------------------------------------------------------------------------------------------
 // Control
 // ------------------------------------------------------------------------------------------------
-
-#if PS2_QUAKE_PROFILE
 
 // Measures the real COP0 Count rate against the EE bus timer (T2, which runs off
 // the fixed 147.456MHz BUSCLK) so the reported milliseconds are right whether
@@ -126,8 +142,23 @@ void ProfileReset();
 void ProfileDump(void (*printer)(const char *, ...));
 
 // Cycles measured by ProfileCalibrate, per millisecond. Exposed for callers that
-// want to convert a raw Time delta themselves.
+// want to convert a raw CpuCycles delta themselves.
 u32 ProfileCyclesPerMillisec();
+
+// Closes the frame every event has been charging into: rolls frameCycles over to
+// lastFrameCycles and clears it. Call once per frame, after the instrumented
+// work and before anything reads lastFrameCycles.
+void ProfileNewFrame();
+
+// Head of the registry, for callers that want to walk the events themselves (the
+// on-screen overlay). Ordered by first hit, most recent first, and stable once
+// every site has been reached at least once. Null when nothing has been hit yet.
+const ProfileEvent * ProfileEventList();
+
+// Formats a cycle count as milliseconds with three decimals ("3.472"), and
+// returns outBuff for use straight inside a printf argument list. Integer math
+// only: %f would drag in soft-float doubles for a number two divides can build.
+const char * ProfileFormatMillisec(CpuCycles cycles, char * outBuff, size_t outBuffSize);
 
 #else // PS2_QUAKE_PROFILE
 
@@ -136,6 +167,9 @@ inline void ProfileCalibrate() {}
 inline void ProfileReset() {}
 inline void ProfileDump(void (*)(const char *, ...)) {}
 inline u32 ProfileCyclesPerMillisec() { return kNominalCyclesPerMillisec; }
+inline void ProfileNewFrame() {}
+inline const struct ProfileEvent * ProfileEventList() { return nullptr; }
+inline const char * ProfileFormatMillisec(CpuCycles, char * outBuff, size_t) { return outBuff; }
 
 #endif // PS2_QUAKE_PROFILE
 
@@ -150,18 +184,18 @@ inline u32 ProfileCyclesPerMillisec() { return kNominalCyclesPerMillisec; }
     #define PS2_PROFILE_CONCAT_(a, b) a##b
     #define PS2_PROFILE_CONCAT(a, b)  PS2_PROFILE_CONCAT_(a, b)
 
-    #define PS2_PROFILE_SCOPED(label)                                         \
-        static ps2::debug::Event PS2_PROFILE_CONCAT(s_profEvent, __LINE__) =  \
-            PS2_PROFILE_EVENT_INIT(label);                                    \
-        const ps2::debug::EventScoped PS2_PROFILE_CONCAT(profScope, __LINE__) \
+    #define PS2_PROFILE_SCOPED(label, flags, sortKey)                                \
+        static ps2::debug::ProfileEvent PS2_PROFILE_CONCAT(s_profEvent, __LINE__) =  \
+            PS2_PROFILE_EVENT_INIT(label, ps2::debug::flags, sortKey);               \
+        const ps2::debug::ProfileEventScoped PS2_PROFILE_CONCAT(profScope, __LINE__) \
             (&PS2_PROFILE_CONCAT(s_profEvent, __LINE__))
 
     // Same thing, labelled with the enclosing function's name.
-    #define PS2_PROFILE_FUNCTION() PS2_PROFILE_SCOPED(__func__)
+    #define PS2_PROFILE_FUNCTION() PS2_PROFILE_SCOPED(__func__, kProfileNoFlags, 0)
 
 #else // PS2_QUAKE_PROFILE
 
-    #define PS2_PROFILE_SCOPED(label) (void)sizeof(label)
-    #define PS2_PROFILE_FUNCTION()    (void)0
+    #define PS2_PROFILE_SCOPED(label, flags, sortKey)
+    #define PS2_PROFILE_FUNCTION()
 
 #endif // PS2_QUAKE_PROFILE

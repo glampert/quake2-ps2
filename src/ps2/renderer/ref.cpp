@@ -25,7 +25,9 @@
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
 #include "ps2/builtin/builtin.h"
+#include "ps2/debug/profile.h"
 
+#include <algorithm>
 #include <cstdio>
 
 namespace {
@@ -34,12 +36,16 @@ namespace {
 constexpr int kGlyphSize = 8;
 
 // Vertex colour applied to textured 2D (GS modulate: 128 = texels unchanged).
-constexpr u8 kUiBrightness = 128;
+constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
+constexpr u8 kYellow[3]       = { 128, 128, 0   };
+constexpr u8 kGreen[3]        = { 0,   128, 0   };
+constexpr u8 kRed[3]          = { 128, 0,   0   };
 
-static const cvar_t * s_showFpsCount  = nullptr;
-static const cvar_t * s_showMemStats  = nullptr;
-static const cvar_t * s_showVramStats = nullptr;
-static const cvar_t * s_showDrawStats = nullptr;
+static const cvar_t * s_showFpsCount     = nullptr;
+static const cvar_t * s_showMemStats     = nullptr;
+static const cvar_t * s_showVramStats    = nullptr;
+static const cvar_t * s_showDrawStats    = nullptr;
+static const cvar_t * s_showProfileStats = nullptr;
 
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
@@ -58,7 +64,7 @@ const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2:
     return *texture;
 }
 
-void DrawGlyph(int x, int y, int c)
+void DrawGlyph(int x, int y, int c, const u8 color[3])
 {
     // Draws one 8x8 graphics character with 0 being transparent.
     // It can be clipped to the top of the screen to allow the console
@@ -80,15 +86,16 @@ void DrawGlyph(int x, int y, int c)
 
     ps2::gs::SetTextureFor2D(*s_texConchars);
     ps2::gs::DrawTexturedRect(x, y, kGlyphSize, kGlyphSize,
-                              col, row, col + kGlyphSize, row + kGlyphSize, kUiBrightness);
+                              col, row, col + kGlyphSize, row + kGlyphSize,
+                              color);
 }
 
-void DrawInternalString(int x, int y, const char * str)
+void DrawInternalString(int x, int y, const char * str, const u8 color[3] = kUiBrightness)
 {
     const int initialX = x;
     for (; *str != '\0'; ++str)
     {
-        DrawGlyph(x, y, *str);
+        DrawGlyph(x, y, *str, color);
         x += kGlyphSize;
         if (*str == '\n')
         {
@@ -140,9 +147,113 @@ void DrawFpsCounter()
     char text[32];
     std::snprintf(text, sizeof(text), "FPS %d", s_fps.count);
 
+    const u8* color = kGreen;
+    if (s_fps.count < 60)
+    {
+        color = kYellow;
+    }
+    if (s_fps.count < 30)
+    {
+        color = kRed;
+    }
+
     // A black background to give the text more contrast.
     ps2::gs::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
-    DrawInternalString(viddef.width - 64, 4, text);
+    DrawInternalString(viddef.width - 64, 4, text, color);
+}
+
+// Per-event frame time overlay, stacked under the FPS counter in the top-right
+// corner: one line per PS2_PROFILE_SCOPED site flagged kScreenOverlay, showing
+// what that site cost in the frame just rendered.
+//
+// This is the last completed frame's cost, not a running total or an average -
+// PS2_EndFrame rolls the accumulators over just before this draws, so the number
+// tracks what the view is doing right now. A site that never ran this frame
+// (RenderAlphaSurfaces with nothing translucent in view, say) reads 0.000, and
+// one that ran several times shows the sum of its calls.
+void DrawProfileOverlay()
+{
+#if PS2_QUAKE_PROFILE
+
+    if (s_showProfileStats->value == 0.0f)
+    {
+        return;
+    }
+
+    // Cap the panel so a heavily instrumented build can't run off the screen.
+    constexpr int kMaxRows = 12;
+
+    const ps2::debug::ProfileEvent * rows[kMaxRows];
+    int numRows = 0;
+
+    for (const auto * ev = ps2::debug::ProfileEventList();
+         ev != nullptr && numRows < kMaxRows;
+         ev = ev->next)
+    {
+        if (ev->flags & ps2::debug::kScreenOverlay)
+        {
+            rows[numRows++] = ev;
+        }
+    }
+
+    std::sort(rows, rows + numRows,
+        [](const ps2::debug::ProfileEvent * a, const ps2::debug::ProfileEvent * b) -> bool
+        {
+            return a->sortKey < b->sortKey;
+        });
+
+    if (numRows == 0)
+    {
+        return; // Nothing instrumented has been reached yet.
+    }
+
+    constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
+    constexpr int kPanelWidth = 148;
+    constexpr int kPadding    = 4;
+
+    const int panelHeight = ((numRows + 1) * kLineHeight) + (kPadding * 2); // Header + one per event.
+
+    // Right edge aligned with the FPS counter above, which ends at width - 4.
+    const int panelX = viddef.width - kPanelWidth - 4;
+    const int panelY = 16; // Clears the 12px FPS box at y = 2.
+
+    // A black background to give the text more contrast.
+    ps2::gs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+
+    const int textX = panelX + kPadding;
+    int textY = panelY + kPadding;
+
+    DrawInternalString(textX, textY, "FRAME TIMES (ms)");
+    textY += kLineHeight;
+
+    char line[64];
+    char millisec[16];
+    for (int i = 0; i < numRows; ++i)
+    {
+        const auto * const ev = rows[i];
+        std::snprintf(line, sizeof(line), "%-10s %6s", ev->name,
+                      ps2::debug::ProfileFormatMillisec(ev->lastFrameCycles, millisec, sizeof(millisec)));
+
+        const u8* color = kUiBrightness;
+        if (ev->sortKey == 0) // Sort key 0 = "Frame" root
+        {
+            const auto ms = ev->FrameMilliseconds();
+            color = kGreen;
+            if (ms > 16) // below 60fps
+            {
+                color = kYellow;
+            }
+            if (ms > 33) // below 30fps
+            {
+                color = kRed;
+            }
+        }
+
+        DrawInternalString(textX, textY, line, color);
+        textY += kLineHeight;
+    }
+
+#endif // PS2_QUAKE_PROFILE
 }
 
 // Memory usage overlay in the lower-right corner: one line per PS2MemTag with
@@ -351,10 +462,11 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::mod::Init();
     ps2::view::Init();
 
-    s_showFpsCount  = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showMemStats  = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showVramStats = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showDrawStats = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showDrawStats    = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showProfileStats = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", 0);
 
     s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
     s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);
@@ -471,7 +583,7 @@ void PS2_DrawPic(int x, int y, const char * name)
 
 void PS2_DrawChar(int x, int y, int c)
 {
-    DrawGlyph(x, y, c);
+    DrawGlyph(x, y, c, kUiBrightness);
 }
 
 void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
@@ -547,7 +659,13 @@ void PS2_EndFrame()
     ps2::test::RunMapCycle();
 #endif // PS2_QUAKE_DEBUG
 
+    // Close the frame the profile probes have been charging into before any
+    // overlay reads it. RenderFrame and everything it brackets is already done
+    // by now, and the overlay draws below are not themselves instrumented.
+    ps2::debug::ProfileNewFrame();
+
     DrawFpsCounter();
+    DrawProfileOverlay();
     DrawMemUsageOverlay();
     DrawVramUsageOverlay();
     DrawDrawStatsOverlay();

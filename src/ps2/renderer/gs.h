@@ -112,10 +112,10 @@ void SetTextureFor2D(const tex::Texture & texture);
 
 // Adds a textured rectangle to the current frame, sampling the SetTextureFor2D()
 // texture over texel range [u0,v0]..[u1,v1]. 'brightness' modulates the texel
-// colour: 128 = unchanged, 255 = ~2x. Texels with alpha 0 are cut out by the
-// alpha test (console font transparency).
+// colour: 128 = unchanged, 255 = ~2x, for each RGB channel. Texels with alpha 0
+// are cut out by the alpha test (e.g. console font transparency).
 void DrawTexturedRect(int x, int y, int w, int h,
                       int u0, int v0, int u1, int v1,
-                      u8 brightness);
+                      const u8 brightness[3]);
 
 } // namespace ps2::gs

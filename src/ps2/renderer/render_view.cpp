@@ -32,6 +32,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
+#include "ps2/debug/profile.h"
 #include "ps2/builtin/builtin.h" // global_palette (beam and particle colours)
 
 #include <cmath>
@@ -83,6 +84,22 @@ static const cvar_t * s_polyblend         = nullptr;
 // every frame for the game code (hence non-const). Registered by the client
 // (cl_main.c), which forwards it to the server in each usercmd.
 static cvar_t * s_lightLevel = nullptr;
+
+// Sort order of our profile events/tags in the on-screen overlay.
+enum ProfTag : u8
+{
+    ProfTag_Frame = 0,
+    ProfTag_World,
+    ProfTag_Vis,
+    ProfTag_TexChains,
+    ProfTag_LmapChains,
+    ProfTag_Entities,
+    ProfTag_Particles,
+    ProfTag_AlphaSurfs,
+    ProfTag_SkyBox,
+};
+
+#define PROFILE(tag) PS2_PROFILE_SCOPED(#tag, kScreenOverlay, ProfTag_##tag)
 
 // ------------------------------------------------------------------------------------------------
 // Frame state
@@ -1128,6 +1145,8 @@ inline u32 AlphaSurfaceColor(const int texFlags)
 // hands us for free.
 void RenderAlphaSurfaces()
 {
+    PROFILE(AlphaSurfs);
+
     if (s_alphaSurfaceCount == 0 || s_skipAlphaSurfaces->value != 0.0f)
     {
         s_alphaSurfaceCount      = 0;
@@ -1377,6 +1396,8 @@ void PushDLights(const refdef_t & viewDef, const mod::ModelInstance & world)
 
 void RenderWorldModel(const refdef_t & viewDef)
 {
+    PROFILE(World);
+
     if (viewDef.rdflags & RDF_NOWORLDMODEL)
     {
         return; // Menu/loading screens render no world.
@@ -1389,24 +1410,39 @@ void RenderWorldModel(const refdef_t & viewDef)
     const mod::ModelInstance * const world = mod::GetWorldModel();
     PS2_AssertMsg(world != nullptr, "RenderFrame without a world model!");
 
-    sky::ClearBounds();
+    // World visibility pass (bsp traversal):
+    {
+        PROFILE(Vis);
+        sky::ClearBounds();
+        PushDLights(viewDef, *world);
+        SetUpViewClusters(viewDef, *world);
+        MarkLeaves(*world);
+        RecursiveWorldNode(viewDef, *world, world->nodes);
+    }
 
-    PushDLights(viewDef, *world);
-    SetUpViewClusters(viewDef, *world);
-    MarkLeaves(*world);
-    RecursiveWorldNode(viewDef, *world, world->nodes);
+    const SurfaceDrawState state = WorldSurfaceDrawState();
 
     // Diffuse first, then the lightmap over it - ref_gl's DrawTextureChains()
     // followed by R_BlendLightmaps(). Both passes draw the same triangles with
     // the same transform, so they share one draw state.
-    const SurfaceDrawState state = WorldSurfaceDrawState();
-    DrawTextureChains(state);
-    DrawLightmapChains(state);
+    {
+        PROFILE(TexChains);
+        DrawTextureChains(state);
+    }
+
+    // Only profile world lightmaps here.
+    {
+        PROFILE(LmapChains);
+        DrawLightmapChains(state);
+    }
 
     // Last of the world, where ref_gl's R_DrawWorld puts it: the opaque pass
     // above has filled the depth buffer, so the sky only costs fill where it
     // is actually visible through it.
-    sky::DrawSkyBox(viewDef, s_viewProjMatrix);
+    {
+        PROFILE(SkyBox);
+        sky::DrawSkyBox(viewDef, s_viewProjMatrix);
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2015,6 +2051,8 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 // vertex with particle colour and expand to a triangle/quad on the VU.
 void RenderParticles(const refdef_t & viewDef)
 {
+    PROFILE(Particles);
+
     const int numParticles = viewDef.num_particles;
     if (numParticles <= 0 || s_skipParticles->value != 0.0f)
     {
@@ -2116,9 +2154,10 @@ void RenderParticles(const refdef_t & viewDef)
 // Entity pass
 // ------------------------------------------------------------------------------------------------
 
-template<bool isTranslucentPass>
-void RenderEntities(const refdef_t & viewDef)
+void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
 {
+    PROFILE(Entities);
+
     if (s_skipEntities->value != 0.0f)
     {
         return; // Debug: skip all entity models.
@@ -2320,8 +2359,9 @@ bool FrustumCullsPoints(const vec3_t * points, int numPoints)
 
 void RenderFrame(const refdef_t & viewDef)
 {
-    PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
+    PROFILE(Frame);
 
+    PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
     s_drawStats              = {};
     s_alphaSurfaceCount      = 0;
     s_alphaEntityMatrixCount = 0;
@@ -2331,8 +2371,8 @@ void RenderFrame(const refdef_t & viewDef)
 
     // Opaque world surfaces and skybox, followed by opaque and translucent entities.
     RenderWorldModel(viewDef);
-    RenderEntities</*isTranslucentPass=*/false>(viewDef);
-    RenderEntities</*isTranslucentPass=*/true>(viewDef);
+    RenderEntities(viewDef, /*isTranslucentPass=*/false);
+    RenderEntities(viewDef, /*isTranslucentPass=*/true);
 
     // Simulated light sources with additive blending. Before the two passes
     // below, where ref_gl's R_RenderView puts R_RenderDlights: all three are

@@ -192,7 +192,9 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
     // bottom band and its hacky quad offsets.
     s_frameTexture.MarkPixelsDirty();
     gs::SetTextureFor2D(s_frameTexture);
-    gs::DrawTexturedRect(x, y, w, h, 0, 0, kFrameDim, trows, 128);
+
+    constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
+    gs::DrawTexturedRect(x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
 }
 
 } // namespace ps2::cin

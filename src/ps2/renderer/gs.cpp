@@ -828,7 +828,8 @@ void SetTextureFor2D(const tex::Texture & texture)
 }
 
 void DrawTexturedRect(int x, int y, int w, int h,
-                      int u0, int v0, int u1, int v1, u8 brightness)
+                      int u0, int v0, int u1, int v1,
+                      const u8 brightness[3])
 {
     PS2_AssertMsg(s_currentTex != nullptr, "DrawTexturedRect without SetTextureFor2D!");
     PS2_AssertMsg(s_in2D, "DrawTexturedRect without an open 2D batch!");
@@ -853,9 +854,9 @@ void DrawTexturedRect(int x, int y, int w, int h,
     // Modulate: 0x80 = 1.0, so 'brightness' 128 leaves texels unchanged. Vertex
     // alpha 0x80 likewise preserves texel alpha, which the alpha test then uses
     // to cut out transparent texels (e.g. the console font background).
-    rect.color.r = brightness;
-    rect.color.g = brightness;
-    rect.color.b = brightness;
+    rect.color.r = brightness[0];
+    rect.color.g = brightness[1];
+    rect.color.b = brightness[2];
     rect.color.a = 0x80;
     rect.color.q = 1.0f;
 

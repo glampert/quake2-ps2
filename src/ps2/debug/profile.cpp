@@ -11,6 +11,7 @@
 
 #if PS2_QUAKE_PROFILE
 
+#include <algorithm>
 #include <cstdio>
 #include <timer.h> // GetTimerSystemTime / kBUSCLKBY256
 
@@ -20,7 +21,7 @@ namespace {
 // Intrusive list of every event that has been hit at least once. Single-threaded
 // by construction: the game runs on one EE thread and probes never fire from an
 // interrupt handler.
-static Event * s_eventList = nullptr;
+static ProfileEvent * s_eventList = nullptr;
 
 static u32 s_cyclesPerMillisec = kNominalCyclesPerMillisec;
 
@@ -34,12 +35,12 @@ constexpr u32 kBusTicksPerMillisec = kBUSCLKBY256 / 1000; // 576
 
 // Formats microseconds as "<ms>.<frac>" without touching the FPU. printf's %f
 // would drag in soft-float doubles for a number we can build with two divides.
-void FormatMillisec(u32 usec, char * outBuff, size_t outBuffSize)
+inline void FormatMillisec(u32 usec, char * outBuff, size_t outBuffSize)
 {
     std::snprintf(outBuff, outBuffSize, "%u.%03u", usec / 1000u, usec % 1000u);
 }
 
-u32 CyclesToMicrosec(u64 cycles)
+inline u32 CyclesToMicrosec(u64 cycles)
 {
     if (s_cyclesPerMillisec == 0)
     {
@@ -53,9 +54,15 @@ u32 CyclesToMicrosec(u64 cycles)
     return static_cast<u32>((cycles * 1000u) / s_cyclesPerMillisec);
 }
 
-} // anonymous namespace
+} // namespace
 
-Q_COLD_FUNC void ProfileRegister(Event * ev)
+u32 ProfileEvent::FrameMilliseconds() const
+{
+    const u32 usec = CyclesToMicrosec(lastFrameCycles);
+    return usec / 1000u;
+}
+
+Q_COLD_FUNC void ProfileRegister(ProfileEvent * ev)
 {
     ev->linked  = true;
     ev->next    = s_eventList;
@@ -77,13 +84,13 @@ void ProfileCalibrate()
 
     // Bail-out budget so a system timer that never advances (GetTimerSystemTime
     // returns 0 flat if InitTimer was never called) can't hang the boot here.
-    const Time cycleBudget = kNominalCyclesPerMillisec * 100;
+    const CpuCycles cycleBudget = kNominalCyclesPerMillisec * 100;
 
     const u64 busStart = GetTimerSystemTime();
-    const Time cycleStart = ReadCycles();
+    const CpuCycles cycleStart = ReadCycles();
 
     u64 busNow;
-    Time cycles;
+    CpuCycles cycles;
     do
     {
         busNow = GetTimerSystemTime();
@@ -102,13 +109,37 @@ void ProfileCalibrate()
 
 void ProfileReset()
 {
-    for (Event * ev = s_eventList; ev != nullptr; ev = ev->next)
+    for (ProfileEvent * ev = s_eventList; ev != nullptr; ev = ev->next)
     {
-        ev->totalCycles = 0;
-        ev->minCycles   = ~0u;
-        ev->maxCycles   = 0;
-        ev->callCount   = 0;
+        ev->totalCycles     = 0;
+        ev->minCycles       = ~0u;
+        ev->maxCycles       = 0;
+        ev->frameCycles     = 0;
+        ev->lastFrameCycles = 0;
+        ev->callCount       = 0;
     }
+}
+
+void ProfileNewFrame()
+{
+    // Walks every event, not just the displayed ones: an event that stops being
+    // shown must not keep a half-accumulated frame around for when it comes back.
+    for (ProfileEvent * ev = s_eventList; ev != nullptr; ev = ev->next)
+    {
+        ev->lastFrameCycles = ev->frameCycles;
+        ev->frameCycles     = 0;
+    }
+}
+
+const ProfileEvent * ProfileEventList()
+{
+    return s_eventList;
+}
+
+const char * ProfileFormatMillisec(CpuCycles cycles, char * outBuff, size_t outBuffSize)
+{
+    FormatMillisec(CyclesToMicrosec(cycles), outBuff, outBuffSize);
+    return outBuff;
 }
 
 void ProfileDump(void (*printer)(const char *, ...))
@@ -120,11 +151,11 @@ void ProfileDump(void (*printer)(const char *, ...))
 
     // Snapshot into an array so we can order the report without disturbing the
     // registry (and so a probe firing mid-dump can't splice the list under us).
-    const Event * sorted[kMaxDumpEvents];
+    const ProfileEvent * sorted[kMaxDumpEvents];
     int count = 0;
     int total = 0;
 
-    for (const Event * ev = s_eventList; ev != nullptr; ev = ev->next)
+    for (const ProfileEvent * ev = s_eventList; ev != nullptr; ev = ev->next)
     {
         ++total;
         if (count < kMaxDumpEvents)
@@ -139,18 +170,12 @@ void ProfileDump(void (*printer)(const char *, ...))
         return;
     }
 
-    // Insertion sort by total cycles, descending. N is tiny and this is cold.
-    for (int i = 1; i < count; ++i)
-    {
-        const Event * const key = sorted[i];
-        int j = i - 1;
-        while (j >= 0 && sorted[j]->totalCycles < key->totalCycles)
+    // Insertion sort by total cycles, descending.
+    std::sort(sorted, sorted + count,
+        [](const ProfileEvent * a, const ProfileEvent * b) -> bool
         {
-            sorted[j + 1] = sorted[j];
-            --j;
-        }
-        sorted[j + 1] = key;
-    }
+            return a->totalCycles > b->totalCycles;
+        });
 
     char totalBuff[32];
     char avgBuff[32];
@@ -162,7 +187,7 @@ void ProfileDump(void (*printer)(const char *, ...))
 
     for (int i = 0; i < count; ++i)
     {
-        const Event * const ev = sorted[i];
+        const ProfileEvent * const ev = sorted[i];
         const u32 totalUsec = CyclesToMicrosec(ev->totalCycles);
         const u32 avgUsec = (ev->callCount != 0) ? (totalUsec / ev->callCount) : 0;
 

@@ -26,6 +26,7 @@
 #include "ps2/tests/map_cycle.h"
 #include "ps2/builtin/builtin.h"
 #include "ps2/debug/profile.h"
+#include "ps2/renderer/render_profile.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -418,10 +419,6 @@ void DrawDrawStatsOverlay()
         // oversized and can be cut.
         { "DmaPeak", ps2::gs::FramePacketPeakQwords()     },
         { "DmaCap",  ps2::gs::FramePacketCapacityQwords() },
-        // Most REF'd payload bytes any one frame has submitted to VU1. This is
-        // the per-frame demand the frame arena will have to satisfy, so it is
-        // what sizes it - doubled, since the arena is buffered across frames.
-        { "ArenaHi", ps2::vu1::PeakFrameSubmittedBytes() },
     };
 
     constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
@@ -510,6 +507,7 @@ void PS2_AppActivate(qboolean activate) { (void)activate; }
 
 void PS2_BeginRegistration(const char * mapName)
 {
+    ps2::debug::FrameLogMarkMap(mapName);
     ps2::tex::BeginRegistration();
     ps2::mod::BeginRegistration(mapName);
     ps2::view::BeginRegistration();
@@ -647,6 +645,11 @@ void PS2_BeginFrame(float cameraSeparation)
     // charged to the frame after the one they measured, pairing each frame's
     // view cost with the previous frame's wait.
     ps2::debug::ProfileNewFrame();
+
+    // Snapshot that finished frame for the CSV log. Must sit between the
+    // rollover above and gs::BeginFrame below, which is where the draw-stat and
+    // submitted-byte counters it reads get cleared.
+    ps2::debug::FrameLogCapture();
 
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at

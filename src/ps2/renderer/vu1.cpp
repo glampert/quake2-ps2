@@ -577,4 +577,9 @@ int PeakFrameSubmittedBytes()
     return s_peakSubmittedBytes;
 }
 
+int FrameSubmittedBytes()
+{
+    return s_frameSubmittedBytes;
+}
+
 } // namespace ps2::vu1

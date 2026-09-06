@@ -59,6 +59,11 @@ int main()
             Qcommon_Frame(frametime);
         }
 
+        // Deliberately outside the scope above: the dump is tens of milliseconds
+        // of stdout and must not land in the timings it is reporting. The frame
+        // it stretches is dropped rather than logged (see FrameLogFlush).
+        ps2::debug::FrameLogFlush();
+
         oldtime = newtime;
     }
 }

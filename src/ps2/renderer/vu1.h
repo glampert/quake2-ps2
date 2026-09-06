@@ -200,4 +200,9 @@ void BeginFrame();
 // measured before building one. Reported as "ArenaHi" by ps2_show_drawstats.
 int PeakFrameSubmittedBytes();
 
+// The same figure for the frame in progress, before BeginFrame() rolls it over.
+// Read between frames (the frame log samples it in PS2_BeginFrame, ahead of
+// gs::BeginFrame) to get the frame that just finished.
+int FrameSubmittedBytes();
+
 } // namespace ps2::vu1

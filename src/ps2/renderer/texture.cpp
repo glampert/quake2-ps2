@@ -261,10 +261,10 @@ const u16 * MakeCheckerPattern(int variant)
     return buffer;
 }
 
-// The two particle images, generated rather than loaded - Quake 2 never
-// shipped either as a file, ref_gl builds its own in R_InitParticleTexture.
+// The particle image, generated rather than loaded - Quake 2 never shipped one
+// as a file, ref_gl builds its own in R_InitParticleTexture.
 //
-// Both are Alpha8: one coverage byte per texel, sampled through the shared
+// It is Alpha8: one coverage byte per texel, sampled through the shared
 // alpha-ramp CLUT, which supplies the GS modulate identity (128) as the colour
 // and the byte itself as the alpha. So a particle's colour rides entirely on
 // its vertex colour and the image contributes only its shape. The ramp maps
@@ -273,51 +273,23 @@ const u16 * MakeCheckerPattern(int variant)
 // maps to alpha 0, and those texels never reach the blender at all - the
 // batch's alpha test drops them.
 //
-// Both dimensions are powers of two, so no ST rescale is needed
+// The dimension is a power of two, so no ST rescale is needed
 // (unlike the model skins - see StScaleFor).
-constexpr int kParticleDotDim = 8;
-constexpr int kParticleHdDim  = 32;
+constexpr int kParticleDim = 32;
 
-// The classic blocky dot, exactly ref_gl's 8x8 pattern. It sits in the
-// top-left corner because the particle draws as a single triangle covering
-// only that half of the image.
-const u8 * MakeParticleDotPattern()
+// Coverage falling off smoothly from the centre to nothing at the edge, drawn
+// as a full sprite. The falloff is 1 - d^2 over the radius, squared again,
+// which keeps a bright core and a long thin tail instead of the linear ramp's
+// visible disc edge.
+const u8 * MakeParticlePattern()
 {
-    constexpr u8 prtDot[kParticleDotDim][kParticleDotDim] = {
-        { 0,0,0,0,0,0,0,0 },
-        { 0,0,1,1,0,0,0,0 },
-        { 0,1,1,1,1,0,0,0 },
-        { 0,1,1,1,1,0,0,0 },
-        { 0,0,1,1,0,0,0,0 },
-        { 0,0,0,0,0,0,0,0 },
-        { 0,0,0,0,0,0,0,0 },
-        { 0,0,0,0,0,0,0,0 },
-    };
+    constexpr float kCentre = (kParticleDim - 1) * 0.5f;
+    constexpr float kRadius = kParticleDim * 0.5f;
 
-    alignas(16) static u8 s_buffer[kParticleDotDim * kParticleDotDim];
-    for (int y = 0; y < kParticleDotDim; ++y)
+    alignas(16) static u8 s_buffer[kParticleDim * kParticleDim];
+    for (int y = 0; y < kParticleDim; ++y)
     {
-        for (int x = 0; x < kParticleDotDim; ++x)
-        {
-            s_buffer[x + (y * kParticleDotDim)] = prtDot[y][x] ? 255 : 0;
-        }
-    }
-    return s_buffer;
-}
-
-// The soft round particle: coverage falling off smoothly from the centre to
-// nothing at the edge, drawn as a full quad. The falloff is 1 - d^2 over the
-// radius, squared again, which keeps a bright core and a long thin tail
-// instead of the linear ramp's visible disc edge.
-const u8 * MakeParticleHdPattern()
-{
-    constexpr float kCentre = (kParticleHdDim - 1) * 0.5f;
-    constexpr float kRadius = kParticleHdDim * 0.5f;
-
-    alignas(16) static u8 s_buffer[kParticleHdDim * kParticleHdDim];
-    for (int y = 0; y < kParticleHdDim; ++y)
-    {
-        for (int x = 0; x < kParticleHdDim; ++x)
+        for (int x = 0; x < kParticleDim; ++x)
         {
             const float dx = (static_cast<float>(x) - kCentre) / kRadius;
             const float dy = (static_cast<float>(y) - kCentre) / kRadius;
@@ -326,7 +298,7 @@ const u8 * MakeParticleHdPattern()
             falloff = (falloff <= 0.0f) ? 0.0f : (falloff * falloff);
 
             const u32 coverage = static_cast<u32>(falloff * 255.0f);
-            s_buffer[x + (y * kParticleHdDim)] = static_cast<u8>((coverage > 255u) ? 255u : coverage);
+            s_buffer[x + (y * kParticleDim)] = static_cast<u8>((coverage > 255u) ? 255u : coverage);
         }
     }
     return s_buffer;
@@ -344,7 +316,7 @@ public:
     void Init();
     const Texture * Find(const char * name, const ImageType type);
     const Texture & DebugTexture(int variant) const;
-    const Texture & ParticleTexture(bool highQuality) const;
+    const Texture & ParticleTexture() const;
 
     void BeginRegistration();
     void EndRegistration();
@@ -371,7 +343,7 @@ private:
 
     TexturePool m_texturePool;
     const Texture * m_debugTextures[kNumDebugTextures] = {};
-    const Texture * m_particleTextures[2] = {}; // [0] = classic dot, [1] = HD
+    const Texture * m_particleTexture = nullptr;
 
     // Level load/change cycle counter; textures stamped with an older value
     // are the ones EndRegistration() frees. See tex::BeginRegistration().
@@ -599,9 +571,9 @@ const Texture & TextureCache::DebugTexture(int variant) const
     return *m_debugTextures[variant];
 }
 
-const Texture & TextureCache::ParticleTexture(bool highQuality) const
+const Texture & TextureCache::ParticleTexture() const
 {
-    return *m_particleTextures[highQuality ? 1 : 0];
+    return *m_particleTexture;
 }
 
 Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,
@@ -712,27 +684,16 @@ void TextureCache::Init()
         m_debugTextures[i]->MarkPixelsDirty();
     }
 
-    // The particle images are registered outside the table above so their
-    // filtering can be set per image: the classic dot wants nearest, keeping
-    // it the hard-edged blocky square Quake 2 draws, while the HD one is a
-    // smooth falloff that would band badly without bilinear.
-    Texture & particleDot = Register("pics/particle.pcx", MakeParticleDotPattern(),
-                                     kParticleDotDim, kParticleDotDim,
-                                     PixelFormat::Alpha8, TexComponents::RGBA,
-                                     ImageType::Pic, TexFlags::Builtin);
-    particleDot.magFilter = TexFilter::Nearest;
-    particleDot.minFilter = TexFilter::Nearest;
-    particleDot.MarkPixelsDirty();
-    m_particleTextures[0] = &particleDot;
-
-    Texture & particleHd = Register("pics/particle_hd.pcx", MakeParticleHdPattern(),
-                                    kParticleHdDim, kParticleHdDim,
-                                    PixelFormat::Alpha8, TexComponents::RGBA,
-                                    ImageType::Pic, TexFlags::Builtin);
-    particleHd.magFilter = TexFilter::Linear;
-    particleHd.minFilter = TexFilter::Linear;
-    particleHd.MarkPixelsDirty();
-    m_particleTextures[1] = &particleHd;
+    // The particle image is registered outside the table above so its filtering
+    // can be set: the smooth falloff would band badly without bilinear.
+    Texture & particle = Register("pics/particle.pcx", MakeParticlePattern(),
+                                  kParticleDim, kParticleDim,
+                                  PixelFormat::Alpha8, TexComponents::RGBA,
+                                  ImageType::Pic, TexFlags::Builtin);
+    particle.magFilter = TexFilter::Linear;
+    particle.minFilter = TexFilter::Linear;
+    particle.MarkPixelsDirty();
+    m_particleTexture = &particle;
 
     Com_Printf("Texture cache initialised: %u built-in images registered.\n", m_texturePool.UsedCount());
 }
@@ -780,9 +741,9 @@ const Texture & DebugTexture(int variant)
     return s_cache.DebugTexture(variant);
 }
 
-const Texture & ParticleTexture(bool highQuality)
+const Texture & ParticleTexture()
 {
-    return s_cache.ParticleTexture(highQuality);
+    return s_cache.ParticleTexture();
 }
 
 void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT)

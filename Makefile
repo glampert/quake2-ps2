@@ -181,7 +181,7 @@ CXX_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(CXX_SRC:.cpp=.o))
 # None of the EE compiler flags reach this toolchain, so the output is identical
 # in both configs: build it once into build/vu/ and share it.
 VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
-VCL_FILES = textured_triangles.vcl lerped_triangles.vcl
+VCL_FILES = textured_triangles.vcl lerped_triangles.vcl particles.vcl
 VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
 # Standalone command line tools under src/tools, built with the HOST C++ compiler

@@ -70,7 +70,6 @@ static const cvar_t * s_skipBrushModels   = nullptr;
 static const cvar_t * s_skipSprites       = nullptr;
 static const cvar_t * s_skipEntities      = nullptr;
 static const cvar_t * s_skipParticles     = nullptr;
-static const cvar_t * s_hdParticles       = nullptr;
 static const cvar_t * s_forceNullModels   = nullptr;
 static const cvar_t * s_skipWeaponModel   = nullptr;
 static const cvar_t * s_dynamicLightmaps  = nullptr;
@@ -2018,120 +2017,64 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 // Particles
 // ------------------------------------------------------------------------------------------------
 
-// The client's particle list as camera-facing billboards. Two shapes, picked
-// by ps2_hd_particles:
+// The client's particle list as camera-facing billboards, expanded entirely on
+// VU1: the EE writes one quadword per particle - packed colour and world origin
+// - and transforms nothing.
 //
-//  - The classic Quake 2 particle is a SINGLE triangle whose UVs run
-//    0.0625 .. 1.0625 across an 8x8 image with a dot in its top-left corner.
-//    The triangle covers exactly the half of the image holding the dot, and
-//    the half-texel offset centres it. Three vertices per particle.
-//  - The HD particle is a full quad over the soft round sprite: six vertices
-//    and twice the fill, but no hard pixel edges when it scales up close.
+// Each particle is a soft round sprite anchored at its origin and spanning the
+// camera's (up + right), blown up 1.5x as ref_gl does. Because up and right are
+// orthogonal to forward, every corner shares the anchor's depth, so the quad
+// projects to an axis-aligned screen rectangle and draws as a single GS sprite
+// (see particles.vcl). The distance blow-up that keeps far particles a pixel
+// wide rides along in the microprogram.
 //
-// Both are blended, and DrawFlags::Blended masks depth writes, which is what
-// keeps a cloud of them from z-fighting itself (ref_gl's glDepthMask(FALSE)).
-//
-// TODO: Potential candidate to be moved to the VU1. Could submit a single
-// vertex with particle colour and expand to a triangle/quad on the VU.
+// Blended, and DrawFlags::Blended masks depth writes, which is what keeps a
+// cloud of them from z-fighting itself (ref_gl's glDepthMask(FALSE)).
 void RenderParticles(const refdef_t & viewDef)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::Particles);
 
-    const int numParticles = viewDef.num_particles;
+    const int numParticles = (viewDef.num_particles < MAX_PARTICLES) ? viewDef.num_particles : MAX_PARTICLES;
     if (numParticles <= 0 || s_skipParticles->value != 0.0f)
     {
         return;
     }
 
-    const bool highQuality = (s_hdParticles->value != 0.0f);
-    const tex::Texture & texture = tex::ParticleTexture(highQuality);
+    const tex::Texture & texture = tex::ParticleTexture();
 
-    // ref_gl's 1.5x blow-up of the camera basis.
-    vec3_t up, right;
-    VectorScale(s_upVec,    1.5f, up);
-    VectorScale(s_rightVec, 1.5f, right);
-
-    SurfaceDrawState state = {
-        .mvp   = &s_viewProjMatrix, // Billboards are built in world space.
-        .eye   = s_eyePosition,
-        .rgba  = 0, // Per particle; filled in below.
-        .flags = vu1::DrawFlags::Blended,
-        .cullBackFaces = false, // Camera-facing, like sprites: nothing to cull.
-        .vertexAlpha   = false
+    // The billboard's diagonal: ref_gl's 1.5x blow-up of the camera basis, and
+    // the only direction the microprogram needs, since the sprite is described
+    // by its anchor corner and the opposite one.
+    const math::Vec3 quadOffset = {
+        (s_upVec[0] + s_rightVec[0]) * 1.5f,
+        (s_upVec[1] + s_rightVec[1]) * 1.5f,
+        (s_upVec[2] + s_rightVec[2]) * 1.5f,
     };
+
+    // One qword per particle, gathered here and referenced in place by the DMA.
+    // File-level static for the same reason the triangle batches are: far too
+    // large for the stack, and draws are synchronous, so one buffer serves the
+    // whole list.
+    alignas(16) static vu1::ParticleVertex s_particles[MAX_PARTICLES];
 
     for (int i = 0; i < numParticles; ++i)
     {
         const particle_t & p = viewDef.particles[i];
 
-        // ref_gl's "hack a scale up to keep particles from disappearing":
-        // past 20 units the billboard grows with distance so it stays wide
-        // enough to cover a pixel.
-        const float distance = ((p.origin[0] - viewDef.vieworg[0]) * s_forwardVec[0]) +
-                               ((p.origin[1] - viewDef.vieworg[1]) * s_forwardVec[1]) +
-                               ((p.origin[2] - viewDef.vieworg[2]) * s_forwardVec[2]);
-        const float scale = (distance < 20.0f) ? 1.0f : (1.0f + (distance * 0.004f));
-
         const float alpha = (p.alpha < 0.0f) ? 0.0f : ((p.alpha > 1.0f) ? 1.0f : p.alpha);
-        state.rgba = (global_palette[p.color & 0xFF] & 0x00FFFFFF) |
-                     (static_cast<u32>(alpha * 128.0f) << 24);
+        const u32   color = (global_palette[p.color & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24); 
 
-        ++s_drawStats.particles;
-
-        if (highQuality)
-        {
-            // Corner offsets along (up, right), and the matching UVs.
-            static const struct { float u, r, s, t; } kQuad[4] = {
-                { 0.0f, 0.0f, 0.0f, 0.0f },
-                { 1.0f, 0.0f, 0.0f, 1.0f },
-                { 1.0f, 1.0f, 1.0f, 1.0f },
-                { 0.0f, 1.0f, 1.0f, 0.0f },
-            };
-
-            ClipVertex quad[4];
-            for (int c = 0; c < 4; ++c)
-            {
-                quad[c].pos = {
-                    p.origin[0] + (((up[0] * kQuad[c].u) + (right[0] * kQuad[c].r)) * scale),
-                    p.origin[1] + (((up[1] * kQuad[c].u) + (right[1] * kQuad[c].r)) * scale),
-                    p.origin[2] + (((up[2] * kQuad[c].u) + (right[2] * kQuad[c].r)) * scale),
-                    1.0f
-                };
-                quad[c].st = { kQuad[c].s, kQuad[c].t, 0.0f, 0.0f };
-            }
-
-            ClipVertex triangle[3] = { quad[0], quad[1], quad[2] };
-            GatherTriangle(triangle, texture, state);
-
-            triangle[0] = quad[2];
-            triangle[1] = quad[3];
-            triangle[2] = quad[0];
-            GatherTriangle(triangle, texture, state);
-        }
-        else
-        {
-            constexpr float kUvLo = 0.0625f; // Half a texel into the 8x8 image...
-            constexpr float kUvHi = 1.0625f; // ...and one whole image across.
-
-            ClipVertex triangle[3];
-            triangle[0].pos = { p.origin[0], p.origin[1], p.origin[2], 1.0f };
-            triangle[0].st  = { kUvLo, kUvLo, 0.0f, 0.0f };
-
-            triangle[1].pos = { p.origin[0] + (up[0] * scale),
-                                p.origin[1] + (up[1] * scale),
-                                p.origin[2] + (up[2] * scale), 1.0f };
-            triangle[1].st  = { kUvHi, kUvLo, 0.0f, 0.0f };
-
-            triangle[2].pos = { p.origin[0] + (right[0] * scale),
-                                p.origin[1] + (right[1] * scale),
-                                p.origin[2] + (right[2] * scale), 1.0f };
-            triangle[2].st  = { kUvLo, kUvHi, 0.0f, 0.0f };
-
-            GatherTriangle(triangle, texture, state);
-        }
+        vu1::ParticleVertex & dst = s_particles[i];
+        dst.rgba = color;
+        dst.x = p.origin[0];
+        dst.y = p.origin[1];
+        dst.z = p.origin[2];
     }
 
-    FlushScratch(texture, state);
+    s_drawStats.particles += numParticles;
+    ++s_drawStats.drawBatches;
+
+    vu1::DrawParticles(s_viewProjMatrix, texture, quadOffset, s_particles, numParticles, vu1::DrawFlags::Blended);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2217,7 +2160,6 @@ void Init()
     s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0", 0);
     s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0", 0);
     s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0", 0);
-    s_hdParticles       = Cvar_Get("ps2_hd_particles",        "1", 0); // 1 = soft round quads instead of the classic dot.
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0", 0); // Debug: draw every entity as the octahedron placeholder.
     s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0", 0);
     s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "1", 0); // Uses the RenderDLights flare fallback path when = 0.

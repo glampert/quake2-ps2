@@ -15,6 +15,10 @@ namespace ps2::tex { struct Texture; }
 
 namespace ps2::vu1 {
 
+// ------------------------------------------------------------------------------------------------
+// Utilities
+// ------------------------------------------------------------------------------------------------
+
 // Declares the linker symbols bracketing an assembled VU microprogram in the
 // ELF's .vudata section. 'progName' must match the #vuprog name in the .vcl.
 // The instruction count is in 64-bit VU instructions - the unit MPG upload
@@ -22,28 +26,8 @@ namespace ps2::vu1 {
 #define PS2_DECLARE_VU_MICROPROGRAM(progName) \
     extern "C" u32 progName##_CodeStart __attribute__((section(".vudata"))); \
     extern "C" u32 progName##_CodeEnd   __attribute__((section(".vudata"))); \
-    inline u32 progName##_InstructionCount() { return u32((&progName##_CodeEnd - &progName##_CodeStart) / 2); } \
+    inline u32 progName##_InstructionCount()  { return u32((&progName##_CodeEnd - &progName##_CodeStart) / 2); } \
     inline ps2::vu1::VUCode progName##_Code() { return { &progName##_CodeStart, &progName##_CodeEnd }; }
-
-// One triangle vertex, 2 qwords, matching the microprogram's input layout.
-// The packed color must sit in the first word of its qword: the microprogram
-// raw-copies it into a GS A+D RGBAQ qword with a single masked store, and
-// only word 0 is reachable that way (swizzling the raw bits through the FMAC
-// instead would flush denormal color patterns to zero).
-struct alignas(16) DrawVertex
-{
-    float x, y, z, w; // model-space position; w must be 1.0f
-    u32   rgba;       // packed color, use PackColorRGBA()
-    float s, t, q;    // texture coords; q must be 1.0f
-};
-static_assert(sizeof(DrawVertex) == 32, "DrawVertex must be exactly 2 qwords");
-
-// Packs 0-255 channels into DrawVertex::rgba, the GS native RGBAQ byte order
-// (r in the low byte). Alpha 0x80 = 1.0 on the GS.
-constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
-{
-    return r | (g << 8) | (b << 16) | (a << 24);
-}
 
 // The NDC guard band the microprogram accepts: a triangle with any vertex at
 // |x/w| or |y/w| beyond this (or outside the exact [-1, +1] z range) is
@@ -129,9 +113,29 @@ enum class FaceCull : u32
     Positive = 2,
 };
 
-// Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory
-// and programs the double-buffer registers. Call once, after gs::Init().
-void Init();
+// Packs 0-255 channels into DrawVertex::rgba, the GS native RGBAQ byte order
+// (r in the low byte). Alpha 0x80 = 1.0 on the GS.
+constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
+{
+    return r | (g << 8) | (b << 16) | (a << 24);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Generic VU1 triangles (static world geometry)
+// ------------------------------------------------------------------------------------------------
+
+// One triangle vertex, 2 qwords, matching the microprogram's input layout.
+// The packed color must sit in the first word of its qword: the microprogram
+// raw-copies it into a GS A+D RGBAQ qword with a single masked store, and
+// only word 0 is reachable that way (swizzling the raw bits through the FMAC
+// instead would flush denormal color patterns to zero).
+struct alignas(16) DrawVertex
+{
+    float x, y, z, w; // model-space position; w must be 1.0f
+    u32   rgba;       // packed color, use PackColorRGBA()
+    float s, t, q;    // texture coords; q must be 1.0f
+};
+static_assert(sizeof(DrawVertex) == 32, "DrawVertex must be exactly 2 qwords");
 
 // Draws a batch of triangles (3 verts each, triangle list) through VU1 with
 // the given transform and texture (uploaded to GS VRAM on demand). Any whole-
@@ -184,8 +188,46 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          int vertCount, FaceCull faceCull = FaceCull::None, DrawFlags flags = DrawFlags::None);
 
 // ------------------------------------------------------------------------------------------------
-// Per-frame submission size, for sizing the frame arena
+// Particles
 // ------------------------------------------------------------------------------------------------
+
+// One particle billboard, 1 qword. The packed color must sit in the first word
+// for the same reason DrawVertex's does: the microprogram raw-copies it into an
+// A+D RGBAQ qword, and only word 0 is reachable that way. The position takes the
+// remaining three words and the microprogram reads it from .yzw.
+struct alignas(16) ParticleVertex
+{
+    u32   rgba;    // packed color, use PackColorRGBA()
+    float x, y, z; // world-space position of the billboard's anchor corner
+};
+static_assert(sizeof(ParticleVertex) == 16, "ParticleVertex must be exactly 1 qword");
+
+// Draws camera-facing particle billboards as GS sprites, expanded entirely on
+// VU1 - the caller transforms nothing.
+//
+// 'quadOffset' is the world-space vector from a particle's anchor corner to its
+// opposite corner: the camera's (up + right), pre-scaled by whatever blow-up the
+// caller wants (ref_gl uses 1.5). It must be orthogonal to the view axis, which
+// is what makes every corner share the centre's depth and lets the billboard
+// draw as a single axis-aligned sprite; DrawParticles transforms it once per
+// call as a direction.
+//
+// The billboard also grows with distance the way ref_gl's particles do. The
+// texture is sampled corner to corner through UV (no perspective correction,
+// which a screen-aligned sprite does not need).
+//
+// Chunking, texture residency and synchronicity as DrawTriangles.
+void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
+                   const math::Vec3 & quadOffset, const ParticleVertex * particles,
+                   int count, DrawFlags flags = DrawFlags::Blended);
+
+// ------------------------------------------------------------------------------------------------
+// VU1 initialization and stats tracking
+// ------------------------------------------------------------------------------------------------
+
+// Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory
+// and programs the double-buffer registers. Call once, after gs::Init().
+void Init();
 
 // Rolls the per-frame byte counter into the high-water mark and clears it.
 // Called from gs::BeginFrame().

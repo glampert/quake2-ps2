@@ -260,12 +260,11 @@ constexpr int kNumDebugTextures = PS2_QUAKE_DEBUG ? 6 : 1;
 // several distinct textures to exercise VRAM streaming.
 const Texture & DebugTexture(int variant = 0);
 
-// The built-in particle images, generated at Init rather than loaded (Quake 2
-// ships neither as a file). 'highQuality' picks the soft round sprite drawn as
-// a quad over the classic 8x8 dot drawn as a single triangle. Both carry their
-// shape in alpha with every texel's colour at the modulate identity, so the
-// particle's colour comes entirely from its vertices.
-const Texture & ParticleTexture(bool highQuality);
+// The built-in particle image, generated at Init rather than loaded (Quake 2
+// ships neither as a file). Carries its shape in alpha with every texel's
+// colour at the modulate identity, so the particle's colour comes entirely
+// from its vertices.
+const Texture & ParticleTexture();
 
 // Converts image-normalized texture coordinates - 0..1 spanning the image,
 // which is what Quake's MD2 glcmds store - into the GS's normalized ST space.

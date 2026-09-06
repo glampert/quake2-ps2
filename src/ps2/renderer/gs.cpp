@@ -38,8 +38,10 @@
 #include "ps2/renderer/render_packet.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
+#include "ps2/renderer/vu1.h"
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
+#include "ps2/renderer/render_profile.h"
 
 #include <dma.h>
 #include <gs_gp.h>
@@ -439,12 +441,16 @@ void BeginFrame()
     clear.Finish();
 
     clear.SendNormal();
-    clear.Wait();
-    clear.WaitFinish();
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+        clear.Wait();
+        clear.WaitFinish();
+    }
 
     // The GS is idle now, so nothing queued can reference reused VRAM anymore.
     s_vramReuseHazard = false;
     vram::BeginFrame();
+    vu1::BeginFrame();
 }
 
 // Opens the pending 2D batch on demand: the first 2D primitive after a flush
@@ -481,9 +487,12 @@ void FlushPending2D()
     RenderPacket & pkt = FramePacket();
     pkt.Finish();
 
-    pkt.Wait();
-    pkt.SendNormal();
-    pkt.WaitFinish();
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+        pkt.Wait();
+        pkt.SendNormal();
+        pkt.WaitFinish();
+    }
 
     s_vramReuseHazard = false; // GS idle again
 }
@@ -547,6 +556,8 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
 // the GS has finished rasterizing them).
 static void SyncGsBeforeVramReuse()
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+
     if (s_in2D)
     {
         RenderPacket & pkt = FramePacket();
@@ -709,7 +720,10 @@ void EnsureTextureResident(const tex::Texture & texture)
     pkt.TextureFlush();
 
     pkt.SendChain();
-    pkt.Wait();
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+        pkt.Wait();
+    }
 
     vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count
 }
@@ -875,7 +889,7 @@ void EndFrame()
     FlushPending2D();
 
     {
-        PS2_PROFILE_SCOPED("VSync", kScreenOverlay, 1);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
         graph_wait_vsync();
     }
 

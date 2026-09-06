@@ -163,8 +163,8 @@ void DrawFpsCounter()
 }
 
 // Per-event frame time overlay, stacked under the FPS counter in the top-right
-// corner: one line per PS2_PROFILE_SCOPED site flagged kScreenOverlay, showing
-// what that site cost over one frame.
+// corner: one line per PS2_PROFILE_SCOPEDPS2_PROFILE_SCOPED_EVENT site flagged
+// kScreenOverlay, showing what that site cost over one frame.
 //
 // The numbers are the previous frame's, not a running total or an average:
 // PS2_BeginFrame rolls the accumulators over, so the frame being reported is
@@ -182,7 +182,9 @@ void DrawProfileOverlay()
     }
 
     // Cap the panel so a heavily instrumented build can't run off the screen.
-    constexpr int kMaxRows = 12;
+    // 12 overlay events today (FullFrame, the nine view tags, GSWait, VSync);
+    // the slack is for probes added while chasing a specific frame cost.
+    constexpr int kMaxRows = 16;
 
     const ps2::debug::ProfileEvent * rows[kMaxRows];
     int numRows = 0;
@@ -416,6 +418,10 @@ void DrawDrawStatsOverlay()
         // oversized and can be cut.
         { "DmaPeak", ps2::gs::FramePacketPeakQwords()     },
         { "DmaCap",  ps2::gs::FramePacketCapacityQwords() },
+        // Most REF'd payload bytes any one frame has submitted to VU1. This is
+        // the per-frame demand the frame arena will have to satisfy, so it is
+        // what sizes it - doubled, since the arena is buffered across frames.
+        { "ArenaHi", ps2::vu1::PeakFrameSubmittedBytes() },
     };
 
     constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.

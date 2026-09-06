@@ -92,6 +92,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/render_view.cpp      \
 	ps2/renderer/render_md2.cpp       \
 	ps2/renderer/render_sky.cpp       \
+	ps2/renderer/render_profile.cpp   \
 	ps2/renderer/vid.cpp              \
 	ps2/renderer/ref.cpp              \
 	ps2/renderer/vu1.cpp              \

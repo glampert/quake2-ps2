@@ -21,6 +21,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/render_view.h"
 #include "ps2/renderer/render_md2.h"
 #include "ps2/renderer/render_sky.h"
@@ -32,7 +33,6 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
-#include "ps2/debug/profile.h"
 #include "ps2/builtin/builtin.h" // global_palette (beam and particle colours)
 
 #include <cmath>
@@ -84,24 +84,6 @@ static const cvar_t * s_polyblend         = nullptr;
 // every frame for the game code (hence non-const). Registered by the client
 // (cl_main.c), which forwards it to the server in each usercmd.
 static cvar_t * s_lightLevel = nullptr;
-
-// Sort order of our profile events/tags in the on-screen overlay. Numbering
-// starts at 2: sort keys 0 and 1 are reserved for the "Frame" root in main.cpp
-// and "VSync" in gs.cpp.
-enum ProfTag : u8
-{
-    ProfTag_View = 2, // 0=Frame, 1=VSync
-    ProfTag_World,
-    ProfTag_Vis,
-    ProfTag_TexChains,
-    ProfTag_LmapChains,
-    ProfTag_Entities,
-    ProfTag_Particles,
-    ProfTag_AlphaSurfs,
-    ProfTag_SkyBox,
-};
-
-#define PROFILE(tag) PS2_PROFILE_SCOPED(#tag, kScreenOverlay, ProfTag_##tag)
 
 // ------------------------------------------------------------------------------------------------
 // Frame state
@@ -1147,7 +1129,7 @@ inline u32 AlphaSurfaceColor(const int texFlags)
 // hands us for free.
 void RenderAlphaSurfaces()
 {
-    PROFILE(AlphaSurfs);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::AlphaSurfs);
 
     if (s_alphaSurfaceCount == 0 || s_skipAlphaSurfaces->value != 0.0f)
     {
@@ -1398,7 +1380,7 @@ void PushDLights(const refdef_t & viewDef, const mod::ModelInstance & world)
 
 void RenderWorldModel(const refdef_t & viewDef)
 {
-    PROFILE(World);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::World);
 
     if (viewDef.rdflags & RDF_NOWORLDMODEL)
     {
@@ -1414,7 +1396,7 @@ void RenderWorldModel(const refdef_t & viewDef)
 
     // World visibility pass (bsp traversal):
     {
-        PROFILE(Vis);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::Vis);
         sky::ClearBounds();
         PushDLights(viewDef, *world);
         SetUpViewClusters(viewDef, *world);
@@ -1428,13 +1410,13 @@ void RenderWorldModel(const refdef_t & viewDef)
     // followed by R_BlendLightmaps(). Both passes draw the same triangles with
     // the same transform, so they share one draw state.
     {
-        PROFILE(TexChains);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::TexChains);
         DrawTextureChains(state);
     }
 
     // Only profile world lightmaps here.
     {
-        PROFILE(LmapChains);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::LmChains);
         DrawLightmapChains(state);
     }
 
@@ -1442,7 +1424,7 @@ void RenderWorldModel(const refdef_t & viewDef)
     // above has filled the depth buffer, so the sky only costs fill where it
     // is actually visible through it.
     {
-        PROFILE(SkyBox);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::Sky);
         sky::DrawSkyBox(viewDef, s_viewProjMatrix);
     }
 }
@@ -2053,7 +2035,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 // vertex with particle colour and expand to a triangle/quad on the VU.
 void RenderParticles(const refdef_t & viewDef)
 {
-    PROFILE(Particles);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::Particles);
 
     const int numParticles = viewDef.num_particles;
     if (numParticles <= 0 || s_skipParticles->value != 0.0f)
@@ -2158,7 +2140,7 @@ void RenderParticles(const refdef_t & viewDef)
 
 void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
 {
-    PROFILE(Entities);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::Entities);
 
     if (s_skipEntities->value != 0.0f)
     {
@@ -2361,7 +2343,7 @@ bool FrustumCullsPoints(const vec3_t * points, int numPoints)
 
 void RenderFrame(const refdef_t & viewDef)
 {
-    PROFILE(View);
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::View);
 
     PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
     s_drawStats              = {};

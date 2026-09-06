@@ -20,10 +20,10 @@ constexpr u32 kNominalCyclesPerMillisec = 294912;
 
 enum ProfileFlags : u8
 {
-    kProfileNoFlags = 0,
+    kProfileFlagsNone = 0,
 
     // Adds profile event to the on-screen profile overlay.
-    kScreenOverlay  = 1 << 0,
+    kScreenOverlay = 1 << 0,
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -193,11 +193,34 @@ inline const char * ProfileFormatMillisec(CpuCycles, char * outBuff, size_t) { r
             (&PS2_PROFILE_CONCAT(s_profEvent, __LINE__))
 
     // Same thing, labelled with the enclosing function's name.
-    #define PS2_PROFILE_FUNCTION() PS2_PROFILE_SCOPED(__func__, kProfileNoFlags, 0)
+    #define PS2_PROFILE_FUNCTION() PS2_PROFILE_SCOPED(__func__, kProfileFlagsNone, 0)
+
+    // A single event that several scattered sites charge into, so the overlay
+    // shows one total rather than a row per site. PS2_PROFILE_SCOPED cannot do
+    // this: its event is a function-local static keyed on __LINE__, so two
+    // sites sharing a label are still two rows.
+    //
+    // Declare in a header, define in exactly one .cpp, then wrap sites with
+    // PS2_PROFILE_SCOPED_EVENT. The event is a namespace-scope aggregate with
+    // an all-constant initializer, so it costs no dynamic initialization.
+    #define PS2_PROFILE_DECLARE_EVENT(name) \
+        extern ps2::debug::ProfileEvent name
+
+    #define PS2_PROFILE_DEFINE_EVENT(name, label, flags, sortKey) \
+        ps2::debug::ProfileEvent name = PS2_PROFILE_EVENT_INIT(label, ps2::debug::flags, sortKey)
+
+    #define PS2_PROFILE_SCOPED_EVENT(name) \
+        const ps2::debug::ProfileEventScoped PS2_PROFILE_CONCAT(profScope, __LINE__) (&(name))
 
 #else // PS2_QUAKE_PROFILE
 
     #define PS2_PROFILE_SCOPED(label, flags, sortKey)
     #define PS2_PROFILE_FUNCTION()
+
+    // The declaration has to stay a declaration of *something* so headers using
+    // it still parse; an enum keeps it typed, storage-free and unreferenced.
+    #define PS2_PROFILE_DECLARE_EVENT(name)                       enum : int { name##_ProfilingDisabled = 0 }
+    #define PS2_PROFILE_DEFINE_EVENT(name, label, flags, sortKey) enum : int { name##_ProfilingDisabledDef = 0 }
+    #define PS2_PROFILE_SCOPED_EVENT(name)
 
 #endif // PS2_QUAKE_PROFILE

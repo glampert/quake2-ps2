@@ -36,6 +36,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/render_profile.h"
 
 #include <dma.h>
 #include <draw.h>
@@ -170,6 +171,12 @@ static_assert(sizeof(FrameConstants) == 7 * 16, "Must match the VU memory layout
 static FrameConstants s_constants;
 static VifPacket s_drawPacket;
 static bool s_initialized = false;
+
+// REF'd payload bytes submitted this frame, and the high-water across the run.
+// Sizes the frame arena that will replace the per-module gather statics; see
+// vu1::PeakFrameSubmittedBytes.
+static int s_frameSubmittedBytes = 0;
+static int s_peakSubmittedBytes  = 0;
 
 // Micro memory entry point of the lerped-triangles program (64-bit
 // instruction units; the textured program sits at 0). Set by Init().
@@ -398,6 +405,11 @@ void SendChainAndWait(VifPacket & pkt)
     pkt.AddFlush();
     pkt.AddEndTag();
     pkt.Send();
+
+    // The stall this whole batch exists to pay for: one per drawBatches, and the
+    // single largest recoverable cost in the renderer. Charged to the shared
+    // GSWait total (render_profile.h) alongside the GIF-side waits in gs.cpp.
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
     pkt.Wait();
 }
 
@@ -419,6 +431,11 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 
     pkt.Reset();
     pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
+
+    // Every chain opens with its own constants block, so an arena would need one
+    // per draw call (and one more per mid-call overflow flush) - count them here
+    // rather than at the Draw* entry points, which would miss the reopens.
+    s_frameSubmittedBytes += static_cast<int>(sizeof(FrameConstants));
 }
 
 } // namespace
@@ -476,6 +493,8 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     const int ctx = gs::CurrentContext();
 
+    s_frameSubmittedBytes += vertCount * static_cast<int>(sizeof(DrawVertex));
+
     VifPacket & pkt = s_drawPacket;
     BeginDrawChain(pkt, mvp, flags);
 
@@ -517,6 +536,10 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     const int ctx = gs::CurrentContext();
 
+    // Both streams, plus the odd-count pad element the position DMA carries.
+    s_frameSubmittedBytes += (vertCount + (vertCount & 1)) * static_cast<int>(sizeof(LerpVertexBytes))
+                           + vertCount * static_cast<int>(sizeof(LerpDrawAttrib));
+
     VifPacket & pkt = s_drawPacket;
     BeginDrawChain(pkt, mvp, flags);
 
@@ -538,6 +561,20 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     }
 
     SendChainAndWait(pkt);
+}
+
+void BeginFrame()
+{
+    if (s_frameSubmittedBytes > s_peakSubmittedBytes)
+    {
+        s_peakSubmittedBytes = s_frameSubmittedBytes;
+    }
+    s_frameSubmittedBytes = 0;
+}
+
+int PeakFrameSubmittedBytes()
+{
+    return s_peakSubmittedBytes;
 }
 
 } // namespace ps2::vu1

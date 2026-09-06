@@ -8,7 +8,7 @@
 
 #include "ps2/common.h"
 #include "ps2/system/iop_boot.h"
-#include "ps2/debug/profile.h"
+#include "ps2/renderer/render_profile.h"
 #include "ps2/debug/exception_handler.h"
 
 int main()
@@ -55,7 +55,7 @@ int main()
 
         // The whole frame - server, client, renderer and the vsync wait.
         {
-            PS2_PROFILE_SCOPED("Frame", kScreenOverlay, 0);
+            PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Frame);
             Qcommon_Frame(frametime);
         }
 

@@ -183,4 +183,21 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
                          int vertCount, FaceCull faceCull = FaceCull::None, DrawFlags flags = DrawFlags::None);
 
+// ------------------------------------------------------------------------------------------------
+// Per-frame submission size, for sizing the frame arena
+// ------------------------------------------------------------------------------------------------
+
+// Rolls the per-frame byte counter into the high-water mark and clears it.
+// Called from gs::BeginFrame().
+void BeginFrame();
+
+// Most bytes any single frame has ever handed to the DMA as REF'd payload:
+// the vertex streams of every batch plus one FrameConstants block per draw
+// call. Both draw paths funnel through here, so unlike DrawStats::trisDrawn
+// (which the MD2 PushVertex paths bypass) this counts everything.
+//
+// This is exactly the per-frame demand a frame arena would have to satisfy,
+// measured before building one. Reported as "ArenaHi" by ps2_show_drawstats.
+int PeakFrameSubmittedBytes();
+
 } // namespace ps2::vu1

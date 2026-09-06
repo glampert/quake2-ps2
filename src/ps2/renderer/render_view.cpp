@@ -120,6 +120,9 @@ static math::Mat4 s_weaponViewProjMatrix = {};
 // View frustum side planes (left, right, bottom, top) for bounding-box culling.
 static cplane_t s_frustum[4] = {};
 
+// The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
+alignas(16) static math::Mat4 s_frustumPlanes = {};
+
 // Wall texture animation frame (viewDef.time * 2, as in ref_gl).
 static int s_textureAnimFrame = 0;
 
@@ -239,6 +242,17 @@ void SetUpFrustum(const refdef_t & viewDef)
         plane.dist     = DotProduct(viewDef.vieworg, plane.normal);
         plane.signbits = static_cast<byte>(SignBitsForPlane(plane));
     }
+
+    // The same four planes as a transform, so a point's distance to all of them
+    // comes out of one VU0 pass instead of four scalar dot products: column p
+    // holds plane p's normal with -dist in the translation row, which makes
+    // component p of (point * this) exactly dot(point, n[p]) - dist[p].
+    s_frustumPlanes = {{
+        { s_frustum[0].normal[0], s_frustum[1].normal[0], s_frustum[2].normal[0], s_frustum[3].normal[0] },
+        { s_frustum[0].normal[1], s_frustum[1].normal[1], s_frustum[2].normal[1], s_frustum[3].normal[1] },
+        { s_frustum[0].normal[2], s_frustum[1].normal[2], s_frustum[2].normal[2], s_frustum[3].normal[2] },
+        { -s_frustum[0].dist,     -s_frustum[1].dist,     -s_frustum[2].dist,     -s_frustum[3].dist     },
+    }};
 }
 
 // True when the box is completely outside the frustum and must not draw.
@@ -2257,7 +2271,7 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
     }
 }
 
-bool FrustumCullsPoints(const vec3_t * points, int numPoints)
+bool FrustumCullsPoints(const math::Vec4 * points, int numPoints)
 {
     // Each point's mask has one bit per side plane it is outside of; the AND
     // across all points is nonzero exactly when one plane excludes them all.
@@ -2265,14 +2279,16 @@ bool FrustumCullsPoints(const vec3_t * points, int numPoints)
     u32 aggregate = ~0u;
     for (int i = 0; i < numPoints; ++i)
     {
+        // One transform yields all four signed plane distances at once; the
+        // point's w must be 1 for the -dist row to land. Callers build these
+        // corners with w = 1 already (see ShouldCullEntity).
+        const math::Vec4 distances = math::Transform(points[i], s_frustumPlanes);
+
         u32 mask = 0;
-        for (int p = 0; p < 4; ++p)
-        {
-            if (DotProduct(points[i], s_frustum[p].normal) - s_frustum[p].dist < 0.0f)
-            {
-                mask |= (1u << p);
-            }
-        }
+        if (distances.x < 0.0f) { mask |= (1u << 0); }
+        if (distances.y < 0.0f) { mask |= (1u << 1); }
+        if (distances.z < 0.0f) { mask |= (1u << 2); }
+        if (distances.w < 0.0f) { mask |= (1u << 3); }
 
         aggregate &= mask;
         if (aggregate == 0)
@@ -2281,6 +2297,31 @@ bool FrustumCullsPoints(const vec3_t * points, int numPoints)
         }
     }
     return true;
+}
+
+SphereCull FrustumCullsSphere(const vec3_t center, const float radius)
+{
+    // The side planes all pass through the eye and carry unit normals (they are
+    // rotations of the view basis - see SetUpFrustum), so the dot product minus
+    // 'dist' is a true signed distance and comparing it against a radius is
+    // exact rather than an approximation.
+    bool allInside = true;
+
+    for (const cplane_t & plane : s_frustum)
+    {
+        const float distance = DotProduct(center, plane.normal) - plane.dist;
+
+        if (distance < -radius)
+        {
+            return SphereCull::Outside; // Wholly behind this plane.
+        }
+        if (distance < radius)
+        {
+            allInside = false; // Crosses it; some corner could be either side.
+        }
+    }
+
+    return allInside ? SphereCull::Inside : SphereCull::Straddling;
 }
 
 void RenderFrame(const refdef_t & viewDef)

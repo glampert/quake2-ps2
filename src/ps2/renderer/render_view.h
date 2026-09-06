@@ -47,7 +47,26 @@ math::Mat4 MakeEntityMatrix(const entity_t & entity, bool flipPitchAngle);
 // True when some frustum side plane has every one of the points on its
 // outside - the conservative cull test for rotated (non-axis-aligned)
 // bounding boxes, fed their world-space corners (ref_gl's R_CullAliasModel).
-bool FrustumCullsPoints(const vec3_t * points, int numPoints);
+//
+// Takes quadword vectors rather than packed vec3_t: callers build these corners
+// themselves, so they may as well be the shape VU0 transforms in one pass.
+bool FrustumCullsPoints(const math::Vec4 * points, int numPoints);
+
+// Where a bounding sphere sits relative to the four frustum side planes.
+enum class SphereCull
+{
+    Outside,    // Entirely beyond one plane - cull, no finer test needed.
+    Inside,     // Entirely within all four - draw, no finer test needed.
+    Straddling, // Neither; only a precise test can decide.
+};
+
+// Frustum test for a bounding sphere. Both decisive answers agree exactly with
+// what FrustumCullsPoints would say for any point set the sphere contains, so a
+// caller can take either as final and only fall back on Straddling.
+//
+// The point is what it does *not* need: a sphere around an entity's origin is
+// rotation invariant, so this answers before any Euler basis has to be built.
+SphereCull FrustumCullsSphere(const vec3_t center, float radius);
 
 // Samples the world's static lighting at 'point' - a lightmap trace straight
 // down (ref_gl's R_LightPoint) with lightstyle scaling applied and the frame's

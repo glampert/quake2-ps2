@@ -132,6 +132,34 @@ bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, cons
         maxs[i] = (maxCur > maxOld) ? maxCur : maxOld;
     }
 
+    // A bounding sphere around the entity origin settles most entities without
+    // touching the Euler basis at all, which is the expensive part: AngleVectors
+    // is three sine/cosine pairs, and the entity pass runs this over every
+    // entity in the refdef to draw a fraction of them.
+    //
+    // The sphere is exact rather than a guess. Every corner is rotated about the
+    // origin and the map below preserves length - an orthonormal basis with one
+    // output component negated is a reflection, which preserves length just as
+    // the rotation does - so no corner can escape a sphere whose radius is the
+    // longest model-space corner. Taking the larger magnitude per axis picks
+    // exactly that corner.
+    float radiusSqr = 0.0f;
+    for (int i = 0; i < 3; ++i)
+    {
+        const float extent = math::Maxf(math::Fabsf(mins[i]), math::Fabsf(maxs[i]));
+        radiusSqr += extent * extent;
+    }
+
+    switch (FrustumCullsSphere(entity.origin, math::Sqrtf(radiusSqr)))
+    {
+    case SphereCull::Outside :
+        return true;  // Wholly outside one plane: so is every corner.
+    case SphereCull::Inside :
+        return false; // Wholly inside all four: so is every corner.
+    case SphereCull::Straddling :
+        break;        // Only the corners can decide.
+    }
+
     // Rotate the 8 corners into world space - note the same yaw negation and
     // Y flip the engine uses whenever it runs a basis through AngleVectors.
     vec3_t angles, vectors[3];
@@ -139,18 +167,28 @@ bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, cons
     angles[YAW] = -angles[YAW];
     math::AngleVectors(angles, vectors[0], vectors[1], vectors[2]);
 
-    vec3_t corners[8];
+    // The three dot products and the translation, folded into one row-vector
+    // transform so a corner costs a single VU0 pass instead of three scalar dot
+    // products and an add. Column j holds the basis vector whose dot lands in
+    // output j, and the middle column is negated - that is where the Y flip
+    // above goes.
+    const math::Mat4 toWorld = {{
+        { vectors[0][0], -vectors[1][0], vectors[2][0], 0.0f },
+        { vectors[0][1], -vectors[1][1], vectors[2][1], 0.0f },
+        { vectors[0][2], -vectors[1][2], vectors[2][2], 0.0f },
+        { entity.origin[0], entity.origin[1], entity.origin[2], 1.0f },
+    }};
+
+    math::Vec4 corners[8];
     for (int i = 0; i < 8; ++i)
     {
-        vec3_t tmp;
-        tmp[0] = (i & 1) ? mins[0] : maxs[0];
-        tmp[1] = (i & 2) ? mins[1] : maxs[1];
-        tmp[2] = (i & 4) ? mins[2] : maxs[2];
-
-        corners[i][0] =  DotProduct(vectors[0], tmp);
-        corners[i][1] = -DotProduct(vectors[1], tmp);
-        corners[i][2] =  DotProduct(vectors[2], tmp);
-        VectorAdd(corners[i], entity.origin, corners[i]);
+        const math::Vec4 local = {
+            (i & 1) ? mins[0] : maxs[0],
+            (i & 2) ? mins[1] : maxs[1],
+            (i & 4) ? mins[2] : maxs[2],
+            1.0f
+        };
+        corners[i] = math::Transform(local, toWorld);
     }
 
     return FrustumCullsPoints(corners, ArrayLength(corners));

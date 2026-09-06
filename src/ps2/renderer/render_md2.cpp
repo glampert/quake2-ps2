@@ -137,7 +137,7 @@ bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, cons
     vec3_t angles, vectors[3];
     VectorCopy(entity.angles, angles);
     angles[YAW] = -angles[YAW];
-    AngleVectors(angles, vectors[0], vectors[1], vectors[2]);
+    math::AngleVectors(angles, vectors[0], vectors[1], vectors[2]);
 
     vec3_t corners[8];
     for (int i = 0; i < 8; ++i)
@@ -357,7 +357,7 @@ LerpConsts SetUpLerp(const entity_t & entity, const daliasframe_t * frame,
     // entity's pose interpolates along its own motion.
     vec3_t delta, vectors[3];
     VectorSubtract(entity.oldorigin, entity.origin, delta);
-    AngleVectors(entity.angles, vectors[0], vectors[1], vectors[2]);
+    math::AngleVectors(entity.angles, vectors[0], vectors[1], vectors[2]);
 
     vec3_t move;
     move[0] =  DotProduct(delta, vectors[0]); // forward

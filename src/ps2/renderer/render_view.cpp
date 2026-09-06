@@ -275,7 +275,7 @@ void SetupFrame(const refdef_t & viewDef)
     s_textureAnimFrame = static_cast<int>(viewDef.time * 2.0f);
 
     // Camera basis vectors from the view angles.
-    AngleVectors(viewDef.viewangles, s_forwardVec, s_rightVec, s_upVec);
+    math::AngleVectors(viewDef.viewangles, s_forwardVec, s_rightVec, s_upVec);
 
     const math::Vec3 eye    = { viewDef.vieworg[0], viewDef.vieworg[1], viewDef.vieworg[2] };
     const math::Vec3 target = { eye.x + s_forwardVec[0], eye.y + s_forwardVec[1], eye.z + s_forwardVec[2] };
@@ -1614,7 +1614,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     {
         vec3_t temp, forward, right, up;
         VectorCopy(modelOrigin, temp);
-        AngleVectors(entity.angles, forward, right, up);
+        math::AngleVectors(entity.angles, forward, right, up);
 
         modelOrigin[0] =  DotProduct(temp, forward);
         modelOrigin[1] = -DotProduct(temp, right);

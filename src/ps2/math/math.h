@@ -105,4 +105,31 @@ inline constexpr float SecToMsec(float sec)
     return sec * 1000.0f;
 }
 
+inline void AngleVectors(const float angles[3], float * forward, float * right, float * up)
+{
+	const float angle_p = angles[/* PITCH */0] * (kPI * 2.0f / 360.0f);
+	const float sp = Sinf(angle_p);
+	const float cp = Cosf(angle_p);
+
+	const float angle_y = angles[/*  YAW  */1] * (kPI * 2.0f / 360.0f);
+	const float sy = Sinf(angle_y);
+	const float cy = Cosf(angle_y);
+
+	const float angle_r = angles[/*  ROLL */2] * (kPI * 2.0f / 360.0f);
+	const float sr = Sinf(angle_r);
+	const float cr = Cosf(angle_r);
+
+	forward[0] = cp * cy;
+	forward[1] = cp * sy;
+	forward[2] = -sp;
+
+	right[0] = (-1.0f * sr * sp * cy + -1.0f * cr * -sy);
+	right[1] = (-1.0f * sr * sp * sy + -1.0f * cr *  cy);
+	right[2] = (-1.0f * sr * cp);
+
+	up[0] = (cr * sp * cy + -sr * -sy);
+	up[1] = (cr * sp * sy + -sr *  cy);
+	up[2] = (cr * cp);
+}
+
 } // namespace ps2::math

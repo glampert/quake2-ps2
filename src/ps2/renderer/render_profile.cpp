@@ -22,12 +22,15 @@ PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",     kScreenOverlay, 2);
 PS2_PROFILE_DEFINE_EVENT(View,       "View",       kScreenOverlay, 3);
 PS2_PROFILE_DEFINE_EVENT(World,      "World",      kScreenOverlay, 4);
 PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",        kScreenOverlay, 5);
-PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",  kScreenOverlay, 6);
-PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 7);
-PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 8);
-PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 9);
-PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 10);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 11);
+PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",    kScreenOverlay, 6);
+PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",   kScreenOverlay, 7);
+PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",  kScreenOverlay, 8);
+PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",  kScreenOverlay, 9);
+PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 10);
+PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 11);
+PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 12);
+PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 13);
+PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 14);
 
 } // namespace ps2::prof_evt
 
@@ -46,7 +49,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 12;
+constexpr int kNumEvents = 15;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -56,7 +59,7 @@ struct FrameSample
     u32 cycles[kNumEvents];
 
     // view::DrawStats
-    int nodes, surfs, surfsAlpha, skyFaces;
+    int nodes, surfs, surfsAlpha, skyFaces, surfsUnclipped;
     int tris, trisClipped, trisCulled, trisBackFacing;
     int boxesCulled, batches, entities, particles, dlights;
 
@@ -129,9 +132,10 @@ void FrameLogCapture()
     s.frameIndex = s_frameIndex;
 
     const ps2::debug::ProfileEvent * const events[kNumEvents] = {
-        &prof_evt::Frame,    &prof_evt::VSync,     &prof_evt::GsWait,     &prof_evt::View,
-        &prof_evt::World,    &prof_evt::Vis,       &prof_evt::TexChains,  &prof_evt::LmChains,
-        &prof_evt::Entities, &prof_evt::Particles, &prof_evt::AlphaSurfs, &prof_evt::Sky,
+        &prof_evt::Frame,     &prof_evt::VSync,      &prof_evt::GsWait,     &prof_evt::View,
+        &prof_evt::World,     &prof_evt::Vis,        &prof_evt::MarkLeaves, &prof_evt::BspWalk,
+        &prof_evt::LmChain,   &prof_evt::TexChains,  &prof_evt::LmChains,   &prof_evt::Entities,
+        &prof_evt::Particles, &prof_evt::AlphaSurfs, &prof_evt::Sky,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {
@@ -145,6 +149,7 @@ void FrameLogCapture()
     s.nodes          = d.nodesWalked;
     s.surfs          = d.surfaces;
     s.surfsAlpha     = d.surfacesAlpha;
+    s.surfsUnclipped = d.surfsUnclipped;
     s.skyFaces       = d.skyFaces;
     s.tris           = d.trisDrawn;
     s.trisClipped    = d.trisClipped;
@@ -181,31 +186,45 @@ void FrameLogFlush()
     {
         s_headerDone = true;
         std::printf("FLOG#hdr,frame,"
-                    "Frame,VSync,GsWait,View,World,Vis,TexChains,LmChains,Entities,Particles,AlphaSurfs,Sky,"
-                    "nodes,surfs,surfsAlpha,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
+                    "Frame,VSync,GsWait,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
+                    "TexChains,LmChains,Entities,Particles,AlphaSurfs,Sky,"
+                    "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,submittedBytes\n");
         std::printf("FLOG#note,timings are microseconds\n");
     }
 
+    // Built into one buffer and written with a single printf: every call is a
+    // round trip to the IOP, so a per-column printf would turn the dump from
+    // one stretched frame into several. The timings go through a loop rather
+    // than a fixed argument list so adding an event needs no changes here.
     for (int i = 0; i < s_count; ++i)
     {
         const FrameSample & s = s_samples[i];
-        std::printf("FLOG,%u,"
-                    "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,"
-                    "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                    "%d,%d,%d,%d,%d,%d,%d,%d\n",
-                    s.frameIndex,
-                    ToMicrosec(s.cycles[0]),  ToMicrosec(s.cycles[1]),  ToMicrosec(s.cycles[2]),
-                    ToMicrosec(s.cycles[3]),  ToMicrosec(s.cycles[4]),  ToMicrosec(s.cycles[5]),
-                    ToMicrosec(s.cycles[6]),  ToMicrosec(s.cycles[7]),  ToMicrosec(s.cycles[8]),
-                    ToMicrosec(s.cycles[9]),  ToMicrosec(s.cycles[10]), ToMicrosec(s.cycles[11]),
-                    s.nodes, s.surfs, s.surfsAlpha, s.skyFaces,
-                    s.tris, s.trisClipped, s.trisCulled, s.trisBackFacing,
-                    s.boxesCulled, s.batches, s.entities, s.particles, s.dlights,
-                    s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
-                    s.vramUploads, s.vramOomSyncs, s.vramResident, s.submittedBytes);
+
+        char line[640];
+        int at = std::snprintf(line, sizeof(line), "FLOG,%u", s.frameIndex);
+
+        for (int e = 0; e < kNumEvents && at > 0 && at < static_cast<int>(sizeof(line)); ++e)
+        {
+            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
+                                ",%u", ToMicrosec(s.cycles[e]));
+        }
+
+        if (at > 0 && at < static_cast<int>(sizeof(line)))
+        {
+            std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
+                          "%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          s.nodes, s.surfs, s.surfsAlpha, s.surfsUnclipped, s.skyFaces,
+                          s.tris, s.trisClipped, s.trisCulled, s.trisBackFacing,
+                          s.boxesCulled, s.batches, s.entities, s.particles, s.dlights,
+                          s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
+                          s.vramUploads, s.vramOomSyncs, s.vramResident, s.submittedBytes);
+        }
+
+        std::printf("%s", line);
     }
 
     s_count    = 0;

@@ -961,6 +961,57 @@ void TriangulatePolygon(ModelPoly & poly)
     }
 }
 
+// Bounding sphere over every vertex of every polygon the surface ended up with,
+// stored for the world passes' clip-volume test (see ModelSurface::boundsCenter).
+//
+// Run after the polygons are built, since the turbulent path subdivides and the
+// leaves are what actually get drawn. The radius is the true farthest vertex
+// rather than the box's half diagonal - a second pass over the vertices costs
+// nothing at load time and every unit shaved here is a surface that stays on
+// the fast path.
+void ComputeSurfaceBounds(ModelSurface & surf)
+{
+    Vec3 mins = {  1e30f,  1e30f,  1e30f };
+    Vec3 maxs = { -1e30f, -1e30f, -1e30f };
+    int numVerts = 0;
+
+    for (const ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
+    {
+        for (int i = 0; i < poly->numVerts; ++i)
+        {
+            const Vec3 & p = poly->vertexes[i].position;
+            mins.x = math::Minf(mins.x, p.x);  maxs.x = math::Maxf(maxs.x, p.x);
+            mins.y = math::Minf(mins.y, p.y);  maxs.y = math::Maxf(maxs.y, p.y);
+            mins.z = math::Minf(mins.z, p.z);  maxs.z = math::Maxf(maxs.z, p.z);
+            ++numVerts;
+        }
+    }
+
+    if (numVerts == 0) [[unlikely]]
+    {
+        // No geometry: a zero radius at the origin can never pass the test, so
+        // such a surface simply keeps taking the clipped path.
+        surf.boundsCenter = { 0.0f, 0.0f, 0.0f };
+        surf.boundsRadius = 0.0f;
+        return;
+    }
+
+    surf.boundsCenter = { (mins.x + maxs.x) * 0.5f,
+                          (mins.y + maxs.y) * 0.5f,
+                          (mins.z + maxs.z) * 0.5f };
+
+    float radiusSqr = 0.0f;
+    for (const ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
+    {
+        for (int i = 0; i < poly->numVerts; ++i)
+        {
+            const Vec3 d = poly->vertexes[i].position - surf.boundsCenter;
+            radiusSqr = math::Maxf(radiusSqr, math::Dot(d, d));
+        }
+    }
+    surf.boundsRadius = math::Sqrtf(radiusSqr);
+}
+
 void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & surf)
 {
     PS2_Assert(mdl.vertexes != nullptr && mdl.edges != nullptr && mdl.surfEdges != nullptr);
@@ -1239,6 +1290,8 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
         {
             BuildPolygonFromSurface(mdl, hunk, surf);
         }
+
+        ComputeSurfaceBounds(surf);
     }
 
     lm::EndBuildingLightmaps();

@@ -185,7 +185,7 @@ void DrawProfileOverlay()
     // Cap the panel so a heavily instrumented build can't run off the screen.
     // 12 overlay events today (FullFrame, the nine view tags, GSWait, VSync);
     // the slack is for probes added while chasing a specific frame cost.
-    constexpr int kMaxRows = 16;
+    constexpr int kMaxRows = 20;
 
     const ps2::debug::ProfileEvent * rows[kMaxRows];
     int numRows = 0;
@@ -239,7 +239,7 @@ void DrawProfileOverlay()
                       ps2::debug::ProfileFormatMillisec(ev->lastFrameCycles, millisec, sizeof(millisec)));
 
         const u8* color = kUiBrightness;
-        if (ev->sortKey == 0) // Sort key 0 = the "Frame" root
+        if (ev == &ps2::prof_evt::Frame) // Sort key 0 = the "Frame" root
         {
             const auto ms = ev->FrameMilliseconds();
             color = kGreen;
@@ -393,18 +393,19 @@ void DrawDrawStatsOverlay()
     const ps2::lm::Stats lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
-        { "Nodes",   stats.nodesWalked   },
-        { "Surfs",   stats.surfaces      },
-        { "Alpha",   stats.surfacesAlpha },
-        { "Sky",     stats.skyFaces      },
-        { "Tris",    stats.trisDrawn     },
-        { "Ents",    stats.entities      },
-        { "Prts",    stats.particles     },
-        { "DLights", stats.dlights       },
-        { "Batches", stats.drawBatches   },
-        { "Clipped", stats.trisClipped   },
-        { "Culled",  stats.trisCulled    },
-        { "BoxCull", stats.boxesCulled   },
+        { "Nodes",   stats.nodesWalked    },
+        { "Surfs",   stats.surfaces       },
+        { "Alpha",   stats.surfacesAlpha  },
+        { "NoClip",  stats.surfsUnclipped },
+        { "Sky",     stats.skyFaces       },
+        { "Tris",    stats.trisDrawn      },
+        { "Ents",    stats.entities       },
+        { "Prts",    stats.particles      },
+        { "DLights", stats.dlights        },
+        { "Batches", stats.drawBatches    },
+        { "Clipped", stats.trisClipped    },
+        { "Culled",  stats.trisCulled     },
+        { "BoxCull", stats.boxesCulled    },
         // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and
         // LmRest the surfaces they have just left; both should fall back to
         // zero once the lights stop moving. A stuck LmRest means the restore

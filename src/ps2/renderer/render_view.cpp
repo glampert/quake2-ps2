@@ -121,7 +121,23 @@ static math::Mat4 s_weaponViewProjMatrix = {};
 static cplane_t s_frustum[4] = {};
 
 // The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
-alignas(16) static math::Mat4 s_frustumPlanes = {};
+static math::Mat4 s_frustumMatrix = {};
+
+// The six half-spaces the VU1 microprogram judges vertices against, expressed as
+// world-space planes. Each of the microprogram's tests - w-z, w+z, G*w+-x,
+// G*w+-y - is a linear function of the world position, so each is a plane; the
+// coefficients fall straight out of the view-projection's columns. See
+// SetUpClipVolume.
+//
+// Kept unnormalised: 'gradientLength' carries |(x,y,z)| separately so a sphere
+// test can scale the radius by it, which lets clip::kClipEpsilon stay in the
+// same units the microprogram and clip.h use it in.
+struct ClipVolumePlane
+{
+    math::Vec4 plane;     // ax + by + cz + d; >= 0 is inside
+    float gradientLength; // |(a,b,c)|
+};
+static ClipVolumePlane s_clipVolume[6] = {};
 
 // Wall texture animation frame (viewDef.time * 2, as in ref_gl).
 static int s_textureAnimFrame = 0;
@@ -156,7 +172,7 @@ static int s_alphaSurfaceCount = 0;
 // One transform per brush model entity that contributed a translucent surface;
 // DrawBrushModelEntity's own is a local, long gone by the time the alpha pass
 // runs. MAX_ENTITIES is the hard ceiling on contributors, so it cannot overflow.
-alignas(16) static math::Mat4 s_alphaEntityMatrices[MAX_ENTITIES];
+static math::Mat4 s_alphaEntityMatrices[MAX_ENTITIES];
 static int s_alphaEntityMatrixCount = 0;
 
 // Triangle gather buffer: texture chains append here and flush through
@@ -247,12 +263,82 @@ void SetUpFrustum(const refdef_t & viewDef)
     // comes out of one VU0 pass instead of four scalar dot products: column p
     // holds plane p's normal with -dist in the translation row, which makes
     // component p of (point * this) exactly dot(point, n[p]) - dist[p].
-    s_frustumPlanes = {{
+    s_frustumMatrix = {{
         { s_frustum[0].normal[0], s_frustum[1].normal[0], s_frustum[2].normal[0], s_frustum[3].normal[0] },
         { s_frustum[0].normal[1], s_frustum[1].normal[1], s_frustum[2].normal[1], s_frustum[3].normal[1] },
         { s_frustum[0].normal[2], s_frustum[1].normal[2], s_frustum[2].normal[2], s_frustum[3].normal[2] },
         { -s_frustum[0].dist,     -s_frustum[1].dist,     -s_frustum[2].dist,     -s_frustum[3].dist     },
     }};
+}
+
+// Extracts the six planes bounding the VU1 clip volume from a view-projection.
+//
+// The microprogram judges a vertex in clip space: inside while w - z >= 0
+// (near), w + z >= 0 (far) and G*w +- x >= 0, G*w +- y >= 0 (the guard band
+// sides, G = vu1::kGuardBandNdcLimit). Under the row-vector convention each
+// clip component is a dot of the world position with one of the matrix's
+// columns, so every one of those tests is a plane in world space and its
+// coefficients are just a combination of two columns.
+//
+// That is what lets a whole surface be judged at once: the six half-spaces
+// intersect to a convex volume, so a bounding sphere inside all six contains
+// no vertex the microprogram could reject.
+void SetUpClipVolume(const math::Mat4 & viewProj)
+{
+    // Column k of the matrix, i.e. the coefficients of clip component k.
+    const auto column = [&viewProj](int k) -> math::Vec4
+    {
+        return { viewProj.m[0][k], viewProj.m[1][k], viewProj.m[2][k], viewProj.m[3][k] };
+    };
+
+    const math::Vec4 cx = column(0);
+    const math::Vec4 cy = column(1);
+    const math::Vec4 cz = column(2);
+    const math::Vec4 cw = column(3);
+
+    constexpr float kG = vu1::kGuardBandNdcLimit;
+
+    const math::Vec4 planes[6] = {
+        { cw.x - cz.x, cw.y - cz.y, cw.z - cz.z, cw.w - cz.w },                     // near:  w - z
+        { cw.x + cz.x, cw.y + cz.y, cw.z + cz.z, cw.w + cz.w },                     // far:   w + z
+        { kG * cw.x + cx.x, kG * cw.y + cx.y, kG * cw.z + cx.z, kG * cw.w + cx.w }, // left:  G*w + x
+        { kG * cw.x - cx.x, kG * cw.y - cx.y, kG * cw.z - cx.z, kG * cw.w - cx.w }, // right: G*w - x
+        { kG * cw.x + cy.x, kG * cw.y + cy.y, kG * cw.z + cy.z, kG * cw.w + cy.w }, // bottom:G*w + y
+        { kG * cw.x - cy.x, kG * cw.y - cy.y, kG * cw.z - cy.z, kG * cw.w - cy.w }, // top:   G*w - y
+    };
+
+    for (int i = 0; i < 6; ++i)
+    {
+        s_clipVolume[i].plane = planes[i];
+        s_clipVolume[i].gradientLength =
+            math::Sqrtf((planes[i].x * planes[i].x) +
+                        (planes[i].y * planes[i].y) +
+                        (planes[i].z * planes[i].z));
+    }
+}
+
+// True when every vertex of the surface is inside the VU1 clip volume, so the
+// whole surface can skip the per-triangle clip judgement.
+//
+// Conservative by construction: a surface that straddles any plane - or that
+// merely comes within kClipEpsilon of one, the same hair's breadth clip.h backs
+// off by - falls through to the clipper as before. The radius is scaled by the
+// plane's gradient length because the planes are left unnormalised, which keeps
+// the epsilon in the units the microprogram uses.
+inline bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
+{
+    for (const ClipVolumePlane & p : s_clipVolume)
+    {
+        const float centerDist = (p.plane.x * surf.boundsCenter.x) +
+                                 (p.plane.y * surf.boundsCenter.y) +
+                                 (p.plane.z * surf.boundsCenter.z) + p.plane.w;
+
+        if (centerDist - (surf.boundsRadius * p.gradientLength) < clip::kClipEpsilon)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 // True when the box is completely outside the frustum and must not draw.
@@ -310,6 +396,7 @@ void SetupFrame(const refdef_t & viewDef)
     s_weaponViewProjMatrix = view * weaponProj;
 
     SetUpFrustum(viewDef);
+    SetUpClipVolume(s_viewProjMatrix);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -377,6 +464,8 @@ void SetUpViewClusters(const refdef_t & viewDef, const mod::ModelInstance & worl
 // in the same cluster(s), which is the common case.
 void MarkLeaves(const mod::ModelInstance & world)
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::MarkLeaves);
+
     if (s_oldViewCluster  == s_viewCluster  &&
         s_oldViewCluster2 == s_viewCluster2 &&
         s_viewCluster != kInvalidCluster)
@@ -642,6 +731,13 @@ struct SurfaceDrawState
     // colour the GS modulates the wall texture by. Mutually exclusive with
     // vertexAlpha, which owns that colour's alpha byte.
     const u16 *        lightmapColors = nullptr;
+
+    // The surface being gathered was proven wholly inside the VU clip volume, so
+    // GatherPolyTriangles may emit its triangles verbatim and skip the clipper
+    // entirely. Set per surface by the world passes, which are the only ones
+    // that can prove it (SurfaceInsideClipVolume judges against the world's
+    // view-projection); everything else leaves it false and clips as before.
+    bool               skipClipping = false;
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -751,10 +847,73 @@ inline math::Vec4 SampleLightmapColor(const u16 * const colors, const float s, c
 
 // Appends a polygon's triangles to the scratch buffer, clipping the ones that
 // cross the VU clip volume and flushing when full.
+// The gather for a surface SurfaceInsideClipVolume has already cleared: every
+// triangle is known to survive the VU's judgement whole, so there is nothing for
+// the clipper to decide and the vertices go straight into the batch.
+// The colour has to match VertexColor exactly, since a surface can take either
+// path depending only on where the camera is standing.
+void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
+                                const tex::Texture & texture,
+                                const SurfaceDrawState & state)
+{
+    const int numTriangles = poly.numVerts - 2;
+    for (int t = 0; t < numTriangles; ++t)
+    {
+        const mod::ModelTriangle & tri = poly.triangles[t];
+        if (tri.vertexes[0] == tri.vertexes[1])
+        {
+            continue; // Degenerate leftover from the triangulation.
+        }
+
+        // Capacity is a whole number of triangles and this pushes three at a
+        // time, so the buffer can only ever fill on a triangle boundary.
+        if (s_batch.IsFull())
+        {
+            s_batch.Flush(*state.mvp, texture, state.flags);
+        }
+
+        for (int v = 0; v < 3; ++v)
+        {
+            const mod::PolyVertex & src = poly.vertexes[tri.vertexes[v]];
+
+            // GatherPolyTriangles leaves ClipVertex::st.z zero, so the
+            // vertexAlpha branch of VertexColor would read zero here too.
+            u32 rgba = state.rgba;
+            if (state.lightmapColors != nullptr)
+            {
+                rgba = WithVertexColor(state.rgba,
+                                       SampleLightmapColor(state.lightmapColors, src.lightmap_s, src.lightmap_t));
+            }
+            else if (state.vertexAlpha)
+            {
+                rgba = WithVertexAlpha(state.rgba, 0.0f);
+            }
+
+            vu1::DrawVertex & dst = s_batch.PushVertex();
+            dst.x    = src.position.x;
+            dst.y    = src.position.y;
+            dst.z    = src.position.z;
+            dst.w    = 1.0f;
+            dst.rgba = rgba;
+            dst.s    = state.lightmapUVs ? src.lightmap_s : src.texture_s;
+            dst.t    = state.lightmapUVs ? src.lightmap_t : src.texture_t;
+            dst.q    = 1.0f;
+        }
+
+        ++s_drawStats.trisDrawn;
+    }
+}
+
 void GatherPolyTriangles(const mod::ModelPoly & poly,
                          const tex::Texture & texture,
                          const SurfaceDrawState & state)
 {
+    if (state.skipClipping)
+    {
+        EmitPolyTrianglesUnclipped(poly, texture, state);
+        return;
+    }
+
     const int numTriangles = poly.numVerts - 2;
     for (int t = 0; t < numTriangles; ++t)
     {
@@ -943,6 +1102,11 @@ void DrawTextureChains(const SurfaceDrawState & base)
 
     const bool tinted = LightmapColorEnabled();
 
+    // s_clipVolume is built from the world's view-projection, so the surface
+    // test only speaks for surfaces drawn through it. A brush model entity
+    // carries its own transform and keeps clipping per triangle.
+    const bool worldTransform = (state.mvp == &s_viewProjMatrix);
+
     for (int i = 0; i < s_chainTextureCount; ++i)
     {
         const tex::Texture * texture = s_chainTextures[i];
@@ -950,6 +1114,8 @@ void DrawTextureChains(const SurfaceDrawState & base)
         for (const mod::ModelSurface * surf = texture->textureChain; surf != nullptr; surf = surf->textureChain)
         {
             state.lightmapColors = tinted ? SurfaceLightmapColors(*surf) : nullptr;
+            state.skipClipping   = worldTransform && SurfaceInsideClipVolume(*surf);
+            s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
@@ -997,6 +1163,10 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     state.lightmapUVs    = true;
     state.lightmapColors = nullptr; // The chroma is the diffuse pass's half; this one carries the intensity.
 
+    // As in DrawTextureChains: only the world's own transform is the one
+    // s_clipVolume was built for.
+    const bool worldTransform = (state.mvp == &s_viewProjMatrix);
+
     const int numLightmaps = lm::NumAtlases();
     for (int i = 0; i < numLightmaps; ++i)
     {
@@ -1010,6 +1180,9 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
         {
+            state.skipClipping = worldTransform && SurfaceInsideClipVolume(*surf);
+            s_drawStats.surfsUnclipped += state.skipClipping;
+
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
                 if (poly->numVerts >= 3) // Need at least one triangle.
@@ -1414,7 +1587,14 @@ void RenderWorldModel(const refdef_t & viewDef)
         PushDLights(viewDef, *world);
         SetUpViewClusters(viewDef, *world);
         MarkLeaves(*world);
-        RecursiveWorldNode(viewDef, *world, world->nodes);
+
+        // On the call, not inside the function: RecursiveWorldNode recurses, and
+        // a scope in its body would nest with itself and count the descent once
+        // per level. LmChain nests underneath this one.
+        {
+            PS2_PROFILE_SCOPED_EVENT(prof_evt::BspWalk);
+            RecursiveWorldNode(viewDef, *world, world->nodes);
+        }
     }
 
     const SurfaceDrawState state = WorldSurfaceDrawState();
@@ -2069,7 +2249,7 @@ void RenderParticles(const refdef_t & viewDef)
     // File-level static for the same reason the triangle batches are: far too
     // large for the stack, and draws are synchronous, so one buffer serves the
     // whole list.
-    alignas(16) static vu1::ParticleVertex s_particles[MAX_PARTICLES];
+    static vu1::ParticleVertex s_particles[MAX_PARTICLES];
 
     for (int i = 0; i < numParticles; ++i)
     {
@@ -2220,10 +2400,38 @@ math::Mat4 MakeEntityMatrix(const entity_t & entity, const bool flipPitchAngle)
 {
     const float pitch = flipPitchAngle ? entity.angles[PITCH] : -entity.angles[PITCH];
 
-    return math::RotationX(math::DegToRad(-entity.angles[ROLL])) *
-           math::RotationY(math::DegToRad(pitch))                *
-           math::RotationZ(math::DegToRad(entity.angles[YAW]))   *
-           math::Translation(entity.origin[0], entity.origin[1], entity.origin[2]);
+    // The translation never needs a matrix multiply of its own. Under the
+    // row-vector convention, post-multiplying a pure rotation by a translation
+    // leaves rows 0-2 untouched and makes row 3 the offset - so writing it in
+    // costs three stores where the multiply cost 16 FMACs.
+    const auto withOrigin = [&entity](math::Mat4 m) -> math::Mat4
+    {
+        m.m[3][0] = entity.origin[0];
+        m.m[3][1] = entity.origin[1];
+        m.m[3][2] = entity.origin[2];
+        m.m[3][3] = 1.0f;
+        return m;
+    };
+
+    // Most entities only yaw - monsters, items, gibs - and for those the pitch
+    // and roll rotations are identity matrices being multiplied in for nothing.
+    // Building the yaw rotation directly costs one sine/cosine pair against the
+    // three the general path takes, and skips two 4x4 multiplies.
+    if (entity.angles[PITCH] == 0.0f && entity.angles[ROLL] == 0.0f)
+    {
+        const float radians = math::DegToRad(entity.angles[YAW]);
+        const float c = math::Cosf(radians);
+        const float s = math::Sinf(radians);
+
+        return withOrigin(math::Mat4 {{ {    c,    s, 0.0f, 0.0f },
+                                        {   -s,    c, 0.0f, 0.0f },
+                                        { 0.0f, 0.0f, 1.0f, 0.0f },
+                                        { 0.0f, 0.0f, 0.0f, 1.0f } }});
+    }
+
+    return withOrigin(math::RotationX(math::DegToRad(-entity.angles[ROLL])) *
+                      math::RotationY(math::DegToRad(pitch))                *
+                      math::RotationZ(math::DegToRad(entity.angles[YAW])));
 }
 
 void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
@@ -2261,7 +2469,16 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
         vec3_t dist;
         VectorSubtract(point, dl->origin, dist);
 
-        const float add = (dl->intensity - VectorLength(dist)) * (1.0f / 256.0f);
+        // Out of range lights are the common case - a shot lights the room it
+        // is in, not the entities elsewhere in the PVS - and they can be
+        // rejected on the squared distance, before paying for the root.
+        const float distSqr = DotProduct(dist, dist);
+        if (distSqr >= (dl->intensity * dl->intensity))
+        {
+            continue; // Would contribute zero or less; the test below agrees.
+        }
+
+        const float add = (dl->intensity - math::Sqrtf(distSqr)) * (1.0f / 256.0f);
         if (add > 0.0f)
         {
             outColor[0] += add * dl->color[0];
@@ -2282,7 +2499,7 @@ bool FrustumCullsPoints(const math::Vec4 * points, int numPoints)
         // One transform yields all four signed plane distances at once; the
         // point's w must be 1 for the -dist row to land. Callers build these
         // corners with w = 1 already (see ShouldCullEntity).
-        const math::Vec4 distances = math::Transform(points[i], s_frustumPlanes);
+        const math::Vec4 distances = math::Transform(points[i], s_frustumMatrix);
 
         u32 mask = 0;
         if (distances.x < 0.0f) { mask |= (1u << 0); }
@@ -2355,13 +2572,13 @@ void RenderFrame(const refdef_t & viewDef)
     // set aside, blended over the whole finished scene.
     RenderAlphaSurfaces();
 
-    // Nothing to draw: hands the light at the camera back to the game code.
-    // Where ref_gl's R_RenderFrame calls R_SetLightLevel.
-    SetLightLevel(viewDef);
-
     // Last, over the finished scene: ref_gl's R_Flash/R_PolyBlend.
     // (powerups/damange fullscreen blended polygon).
     RenderBlendedOverlay(viewDef);
+
+    // Nothing to draw: hands the light at the camera back to the game code.
+    // Where ref_gl's R_RenderFrame calls R_SetLightLevel.
+    SetLightLevel(viewDef);
 }
 
 } // namespace ps2::view

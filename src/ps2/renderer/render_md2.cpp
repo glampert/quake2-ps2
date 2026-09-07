@@ -323,15 +323,19 @@ inline u32 ClampColorChannel(float c)
     return (c >= 255.0f) ? 255u : ((c <= 0.0f) ? 0u : static_cast<u32>(c));
 }
 
+// Per-entity packed vertex colours, indexed by the current frame's
+// lightnormalindex: min(shadeDots[n] * shadeLight * 128, 255) per channel
+// (128 = unmodulated texels on the GS; the dots exceed 1.0 by design).
+//
+// Sized 256, not 162: the loader never validates lightnormalindex, so a
+// malformed model must land inside the table rather than past its end. Only
+// the first kNumVertexNormals entries are rebuilt per entity though - the
+// rest exist purely to be in bounds, so they are filled once on init, and a
+// malformed index just reads whichever entity last wrote them.
+static u32 s_colorLUT[256];
+
 const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight, const float alpha)
 {
-    // Per-entity packed vertex colours, indexed by the current frame's
-    // lightnormalindex: min(shadeDots[n] * shadeLight * 128, 255) per channel
-    // (128 = unmodulated texels on the GS; the dots exceed 1.0 by design).
-    // Sized 256, not 162: the loader never validates lightnormalindex, so a
-    // malformed model must land inside the table rather than past its end.
-    static u32 s_colorLUT[256];
-
     // 0x80 is the GS's 1.0. Clamped because 'alpha' is whatever the game put
     // on the entity, and the same unsigned-cast hazard applies.
     const float scaledAlpha = alpha * 128.0f;
@@ -353,15 +357,15 @@ const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight
         const u32 packed = vu1::PackColorRGBA(ClampColorChannel(shadeLight.x * 255.0f),
                                               ClampColorChannel(shadeLight.y * 255.0f),
                                               ClampColorChannel(shadeLight.z * 255.0f), a);
-        for (u32 & entry : s_colorLUT)
+        for (int i = 0; i < kNumVertexNormals; ++i)
         {
-            entry = packed;
+            s_colorLUT[i] = packed;
         }
         return s_colorLUT;
     }
 
     const float * const shadeDots = GetShadeDotsForEntity(entity);
-    for (int i = 0; i < ArrayLength(s_colorLUT); ++i)
+    for (int i = 0; i < kNumVertexNormals; ++i)
     {
         const float l = shadeDots[i] * 128.0f;
         s_colorLUT[i] = vu1::PackColorRGBA(ClampColorChannel(l * shadeLight.x),
@@ -569,7 +573,7 @@ void ExpandGLCmds(const dmdl_t * hdr, EmitFn && emit)
 // The shadow's attribute stream: flat black at half alpha, identical for
 // every vertex of every shadow - filled once, referenced forever. Alpha
 // 0x40 = 0.5.
-alignas(16) static vu1::LerpDrawAttrib s_shadowAttribs[kBatchMaxVerts];
+static vu1::LerpDrawAttrib s_shadowAttribs[kBatchMaxVerts];
 
 // Draws the entity's planar projected shadow: the same keyframe byte streams
 // the model just drew, run through the same VU1 lerp, with the flattening
@@ -685,6 +689,11 @@ void InitEntityRendering()
     for (vu1::LerpDrawAttrib & attrib : s_shadowAttribs)
     {
         attrib = { vu1::PackColorRGBA(0, 0, 0, 0x40), 0.0f, 0.0f, 1.0f };
+    }
+
+    for (u32 & color : s_colorLUT)
+    {
+        color = vu1::PackColorRGBA(0, 0, 0, 0x80);
     }
 }
 

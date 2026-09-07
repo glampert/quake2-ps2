@@ -30,6 +30,7 @@
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/scrap_atlas.h" // SkylinePacker, shared with the 2D scrap atlases
+#include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/gs.h"
 
 #include <cmath>
@@ -652,6 +653,7 @@ void BeginFrame()
 
 void ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, const int frameCount)
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::LmChain);
     s_manager.ChainSurface(surf, viewDef, frameCount);
 }
 

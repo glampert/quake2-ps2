@@ -168,6 +168,15 @@ struct ModelSurface
     const ModelSurface * lightmapChain; // next surface sharing this one's lightmap atlas.
     ModelTexInfo * texInfo;
 
+    // World-space bounding sphere over every vertex of every polygon, computed
+    // once at load - world geometry never moves. Lets the world passes prove a
+    // whole surface sits inside the VU1 clip volume and skip the per-triangle
+    // clip judgement for all of its triangles at once; see
+    // view::SurfaceInsideClipVolume. Costs 16 bytes on a struct there are over
+    // 11,000 of, which the judgement it skips pays back many times over.
+    Vec3  boundsCenter;
+    float boundsRadius;
+
     // dynamic lighting info:
     int dlightFrame;
     int dlightBits; // one bit per dlight, so this needs all 32.

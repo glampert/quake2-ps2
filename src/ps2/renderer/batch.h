@@ -85,6 +85,18 @@ public:
         return m_verts[m_vertCount++];
     }
 
+    // Hands out three consecutive slots for a path filling a whole triangle at
+    // once, so the count moves once instead of three times. Same contract as
+    // PushVertex - check IsFull() (and flush) first - and since capacity is a
+    // triangle multiple, a buffer that is not full always has room for three.
+    vu1::DrawVertex * PushTriangle()
+    {
+        PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "TriangleBatch is full!");
+        vu1::DrawVertex * const tri = &m_verts[m_vertCount];
+        m_vertCount += 3;
+        return tri;
+    }
+
     // Clips one triangle against the volume the VU judges and appends the
     // survivors, flushing first if they cannot fit. The corners arrive with
     // their position, UVs and colour payload set; their clip distances are

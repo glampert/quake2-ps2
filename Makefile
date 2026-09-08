@@ -99,6 +99,7 @@ PS2_CXX_SRC =                         \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \
 	ps2/tests/map_cycle.cpp           \
+	ps2/tests/perf_run.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/exception_handler.cpp   \
@@ -165,6 +166,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \
 	ps2/tests/map_cycle.cpp           \
+	ps2/tests/perf_run.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/exception_handler.cpp   \

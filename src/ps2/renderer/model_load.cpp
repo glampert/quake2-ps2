@@ -36,12 +36,8 @@ namespace {
 // Loader configuration
 // ------------------------------------------------------------------------------------------------
 
-// Extra debug printing during model load.
-constexpr bool kVerboseModelLoading = false;
-
-constexpr float kTriangulationEpsilon  = 0.001f;
-constexpr int   kTriangulationMaxVerts = 128; // Per polygon.
-
+constexpr bool kVerboseModelLoading = false; // Extra debug printing during model load.
+constexpr float kTriangulationEpsilon = 0.001f;
 constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 
 // ------------------------------------------------------------------------------------------------

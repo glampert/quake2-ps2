@@ -24,6 +24,7 @@
 #include "ps2/tests/draw_cube.h"
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
+#include "ps2/tests/perf_run.h"
 #include "ps2/builtin/builtin.h"
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
@@ -677,6 +678,12 @@ void PS2_EndFrame()
     // commands - but it lives here because this is the one place guaranteed to
     // be reached once per frame.
     ps2::test::RunMapCycle();
+
+    // Unattended performance run (cvar "ps2_perftest 1"): plays the attract loop
+    // demos with the profiling cvars forced on and quits at the end, so a capture
+    // is reproducible and needs nobody watching it. Draws nothing either - it is
+    // here for the same reason as the map cycle above.
+    ps2::test::RunPerfTest();
 #endif // PS2_QUAKE_DEBUG
 
     DrawFpsCounter();

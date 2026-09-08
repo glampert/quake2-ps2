@@ -142,6 +142,32 @@ struct alignas(16) DrawVertex
     float s, t, q;    // texture coords; q must be 1.0f
 };
 static_assert(sizeof(DrawVertex) == 32, "DrawVertex must be exactly 2 qwords");
+static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword alignment");
+
+// Copies one gathered vertex whole, in two of the R5900's 128-bit moves.
+//
+// A plain struct assignment would be correct, but gcc lowers it to four ld/sd
+// pairs - it never forms lq/sq of its own accord, and neither __int128 nor a
+// 16-byte-aligned aggregate persuades it to. That doubles the memory ops in the
+// innermost step of the world gather, which is hot enough to care.
+//
+// The integer lq/sq rather than the VU0 lqc2/sqc2 the math helpers use: this
+// moves a packed colour whose bit pattern is a float denormal (see the note
+// above), and the integer path provably never reaches an FMAC to flush it.
+//
+// Constrained rather than clobbering "memory", so a caller copying several
+// vertices in a row keeps its own state in registers across them.
+inline void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
+{
+    asm volatile (
+        "lq      $8,  0x00(%1)     \n\t"
+        "lq      $9,  0x10(%1)     \n\t"
+        "sq      $8,  0x00(%2)     \n\t"
+        "sq      $9,  0x10(%2)     \n\t"
+        : "=m" (dst)
+        : "r" (&src), "r" (&dst), "m" (src)
+        : "$8", "$9");
+}
 
 // Draws a batch of triangles (3 verts each, triangle list) through VU1 with
 // the given transform and texture (uploaded to GS VRAM on demand). Any whole-

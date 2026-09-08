@@ -932,6 +932,53 @@ inline void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & 
     s_batch.Flush(*state.mvp, texture, state.flags);
 }
 
+// Every vertex the polygon being gathered can emit, already in the form the
+// batch wants. Filled by EmitPolyTrianglesUnclipped and by the warp path, which
+// never overlap: a polygon is finished before the next one starts. File level
+// rather than a local because 128 entries is 4 KB of stack, and gathers never
+// interleave - the same single-caller-at-a-time discipline clip::Scratch relies
+// on. mod::kTriangulationMaxVerts bounds both fillers (kMaxWarpPolyVerts is 66).
+static vu1::DrawVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
+
+// Fills s_polyVertexCache with the polygon's vertices as the batch wants them.
+//
+// Every read of the draw state is hoisted into a local first. They look loop
+// invariant, but the build stores through a vu1::DrawVertex while the state
+// arrives by reference, and the renderer builds with -fno-strict-aliasing - so
+// left in place the compiler must assume each store could have changed them and
+// reload all four every single time round.
+inline void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
+{
+    const mod::PolyVertex * const verts = poly.vertexes;
+
+    const bool tinted      = state.lightmapTint;
+    const bool lightmapUVs = state.lightmapUVs;
+    const u32  baseRgba    = state.rgba;
+
+    // The untinted colour is the same for every vertex of every polygon: this
+    // path leaves ClipVertex::st.z zero, so VertexColor's alpha branch reads a
+    // constant 0.0f here. Fold it once rather than per vertex.
+    const u32 flatRgba = (!tinted && state.vertexAlpha) ? WithVertexAlpha(baseRgba, 0.0f) : baseRgba;
+
+    const int numVerts = poly.numVerts;
+    for (int v = 0; v < numVerts; ++v)
+    {
+        const mod::PolyVertex & src = verts[v];
+        vu1::DrawVertex & dst = s_polyVertexCache[v];
+
+        dst.x    = src.position.x;
+        dst.y    = src.position.y;
+        dst.z    = src.position.z;
+        dst.w    = 1.0f;
+        // The chroma comes off the vertex rather than out of the atlas: it was
+        // sampled once when the luxels were baked. See PolyVertex::lightmapColor.
+        dst.rgba = tinted ? ApplyCachedLightmapColor(baseRgba, src.lightmapColor) : flatRgba;
+        dst.s    = lightmapUVs ? src.lightmap_s : src.texture_s;
+        dst.t    = lightmapUVs ? src.lightmap_t : src.texture_t;
+        dst.q    = 1.0f;
+    }
+}
+
 // Appends a polygon's triangles to the scratch buffer, clipping the ones that
 // cross the VU clip volume and flushing when full.
 // The gather for a surface SurfaceInsideClipVolume has already cleared: every
@@ -939,14 +986,32 @@ inline void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & 
 // the clipper to decide and the vertices go straight into the batch.
 // The colour has to match VertexColor exactly, since a surface can take either
 // path depending only on where the camera is standing.
+//
+// Built in two passes, because a fan emits each of its vertices more than once -
+// 12.05 emissions per surface against 6 unique vertices, measured - and every
+// emission of one is byte for byte the same. So each vertex is assembled once
+// into s_polyVertexCache and the triangle loop only copies, which also lifts the
+// draw state's branches out of the inner loop entirely.
 void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
                                 const tex::Texture & texture,
                                 const SurfaceDrawState & state)
 {
+    // TriangulatePolygon refuses a polygon wider than the cache and leaves its
+    // triangle list degenerate, so one draws nothing by either route; bailing
+    // here keeps the cache fill in bounds without a second bound to check.
+    if (poly.numVerts > mod::kTriangulationMaxVerts)
+    {
+        return;
+    }
+
+    BuildPolyVertexCache(poly, state);
+
+    const mod::ModelTriangle * const tris = poly.triangles;
     const int numTriangles = poly.numVerts - 2;
+
     for (int t = 0; t < numTriangles; ++t)
     {
-        const mod::ModelTriangle & tri = poly.triangles[t];
+        const mod::ModelTriangle & tri = tris[t];
         if (tri.vertexes[0] == tri.vertexes[1])
         {
             continue; // Degenerate leftover from the triangulation.
@@ -959,37 +1024,10 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
             s_batch.Flush(*state.mvp, texture, state.flags);
         }
 
-        for (int v = 0; v < 3; ++v)
-        {
-            const mod::PolyVertex & src = poly.vertexes[tri.vertexes[v]];
-
-            // GatherPolyTriangles leaves ClipVertex::st.z zero, so the
-            // vertexAlpha branch of VertexColor would read zero here too.
-            //
-            // The chroma comes off the vertex rather than out of the atlas: this
-            // path runs for ~96% of surface gathers and a fan emits each vertex
-            // about twice, so re-sampling here was doing the same 128 KB-strided
-            // read a dozen times per surface. See PolyVertex::lightmapColor.
-            u32 rgba = state.rgba;
-            if (state.lightmapTint)
-            {
-                rgba = ApplyCachedLightmapColor(state.rgba, src.lightmapColor);
-            }
-            else if (state.vertexAlpha)
-            {
-                rgba = WithVertexAlpha(state.rgba, 0.0f);
-            }
-
-            vu1::DrawVertex & dst = s_batch.PushVertex();
-            dst.x    = src.position.x;
-            dst.y    = src.position.y;
-            dst.z    = src.position.z;
-            dst.w    = 1.0f;
-            dst.rgba = rgba;
-            dst.s    = state.lightmapUVs ? src.lightmap_s : src.texture_s;
-            dst.t    = state.lightmapUVs ? src.lightmap_t : src.texture_t;
-            dst.q    = 1.0f;
-        }
+        vu1::DrawVertex * const dst = s_batch.PushTriangle();
+        vu1::CopyDrawVertex(dst[0], s_polyVertexCache[tri.vertexes[0]]);
+        vu1::CopyDrawVertex(dst[1], s_polyVertexCache[tri.vertexes[1]]);
+        vu1::CopyDrawVertex(dst[2], s_polyVertexCache[tri.vertexes[2]]);
 
         ++s_drawStats.trisDrawn;
     }
@@ -1100,36 +1138,75 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
     const float invWidth  = 1.0f / static_cast<float>(texture.srcWidth);
     const float invHeight = 1.0f / static_cast<float>(texture.srcHeight);
 
+    // Hoisted for the same reason BuildPolyVertexCache hoists its state: the
+    // build below stores through a vu1::DrawVertex, and under
+    // -fno-strict-aliasing the compiler would otherwise reload both per vertex.
+    const u32   rgba = state.rgba;
+    const float time = s_frameTime;
+
     for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
     {
-        if (poly->numVerts < 3) // Need at least one triangle.
+        const int numVerts = poly->numVerts;
+        if (numVerts < 3) // Need at least one triangle.
         {
             continue;
         }
-        PS2_AssertMsg(poly->numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
+        PS2_AssertMsg(numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
 
-        // Warped once per vertex: the fan below reads each of them twice.
-        float warpedS[kMaxWarpPolyVerts];
-        float warpedT[kMaxWarpPolyVerts];
-        for (int i = 0; i < poly->numVerts; ++i)
+        // Built once per vertex: the fan below reads each of them twice. The
+        // whole emitted vertex rather than just the warped coordinates, so the
+        // unclipped path can copy it straight into the batch.
+        for (int i = 0; i < numVerts; ++i)
         {
-            const float os = poly->vertexes[i].texture_s;
-            const float ot = poly->vertexes[i].texture_t;
+            const mod::PolyVertex & src = poly->vertexes[i];
+            const float os = src.texture_s;
+            const float ot = src.texture_t;
 
-            warpedS[i] = (os + TurbSin((ot * 0.125f) + s_frameTime) + scroll) * invWidth;
-            warpedT[i] = (ot + TurbSin((os * 0.125f) + s_frameTime)) * invHeight;
+            vu1::DrawVertex & dst = s_polyVertexCache[i];
+            dst.x    = src.position.x;
+            dst.y    = src.position.y;
+            dst.z    = src.position.z;
+            dst.w    = 1.0f;
+            dst.rgba = rgba;
+            dst.s    = (os + TurbSin((ot * 0.125f) + time) + scroll) * invWidth;
+            dst.t    = (ot + TurbSin((os * 0.125f) + time)) * invHeight;
+            dst.q    = 1.0f;
         }
 
-        for (int v = 1; v < poly->numVerts - 1; ++v)
+        // Same fan either way - vertex 0, then each adjacent pair round the ring.
+        const int numTriangles = numVerts - 2;
+
+        if (state.skipClipping)
         {
-            const int fan[3] = { 0, v, v + 1 };
+            for (int t = 0; t < numTriangles; ++t)
+            {
+                // Capacity is a whole number of triangles and this pushes three
+                // at a time, so the buffer can only fill on a triangle boundary.
+                if (s_batch.IsFull())
+                {
+                    s_batch.Flush(*state.mvp, texture, state.flags);
+                }
+
+                vu1::DrawVertex * const dst = s_batch.PushTriangle();
+                vu1::CopyDrawVertex(dst[0], s_polyVertexCache[0]);
+                vu1::CopyDrawVertex(dst[1], s_polyVertexCache[t + 1]);
+                vu1::CopyDrawVertex(dst[2], s_polyVertexCache[t + 2]);
+
+                ++s_drawStats.trisDrawn;
+            }
+            continue;
+        }
+
+        for (int t = 0; t < numTriangles; ++t)
+        {
+            const int fan[3] = { 0, t + 1, t + 2 };
 
             ClipVertex corners[3];
             for (int c = 0; c < 3; ++c)
             {
-                const mod::PolyVertex & src = poly->vertexes[fan[c]];
-                corners[c].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
-                corners[c].st  = { warpedS[fan[c]], warpedT[fan[c]], 0.0f, 0.0f };
+                const vu1::DrawVertex & src = s_polyVertexCache[fan[c]];
+                corners[c].pos = { src.x, src.y, src.z, 1.0f };
+                corners[c].st  = { src.s, src.t, 0.0f, 0.0f };
             }
 
             GatherTriangle(corners, texture, state);
@@ -1450,6 +1527,13 @@ void RenderAlphaSurfaces()
             state.mvp    = entry.mvp;
             state.rgba   = rgba;
         }
+
+        // s_clipVolume is built from the world's view-projection, so the surface
+        // test only speaks for entries drawn through it. A brush model entity
+        // carries its own transform and keeps clipping per triangle.
+        const bool worldTransform = (entry.mvp == &s_viewProjMatrix);
+        state.skipClipping = worldTransform && SurfaceInsideClipVolume(*entry.surf);
+        s_drawStats.surfsUnclipped += state.skipClipping;
 
         if (texFlags & SURF_WARP)
         {

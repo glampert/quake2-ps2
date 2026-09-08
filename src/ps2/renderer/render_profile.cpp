@@ -110,86 +110,10 @@ bool Enabled()
     return s_frameLog->value != 0.0f;
 }
 
-} // namespace
-
-void FrameLogCapture()
+// Writes every sample the batch holds and empties it. Callers decide whether a
+// partial batch is worth writing; see FrameLogFlush and FrameLogFinish.
+void WriteBatch()
 {
-    if (!Enabled())
-    {
-        return;
-    }
-
-    ++s_frameIndex;
-
-    // The previous dump stretched this frame; logging it would read as a spike
-    // in the renderer rather than in the logging.
-    if (s_skipNext)
-    {
-        s_skipNext = false;
-        return;
-    }
-
-    if (s_count >= kBatchFrames)
-    {
-        return; // Batch already full and waiting on FrameLogFlush.
-    }
-
-    FrameSample & s = s_samples[s_count++];
-    s.frameIndex = s_frameIndex;
-
-    const ps2::debug::ProfileEvent * const events[kNumEvents] = {
-        &prof_evt::Frame,     &prof_evt::VSync,      &prof_evt::GsWait,     &prof_evt::DmaSend,
-        &prof_evt::View,      &prof_evt::World,      &prof_evt::Vis,        &prof_evt::MarkLeaves,
-        &prof_evt::BspWalk,   &prof_evt::LmChain,    &prof_evt::TexChains,  &prof_evt::LmChains,
-        &prof_evt::Entities,  &prof_evt::EntCull,    &prof_evt::EntShade,   &prof_evt::EntGeom,
-        &prof_evt::EntShadow, &prof_evt::EntBrush,   &prof_evt::Particles,  &prof_evt::AlphaSurfs,
-        &prof_evt::Sky,
-    };
-    for (int i = 0; i < kNumEvents; ++i)
-    {
-        s.cycles[i] = events[i]->lastFrameCycles;
-    }
-
-    // Both of these still hold the finished frame's values here: DrawStats is
-    // cleared at the top of view::RenderFrame and the lightmap counters by
-    // lm::BeginFrame, neither of which has run yet for the new frame.
-    const view::DrawStats & d = view::GetDrawStats();
-    s.nodes          = d.nodesWalked;
-    s.surfs          = d.surfaces;
-    s.surfsAlpha     = d.surfacesAlpha;
-    s.surfsUnclipped = d.surfsUnclipped;
-    s.skyFaces       = d.skyFaces;
-    s.tris           = d.trisDrawn;
-    s.trisClipped    = d.trisClipped;
-    s.trisCulled     = d.trisCulled;
-    s.trisBackFacing = d.trisBackFacing;
-    s.boxesCulled    = d.boxesCulled;
-    s.batches        = d.drawBatches;
-    s.entities       = d.entities;
-    s.particles      = d.particles;
-    s.dlights        = d.dlights;
-
-    const lm::Stats l = lm::GetStats();
-    s.lmAtlases = l.atlases;
-    s.lmStyle   = l.styleUpdates;
-    s.lmDynamic = l.dynamicUpdates;
-    s.lmRestore = l.restoreUpdates;
-
-    const vram::Stats v = vram::GetStats();
-    s.vramUploads  = v.uploadsThisFrame;
-    s.vramOomSyncs = v.oomSyncsThisFrame;
-    s.vramResident = v.residentTextures;
-
-    s.submittedBytes = vu1::FrameSubmittedBytes();
-}
-
-void FrameLogFlush()
-{
-    if (s_count < kBatchFrames || !Enabled())
-    {
-        return;
-    }
-
     if (!s_headerDone)
     {
         s_headerDone = true;
@@ -238,6 +162,106 @@ void FrameLogFlush()
 
     s_count    = 0;
     s_skipNext = true; // this frame just absorbed the whole dump
+}
+
+} // namespace
+
+void FrameLogCapture()
+{
+    if (!Enabled())
+    {
+        return;
+    }
+
+    ++s_frameIndex;
+
+    // The previous dump stretched this frame; logging it would read as a spike
+    // in the renderer rather than in the logging.
+    if (s_skipNext)
+    {
+        s_skipNext = false;
+        return;
+    }
+
+    if (s_count >= kBatchFrames)
+    {
+        return; // Batch already full and waiting on FrameLogFlush.
+    }
+
+    FrameSample & s = s_samples[s_count++];
+    s.frameIndex = s_frameIndex;
+
+    static const ps2::debug::ProfileEvent * const s_events[kNumEvents] = {
+        &prof_evt::Frame,     &prof_evt::VSync,    &prof_evt::GsWait,    &prof_evt::DmaSend,
+        &prof_evt::View,      &prof_evt::World,    &prof_evt::Vis,       &prof_evt::MarkLeaves,
+        &prof_evt::BspWalk,   &prof_evt::LmChain,  &prof_evt::TexChains, &prof_evt::LmChains,
+        &prof_evt::Entities,  &prof_evt::EntCull,  &prof_evt::EntShade,  &prof_evt::EntGeom,
+        &prof_evt::EntShadow, &prof_evt::EntBrush, &prof_evt::Particles, &prof_evt::AlphaSurfs,
+        &prof_evt::Sky,
+    };
+    for (int i = 0; i < kNumEvents; ++i)
+    {
+        s.cycles[i] = s_events[i]->lastFrameCycles;
+    }
+
+    // Both of these still hold the finished frame's values here: DrawStats is
+    // cleared at the top of view::RenderFrame and the lightmap counters by
+    // lm::BeginFrame, neither of which has run yet for the new frame.
+    const view::DrawStats & d = view::GetDrawStats();
+    s.nodes          = d.nodesWalked;
+    s.surfs          = d.surfaces;
+    s.surfsAlpha     = d.surfacesAlpha;
+    s.surfsUnclipped = d.surfsUnclipped;
+    s.skyFaces       = d.skyFaces;
+    s.tris           = d.trisDrawn;
+    s.trisClipped    = d.trisClipped;
+    s.trisCulled     = d.trisCulled;
+    s.trisBackFacing = d.trisBackFacing;
+    s.boxesCulled    = d.boxesCulled;
+    s.batches        = d.drawBatches;
+    s.entities       = d.entities;
+    s.particles      = d.particles;
+    s.dlights        = d.dlights;
+
+    const lm::Stats l = lm::GetStats();
+    s.lmAtlases = l.atlases;
+    s.lmStyle   = l.styleUpdates;
+    s.lmDynamic = l.dynamicUpdates;
+    s.lmRestore = l.restoreUpdates;
+
+    const vram::Stats v = vram::GetStats();
+    s.vramUploads  = v.uploadsThisFrame;
+    s.vramOomSyncs = v.oomSyncsThisFrame;
+    s.vramResident = v.residentTextures;
+
+    s.submittedBytes = vu1::FrameSubmittedBytes();
+}
+
+void FrameLogFlush()
+{
+    if (s_count < kBatchFrames || !Enabled())
+    {
+        return;
+    }
+    WriteBatch();
+}
+
+void FrameLogFinish()
+{
+    if (!Enabled())
+    {
+        return;
+    }
+
+    // Whatever is left has nowhere else to go - this is the end of the run.
+    if (s_count > 0)
+    {
+        WriteBatch();
+    }
+
+    // Lets the reader tell a completed capture from one the emulator cut short.
+    std::printf("FLOG#end,%u\n", s_frameIndex);
+    std::fflush(stdout);
 }
 
 void FrameLogMarkMap(const char * mapName)

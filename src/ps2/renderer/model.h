@@ -97,11 +97,17 @@ struct ModelVertex
     Vec3 position;
 };
 
+// Widest polygon TriangulatePolygon will accept, per polygon. A wider one is
+// refused at load with an error and left with a degenerate triangle list, so it
+// draws nothing; the draw paths rely on that to bound their own per-polygon
+// working sets by this.
+constexpr int kTriangulationMaxVerts = 128;
+
 //
 // Model triangle vertex indexes, into the owning ModelPoly's vertexes[].
-// A byte each: TriangulatePolygon refuses polygons above kTriangulationMaxVerts
-// (128), so an index never reaches 128, and there is one of these per triangle
-// of every world face - the two bytes saved add up.
+// A byte each: TriangulatePolygon refuses polygons above kTriangulationMaxVerts,
+// so an index never reaches 128, and there is one of these per triangle of every
+// world face - the two bytes saved add up.
 //
 struct ModelTriangle
 {

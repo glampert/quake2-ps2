@@ -131,6 +131,10 @@ struct Texture final
     void MarkPixelsDirty() const { dirtyPixels = true; }
 
     // TODO: Consider texture mipmaps support.
+    // TODO: Separate texture heap with defragmentation support?
+    // We could place all textures on their own heap, sized for
+    // the largest map's working set, with defrag support
+    // between levels. Might open enough room to fit mipmaps.
 };
 
 // Mappings from the strongly typed enums above to the plain integer constants

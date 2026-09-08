@@ -64,11 +64,18 @@ void FrameLogFlush();
 // Emits a marker row so a run can be split by map. Called from PS2_BeginRegistration.
 void FrameLogMarkMap(const char * mapName);
 
+// Ends the log: writes whatever the batch still holds, rather than waiting for
+// it to fill, then an "FLOG#end" row. Call once when a run finishes - without it
+// the last partial batch is lost, and a capture cut short by a crash reads the
+// same as one that ran to completion.
+void FrameLogFinish();
+
 #if !PS2_QUAKE_PROFILE
 // No-op stubs for when the profiler is disabled.
 inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
+inline void FrameLogFinish() {}
 #endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::debug

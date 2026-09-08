@@ -792,13 +792,13 @@ struct SurfaceDrawState
     // draw leaves it alone.
     bool               lightmapUVs = false;
 
-    // Chroma mirror of the atlas the surface being gathered is packed into, or
-    // null to leave the vertex colour flat. Set per surface by the diffuse
-    // passes: the lightmap pass can only deliver a luxel's intensity, so its
-    // colour is sampled here instead, per vertex, and folded into the vertex
-    // colour the GS modulates the wall texture by. Mutually exclusive with
+    // Tint the surface being gathered by the luxel chroma its vertices carry
+    // (PolyVertex::lightmapColor), rather than leaving the vertex colour flat.
+    // Set per surface by the diffuse passes: the lightmap pass can only deliver
+    // a luxel's intensity, so its colour rides the vertex colour the GS
+    // modulates the wall texture by instead. Mutually exclusive with
     // vertexAlpha, which owns that colour's alpha byte.
-    const u16 *        lightmapColors = nullptr;
+    bool               lightmapTint = false;
 
     // The surface being gathered was proven wholly inside the VU clip volume, so
     // GatherPolyTriangles may emit its triangles verbatim and skip the clipper
@@ -817,24 +817,57 @@ struct SurfaceDrawState
 // sky and alias model paths; what follows is this file's use of them, which is
 // the per-vertex colour and nothing else. ClipVertex::st carries the vertex
 // alpha in .z under SurfaceDrawState::vertexAlpha, and ClipVertex::color the
-// luxel chroma as a 0..1 tint under SurfaceDrawState::lightmapColors.
+// luxel chroma as a 0..1 tint under SurfaceDrawState::lightmapTint.
 // ------------------------------------------------------------------------------------------------
 
 using clip::ClipVertex;
 
-// Swaps the batch colour's alpha for this vertex's own, clamped onto the GS's
-// 0..0x80 = 0..1.0 alpha scale.
-inline u32 WithVertexAlpha(u32 rgba, float alpha)
-{
-    const float scaled = alpha * 128.0f;
-    const u32   packed = (scaled >= 128.0f) ? 128u
-                       : (scaled <= 0.0f)   ? 0u
-                                            : static_cast<u32>(scaled);
-    return (rgba & 0x00FFFFFFu) | (packed << 24);
-}
-
 // Scales one 0-255 colour channel by a 0..1 factor, rounded so a factor of 1
 // leaves it exactly where it was.
+// Applies a vertex's cached luxel chroma (lm::CacheSurfaceVertexColors) to a
+// batch colour. The cache holds what a fullbright batch wants, which is the
+// overwhelmingly common case and needs nothing further.
+//
+// The rest - the lightmap-only debug view, and translucent brush models at their
+// flat quarter alpha - rescale it with integer maths rather than falling back to
+// re-sampling the atlas: the cached channel is the chroma times 128, so
+// (base * cached) >> 7 recovers base times chroma, with no float conversions and
+// no 128 KB mirror read.
+// The same cached chroma as a 0..1 tint, for the clipper - which interpolates
+// ClipVertex::color across a cut and so needs it as floats rather than packed.
+//
+// No precision is lost going through the cache: it holds the chroma scaled by
+// 128, where the atlas mirror it was sampled from is only 5:6:5. Both gather
+// paths now derive the tint from the same bytes, so a surface that straddles the
+// clip volume shades identically to one that does not.
+inline math::Vec4 UnpackCachedLightmapColor(const u32 cached)
+{
+    constexpr float kInv = 1.0f / 128.0f;
+    return { static_cast<float>( cached        & 0xFFu) * kInv,
+             static_cast<float>((cached >>  8) & 0xFFu) * kInv,
+             static_cast<float>((cached >> 16) & 0xFFu) * kInv,
+             1.0f };
+}
+
+inline u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
+{
+    if (base == kFullBright)
+    {
+        return cached;
+    }
+
+    const auto channel = [](const u32 b, const u32 c) -> u32
+    {
+        const u32 scaled = ((b * c) + 64u) >> 7;
+        return (scaled > 255u) ? 255u : scaled;
+    };
+
+    return channel( base        & 0xFFu,  cached        & 0xFFu)
+        | (channel((base >>  8) & 0xFFu, (cached >>  8) & 0xFFu) <<  8)
+        | (channel((base >> 16) & 0xFFu, (cached >> 16) & 0xFFu) << 16)
+        | (base & 0xFF000000u); // The batch keeps its own alpha.
+}
+
 inline u32 ScaleChannel(u32 channel, float scale)
 {
     const float scaled = (static_cast<float>(channel) * scale) + 0.5f;
@@ -854,13 +887,24 @@ inline u32 WithVertexColor(u32 rgba, const math::Vec4 & tint)
         | (rgba & 0xFF000000u);
 }
 
+// Swaps the batch colour's alpha for this vertex's own, clamped onto the GS's
+// 0..0x80 = 0..1.0 alpha scale.
+inline u32 WithVertexAlpha(u32 rgba, float alpha)
+{
+    const float scaled = alpha * 128.0f;
+    const u32   packed = (scaled >= 128.0f) ? 128u
+                       : (scaled <= 0.0f)   ? 0u
+                                            : static_cast<u32>(scaled);
+    return (rgba & 0x00FFFFFFu) | (packed << 24);
+}
+
 // The colour one gathered vertex draws with: the batch colour, tinted by the
 // luxel chroma or wearing this vertex's own alpha, per the draw state.
 inline u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & state)
 {
-    return (state.lightmapColors != nullptr) ? WithVertexColor(state.rgba, v.color)
-          : state.vertexAlpha                ? WithVertexAlpha(state.rgba, v.st.z)
-                                             : state.rgba;
+    return state.lightmapTint ? WithVertexColor(state.rgba, v.color)
+         : state.vertexAlpha  ? WithVertexAlpha(state.rgba, v.st.z)
+                              : state.rgba;
 }
 
 // Clips one triangle against the VU clip volume and appends the survivors to
@@ -886,31 +930,6 @@ inline void GatherTriangle(ClipVertex (&corners)[3], const tex::Texture & textur
 inline void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & state)
 {
     s_batch.Flush(*state.mvp, texture, state.flags);
-}
-
-// Point-samples the luxel chroma a vertex's lightmap UVs land on - the half of
-// the luxel the lightmap pass cannot carry, since the GS can only blend by a
-// scalar alpha. The UVs are normalised over the atlas, so scaling by its
-// dimensions gives the luxel to read, and the half-luxel offset the loader baked
-// into them puts the result on a texel centre, so truncating picks that luxel
-// rather than a neighbour. Clamped because nothing guarantees otherwise: a block
-// packed flush against the atlas edge can round a hair past it.
-//
-// A point sample, deliberately - this runs per vertex per frame over every
-// visible world surface, and the term it is fetching barely varies.
-inline math::Vec4 SampleLightmapColor(const u16 * const colors, const float s, const float t)
-{
-    constexpr float kMaxS = static_cast<float>(lm::kLightmapTextureWidth  - 1);
-    constexpr float kMaxT = static_cast<float>(lm::kLightmapTextureHeight - 1);
-
-    const float fs = s * static_cast<float>(lm::kLightmapTextureWidth);
-    const float ft = t * static_cast<float>(lm::kLightmapTextureHeight);
-
-    const int ls = static_cast<int>((fs <= 0.0f) ? 0.0f : (fs >= kMaxS) ? kMaxS : fs);
-    const int lt = static_cast<int>((ft <= 0.0f) ? 0.0f : (ft >= kMaxT) ? kMaxT : ft);
-
-    const lm::AtlasColor c = lm::UnpackAtlasColor(colors[(lt * lm::kLightmapTextureWidth) + ls]);
-    return { c.r, c.g, c.b, 1.0f };
 }
 
 // Appends a polygon's triangles to the scratch buffer, clipping the ones that
@@ -946,11 +965,15 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
 
             // GatherPolyTriangles leaves ClipVertex::st.z zero, so the
             // vertexAlpha branch of VertexColor would read zero here too.
+            //
+            // The chroma comes off the vertex rather than out of the atlas: this
+            // path runs for ~96% of surface gathers and a fan emits each vertex
+            // about twice, so re-sampling here was doing the same 128 KB-strided
+            // read a dozen times per surface. See PolyVertex::lightmapColor.
             u32 rgba = state.rgba;
-            if (state.lightmapColors != nullptr)
+            if (state.lightmapTint)
             {
-                rgba = WithVertexColor(state.rgba,
-                                       SampleLightmapColor(state.lightmapColors, src.lightmap_s, src.lightmap_t));
+                rgba = ApplyCachedLightmapColor(state.rgba, src.lightmapColor);
             }
             else if (state.vertexAlpha)
             {
@@ -1004,10 +1027,9 @@ void GatherPolyTriangles(const mod::ModelPoly & poly,
             corners[v].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
             corners[v].st  = { uvS, uvT, 0.0f, 0.0f };
 
-            if (state.lightmapColors != nullptr)
+            if (state.lightmapTint)
             {
-                corners[v].color = SampleLightmapColor(state.lightmapColors,
-                                                       src.lightmap_s, src.lightmap_t);
+                corners[v].color = UnpackCachedLightmapColor(src.lightmapColor);
             }
         }
 
@@ -1145,16 +1167,6 @@ inline bool LightmapColorEnabled()
     return (s_lightmaps->value != 0.0f) && (s_lightmapColor->value != 0.0f);
 }
 
-// The chroma mirror to sample a surface's vertices from, or null when it has no
-// lightmap at all - which for the world means sky, since RecursiveWorldNode
-// sends turbulent and translucent faces down the alpha pass instead.
-inline const u16 * SurfaceLightmapColors(const mod::ModelSurface & surf)
-{
-    return (surf.lightmapTextureNum != mod::kNotLightmapped)
-         ? lm::AtlasColors(surf.lightmapTextureNum)
-         : nullptr;
-}
-
 // Draws every texture chain built by RecursiveWorldNode and resets them.
 void DrawTextureChains(const SurfaceDrawState & base)
 {
@@ -1181,8 +1193,10 @@ void DrawTextureChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = texture->textureChain; surf != nullptr; surf = surf->textureChain)
         {
-            state.lightmapColors = tinted ? SurfaceLightmapColors(*surf) : nullptr;
-            state.skipClipping   = worldTransform && SurfaceInsideClipVolume(*surf);
+            // Unlightmapped here means sky: RecursiveWorldNode sends turbulent
+            // and translucent faces down the alpha pass instead.
+            state.lightmapTint = tinted && (surf->lightmapTextureNum != mod::kNotLightmapped);
+            state.skipClipping = worldTransform && SurfaceInsideClipVolume(*surf);
             s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -1209,7 +1223,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
 // pass lightmapping: same geometry, same transform, but sampling the atlas
 // through the vertices' second UV set and blending with Cd * As, so each pixel
 // is scaled by how lit it is. Intensity only - see vu1::DrawFlags::Modulate for
-// why the GS cannot carry the colour too, and SurfaceDrawState::lightmapColors
+// why the GS cannot carry the colour too, and SurfaceDrawState::lightmapTint
 // for where it goes instead.
 //
 // 'base' is the draw state of the pass being lit - the world's or a brush model
@@ -1240,9 +1254,9 @@ void DrawLightmapChains(const SurfaceDrawState & base)
         state.flags = state.flags | vu1::DrawFlags::DynamicLights;
     }
 
-    state.vertexAlpha    = false;
-    state.lightmapUVs    = true;
-    state.lightmapColors = nullptr; // The chroma is the diffuse pass's half; this one carries the intensity.
+    state.vertexAlpha  = false;
+    state.lightmapUVs  = true;
+    state.lightmapTint = false; // The chroma is the diffuse pass's half; this one carries the intensity.
 
     // As in DrawTextureChains: only the world's own transform is the one
     // s_clipVolume was built for.
@@ -1989,7 +2003,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         {
             lm::ChainSurface(*surf, viewDef, s_frameCount);
         }
-        state.lightmapColors = (lit && tinted) ? SurfaceLightmapColors(*surf) : nullptr;
+        state.lightmapTint = lit && tinted;
 
         const tex::Texture * texture = TextureAnimation(surf->texInfo, entity.frame);
         if (texture != batchTexture)

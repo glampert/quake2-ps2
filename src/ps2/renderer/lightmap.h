@@ -21,10 +21,11 @@
  *  second colour, so diffuse x coloured-lightmap is not expressible as one blend.
  *  So the atlases the hardware samples are Alpha8 and carry only the luxel's
  *  *intensity*, which the lightmap pass multiplies in per pixel; the chroma left
- *  over rides in a mirror in EE RAM (AtlasColors) that the diffuse pass samples
- *  per vertex and folds into the vertex colour the GS modulates the wall texture
- *  by. Intensity times chroma is the luxel again, so the two together reproduce
- *  it - at full resolution in the term that varies per pixel, and at vertex
+ *  over rides in a mirror in EE RAM, sampled per vertex whenever the luxels are
+ *  baked (CacheSurfaceVertexColors) and cached on the vertex, for the diffuse
+ *  pass to fold into the vertex colour the GS modulates the wall texture by.
+ *  Intensity times chroma is the luxel again, so the two together reproduce it -
+ *  at full resolution in the term that varies per pixel, and at vertex
  *  resolution in the one that barely varies at all.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -137,17 +138,19 @@ void BeginFrame();
 // valid arguments; the caller filters them out.
 void ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, int frameCount);
 
+// Re-samples the luxel chroma under every vertex of the surface's polygons and
+// caches it in PolyVertex::lightmapColor.
+//
+// Must run after the surface's polygons exist and after every rebake of its
+// luxels - the load path calls it once the polygons are built, and ChainSurface
+// calls it whenever it rebuilds, which is what keeps the dynamic lightmap mode
+// (ps2_dynamic_lightmaps 1) correct as lights move across a surface.
+void CacheSurfaceVertexColors(mod::ModelSurface & surf);
+
 // Atlases in use by the current map, and the texture to bind for one. Indices
 // are the surfaces' lightmapTextureNum.
 int NumAtlases();
 const tex::Texture & AtlasTexture(int index);
-
-// The atlas's chroma mirror: kLightmapTextureWidth * kLightmapTextureHeight
-// packed AtlasColors, indexed [t * kLightmapTextureWidth + s] - the same
-// addressing as the atlas texture, so the vertices' lightmap UVs scaled by the
-// atlas dimensions address it directly. Never uploaded; this is the half of each
-// luxel the GS cannot blend, left for the diffuse pass to sample itself.
-const u16 * AtlasColors(int index);
 
 // Head of the atlas's draw chain, as built by ChainSurface this frame; null when
 // nothing visible uses it. Walk it through ModelSurface::lightmapChain.

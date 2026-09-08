@@ -29,6 +29,7 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/vu1.h"
 #include "ps2/renderer/scrap_atlas.h" // SkylinePacker, shared with the 2D scrap atlases
 #include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/gs.h"
@@ -94,6 +95,7 @@ public:
 
     void BeginFrame();
     void ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, int frameCount);
+    void CacheSurfaceVertexColors(mod::ModelSurface & surf);
     void ClearChains();
 
     int NumAtlases() const { return m_atlasCount; }
@@ -102,12 +104,6 @@ public:
     {
         PS2_Assert(index >= 0 && index < m_atlasCount);
         return m_atlases[index];
-    }
-
-    const u16 * AtlasColors(int index) const
-    {
-        PS2_Assert(index >= 0 && index < m_atlasCount);
-        return m_mirror[index];
     }
 
     const mod::ModelSurface * AtlasChain(int index) const
@@ -130,6 +126,7 @@ private:
     void AddDynamicLights(const mod::ModelSurface & surf, const dlight_t * dlights, int numDlights);
     void StoreLightmap(const mod::ModelSurface & surf);
     void SetCacheState(mod::ModelSurface & surf, const lightstyle_t * lightstyles);
+    u32  SampleVertexColor(int atlas, float s, float t) const;
 
     int  m_atlasCount = 0;
     bool m_building   = false;
@@ -499,6 +496,56 @@ void LightmapManager::StoreLightmap(const mod::ModelSurface & surf)
 
 // Records the style intensities the surface's luxels were just baked at, so a
 // later frame can tell whether an animated style has moved since.
+// The luxel chroma at one vertex's lightmap UVs, packed as a GS vertex colour.
+//
+// Deliberately the same point sample the per-frame path used to do - normalised
+// UVs scaled by the atlas size and truncated onto a texel - so the cached value
+// is bit-identical to what was being computed every frame.
+//
+// Scaled by 128, not 255: 128 is the GS modulate identity, so this is exactly
+// what a fullbright batch's vertex colour has to be for the wall texel to come
+// through tinted by the luxel and nothing else.
+u32 LightmapManager::SampleVertexColor(const int atlas, const float s, const float t) const
+{
+    constexpr float kMaxS = static_cast<float>(kLightmapTextureWidth  - 1);
+    constexpr float kMaxT = static_cast<float>(kLightmapTextureHeight - 1);
+
+    const float fs = s * static_cast<float>(kLightmapTextureWidth);
+    const float ft = t * static_cast<float>(kLightmapTextureHeight);
+
+    const int ls = static_cast<int>((fs <= 0.0f) ? 0.0f : (fs >= kMaxS) ? kMaxS : fs);
+    const int lt = static_cast<int>((ft <= 0.0f) ? 0.0f : (ft >= kMaxT) ? kMaxT : ft);
+
+    const AtlasColor c = UnpackAtlasColor(m_mirror[atlas][(lt * kLightmapTextureWidth) + ls]);
+
+    const auto channel = [](const float v) -> u32
+    {
+        const float scaled = (128.0f * v) + 0.5f;
+        return (scaled <= 0.0f) ? 0u : (scaled >= 255.0f) ? 255u : static_cast<u32>(scaled);
+    };
+
+    return vu1::PackColorRGBA(channel(c.r), channel(c.g), channel(c.b), 0x80);
+}
+
+void LightmapManager::CacheSurfaceVertexColors(mod::ModelSurface & surf)
+{
+    const int atlas = surf.lightmapTextureNum;
+    if (atlas == mod::kNotLightmapped)
+    {
+        return; // Sky, turbulent and translucent faces carry no luxels.
+    }
+    PS2_Assert(atlas >= 0 && atlas < m_atlasCount);
+
+    for (mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
+    {
+        for (int i = 0; i < poly->numVerts; ++i)
+        {
+            mod::PolyVertex & v = poly->vertexes[i];
+            v.lightmapColor = SampleVertexColor(atlas, v.lightmap_s, v.lightmap_t);
+        }
+    }
+}
+
 void LightmapManager::SetCacheState(mod::ModelSurface & surf, const lightstyle_t * lightstyles)
 {
     for (int map = 0; map < mod::kMaxLightmaps && surf.styles[map] != 255; ++map)
@@ -575,6 +622,8 @@ void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & vi
         BuildLightmap(surf, viewDef.lightstyles, viewDef.dlights, viewDef.num_dlights, /* addDynamic = */ true);
         StoreLightmap(surf);
 
+        CacheSurfaceVertexColors(surf); // The luxels moved; the cached chroma must follow.
+
         surf.lightmapDynamicFrame = frameCount;
         m_atlases[atlas].MarkPixelsDirty();
         ++m_stats.dynamicUpdates;
@@ -623,6 +672,7 @@ void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & vi
         {
             BuildLightmap(surf, viewDef.lightstyles, nullptr, 0, /* addDynamic = */ false);
             StoreLightmap(surf);
+            CacheSurfaceVertexColors(surf); // As above: rebaked lightmap.
             SetCacheState(surf, viewDef.lightstyles);
 
             surf.lightmapDynamicFrame = kNoDynamicFrame;
@@ -684,6 +734,11 @@ void BeginFrame()
     s_manager.BeginFrame();
 }
 
+void CacheSurfaceVertexColors(mod::ModelSurface & surf)
+{
+    s_manager.CacheSurfaceVertexColors(surf);
+}
+
 void ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, const int frameCount)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::LmChain);
@@ -698,11 +753,6 @@ int NumAtlases()
 const tex::Texture & AtlasTexture(const int index)
 {
     return s_manager.AtlasTexture(index);
-}
-
-const u16 * AtlasColors(const int index)
-{
-    return s_manager.AtlasColors(index);
 }
 
 const mod::ModelSurface * AtlasChain(const int index)

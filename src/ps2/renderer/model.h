@@ -82,6 +82,11 @@ struct PolyVertex
     // lightmap tex coords:
     float lightmap_s;
     float lightmap_t;
+
+    // The luxel chroma under this vertex, already sampled from the atlas mirror
+    // and packed as the vertex colour a fullbright batch wants. Only changes when
+    // the surface's luxels are rebaked, which for static lighting is never.
+    u32 lightmapColor;
 };
 
 //

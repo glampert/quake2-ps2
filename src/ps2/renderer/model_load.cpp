@@ -1292,6 +1292,11 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
         }
 
         ComputeSurfaceBounds(surf);
+
+        // Only now do the polygons exist, so this cannot ride along with
+        // CreateSurfaceLightmap above - which has to run first, since
+        // BuildPolygonFromSurface bakes the atlas UVs this samples through.
+        lm::CacheSurfaceVertexColors(surf);
     }
 
     lm::EndBuildingLightmaps();

@@ -49,6 +49,7 @@ namespace ps2::vu1 {
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_TexturedTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LerpedTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_Particles);
+PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LitTriangles);
 
 // ------------------------------------------------------------------------------------------------
 // Shared local helpers
@@ -132,6 +133,54 @@ static int s_peakSubmittedBytes  = 0;
 static u32 s_texturedTrisProgAddr = 0;
 static u32 s_lerpedProgAddr = 0;
 static u32 s_particlesProgAddr = 0;
+static u32 s_litTrisProgAddr = 0;
+
+// ------------------------------------------------------------------------------------------------
+// Dynamic point lights (must match lit_triangles.vcl)
+// ------------------------------------------------------------------------------------------------
+
+// VU data address of the light block. Deliberately above the double buffers
+// (which end at 8 + 2*496 = 1000) rather than beside the frame constants, so
+// adding it costs no vertex capacity: qwords 1000-1023 were unused.
+constexpr int kLightBlockAddr = 1000;
+
+// The GS alpha the lit colour carries. The lightmap pass needs its source alpha
+// left at 1.0 so the blend still modulates by the luxel intensity; the lighting
+// only ever touches .xyz, so this rides through untouched and ftoi0 turns it
+// into the GS 0x80.
+constexpr float kLitVertexAlpha = 128.0f;
+
+// The lit program's per-vertex registers. Same three slots as kVertexRegList,
+// but the colour goes through PACKED RGBAQ instead of an A+D write: the lit
+// program *computes* its colour as four floats, and ftoi0 of a float vector
+// lands one byte per word, which is exactly what the PACKED descriptor reads.
+// The A+D route exists for the other programs because their colour arrives as a
+// packed u32 that must be raw-copied; that does not apply here.
+//
+// ST must stay first: PACKED RGBAQ takes Q from the internal register the
+// preceding ST write latches (word 2 of the ST qword carries it).
+constexpr u64 kLitVertexRegList = (u64(GIF_REG_ST)    << 0) |
+                                  (u64(GIF_REG_RGBAQ) << 4) |
+                                  (u64(GIF_REG_XYZ2)  << 8);
+
+// The light block as the microprogram reads it. Positions are transposed - all
+// four lights' X in one quadword, all four Y in the next - so one SIMD lane
+// carries one light and the whole four-light distance calculation is three
+// subtracts and three multiply-accumulates. That transposition is the whole
+// trick; see the header comment in lit_triangles.vcl.
+struct alignas(16) LightConstants
+{
+    math::Vec4 posX;
+    math::Vec4 posY;
+    math::Vec4 posZ;
+    math::Vec4 negColorDivR2[kMaxDynamicLights]; // -(color / radius^2), GS units
+    math::Vec4 color[kMaxDynamicLights];         // color, GS units
+    math::Vec4 clamp;                            // (255, 255, 255, 128)
+};
+static_assert(sizeof(LightConstants) == 12 * 16, "Must match the VU memory layout");
+static_assert(kLightBlockAddr + 12 <= 1024, "Light block overruns VU1 data memory");
+
+static LightConstants s_lightConstants;
 
 // ------------------------------------------------------------------------------------------------
 // Helper functions
@@ -220,6 +269,20 @@ inline u64 MakeAlphaData(DrawFlags flags)
 
     if (HasDrawFlag(flags, DrawFlags::Modulate))
     {
+        if (HasDrawFlag(flags, DrawFlags::DynamicLights))
+        {
+            // (Cd - 0) * As / 128 + Cs: the lightmap modulate as below, plus the
+            // lit program's computed colour added on top. The D term is the slot
+            // that made this possible - plain Modulate leaves it zero, so the
+            // pass's vertex colour was going spare.
+            //
+            // Cs is exactly that colour: the atlas texel is an alpha-ramp CLUT
+            // entry whose RGB is pinned at the modulate identity, so
+            // Ct * Cv >> 7 == Cv. As is untouched, still the luxel intensity.
+            return GS_SET_ALPHA(BLEND_COLOR_DEST, BLEND_COLOR_ZERO,
+                                BLEND_ALPHA_SOURCE, BLEND_COLOR_SOURCE, 0x80);
+        }
+
         // (Cd - 0) * As / 128 + 0: scales the framebuffer by the source alpha
         // and adds nothing, so the batch's own colour never reaches the pixel.
         return GS_SET_ALPHA(BLEND_COLOR_DEST, BLEND_COLOR_ZERO,
@@ -302,7 +365,11 @@ void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
     // inside the PRIM field, where PRIM_TRIANGLE (3) already has that bit
     // set. Nothing warned and the primitive still drew, just never blended.
     const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, ctx, 0);
-    pkt.AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3), kVertexRegList);
+    // The lit program emits PACKED RGBAQ where the others emit an A+D write, so
+    // the register list has to follow which one this batch will run.
+    const bool lit = HasDrawFlag(flags, DrawFlags::DynamicLights);
+    pkt.AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
+                 lit ? kLitVertexRegList : kVertexRegList);
 }
 
 // Rebuilds s_constants for a draw and opens the chain with its unpack to the
@@ -322,12 +389,12 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     s_constants.clipScale = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
 
     pkt.Reset();
-    pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
 
-    // Every chain opens with its own constants block, so an arena would need one
-    // per draw call (and one more per mid-call overflow flush) - count them here
-    // rather than at the Draw* entry points, which would miss the reopens.
+    pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
     s_frameSubmittedBytes += static_cast<int>(sizeof(FrameConstants));
+
+    pkt.AddUnpackData(kLightBlockAddr, &s_lightConstants, sizeof(LightConstants) / 16, false);
+    s_frameSubmittedBytes += static_cast<int>(sizeof(LightConstants));    
 }
 
 // FLUSH so a DMA wait covers the VU runs and their XGKICKs, then terminate
@@ -336,13 +403,21 @@ void SendChainAndWait(VifPacket & pkt)
 {
     pkt.AddFlush();
     pkt.AddEndTag();
-    pkt.Send();
+
+    // Send is FlushCache(0) plus a DMA kick, and the flush is a kernel syscall
+    // that writes back the whole data cache - paid once per batch.
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaSend);
+        pkt.Send();
+    }
 
     // The stall this whole batch exists to pay for: one per drawBatches, and the
     // single largest recoverable cost in the renderer. Charged to the shared
     // GSWait total (render_profile.h) alongside the GIF-side waits in gs.cpp.
-    PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-    pkt.Wait();
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+        pkt.Wait();
+    }
 }
 
 } // namespace
@@ -359,18 +434,20 @@ void Init()
     dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_VIF1);
 
-    // All three microprograms stay resident: the textured one at micro address
-    // 0, then the lerped one, then the particle one. MPG uploads round an odd
-    // instruction count up to even, so each base rounds up too.
+    // All four microprograms stay resident: the textured one at micro address
+    // 0, then the lerped one, the particle one and the lit one. MPG uploads
+    // round an odd instruction count up to even, so each base rounds up too.
     const u32 texturedInstructions  = VU1Prog_TexturedTriangles_InstructionCount();
     const u32 lerpedInstructions    = VU1Prog_LerpedTriangles_InstructionCount();
     const u32 particlesInstructions = VU1Prog_Particles_InstructionCount();
+    const u32 litInstructions       = VU1Prog_LitTriangles_InstructionCount();
 
     s_texturedTrisProgAddr = 0;
     s_lerpedProgAddr       = (texturedInstructions + 1u) & ~1u;
     s_particlesProgAddr    = (s_lerpedProgAddr + lerpedInstructions + 1u) & ~1u;
+    s_litTrisProgAddr      = (s_particlesProgAddr + particlesInstructions + 1u) & ~1u;
 
-    PS2_AssertMsg(s_particlesProgAddr + particlesInstructions <= 2048,
+    PS2_AssertMsg(s_litTrisProgAddr + litInstructions <= 2048,
                   "Microprograms overflow VU1 micro memory!");
 
     s_drawPacket.Init(kDrawPacketQwords);
@@ -381,6 +458,7 @@ void Init()
     pkt.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
     pkt.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
     pkt.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
+    pkt.AddMicroProgram(s_litTrisProgAddr, VU1Prog_LitTriangles_Code());
     pkt.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
     pkt.AddEndTag();
     pkt.Send();
@@ -442,7 +520,8 @@ static void AddBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx
 
     pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    pkt.AddStartProgram(s_texturedTrisProgAddr);
+    pkt.AddStartProgram(HasDrawFlag(flags, DrawFlags::DynamicLights)
+                        ? s_litTrisProgAddr : s_texturedTrisProgAddr);
 }
 
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
@@ -752,6 +831,60 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     }
 
     SendChainAndWait(pkt);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Dynamic point lights
+// ------------------------------------------------------------------------------------------------
+
+void SetDynamicLights(const DynamicLight * lights, const int count)
+{
+    // Zeroed slots cost the microprogram nothing to evaluate: colour 0 and
+    // -(colour/r^2) 0 make the whole term max(0 * d + 0, 0) = 0, so there is no
+    // branch and no separate "how many lights" path.
+    s_lightConstants = {};
+    s_lightConstants.clamp = { 255.0f, 255.0f, 255.0f, kLitVertexAlpha };
+
+    const int used = (count < kMaxDynamicLights) ? count : kMaxDynamicLights;
+    PS2_Assert(used >= 0 && (used == 0 || lights != nullptr));
+
+    // Transposed: one light per SIMD lane rather than one axis per lane, which
+    // is what lets the microprogram do all four at once.
+    float px[kMaxDynamicLights] = {};
+    float py[kMaxDynamicLights] = {};
+    float pz[kMaxDynamicLights] = {};
+
+    for (int i = 0; i < used; ++i)
+    {
+        const DynamicLight & l = lights[i];
+
+        // A zero or negative radius has no inside, and would divide by zero
+        // below; leave the slot dark.
+        if (l.radius <= 0.0f)
+        {
+            continue;
+        }
+
+        px[i] = l.origin.x;
+        py[i] = l.origin.y;
+        pz[i] = l.origin.z;
+
+        // Pre-scaled to the GS 0-255 range and pre-divided by the radius
+        // squared. Doing both here is what reduces the VU's attenuation to a
+        // single multiply-add - the microprogram never divides and never takes
+        // a square root.
+        const float scale = 255.0f;
+        const float invR2 = 1.0f / (l.radius * l.radius);
+
+        s_lightConstants.color[i] = { l.color.x * scale, l.color.y * scale, l.color.z * scale, 0.0f };
+        s_lightConstants.negColorDivR2[i] = { -s_lightConstants.color[i].x * invR2,
+                                              -s_lightConstants.color[i].y * invR2,
+                                              -s_lightConstants.color[i].z * invR2, 0.0f };
+    }
+
+    s_lightConstants.posX = { px[0], px[1], px[2], px[3] };
+    s_lightConstants.posY = { py[0], py[1], py[2], py[3] };
+    s_lightConstants.posZ = { pz[0], pz[1], pz[2], pz[3] };
 }
 
 } // namespace ps2::vu1

@@ -185,7 +185,7 @@ void DrawProfileOverlay()
     // Cap the panel so a heavily instrumented build can't run off the screen.
     // 12 overlay events today (FullFrame, the nine view tags, GSWait, VSync);
     // the slack is for probes added while chasing a specific frame cost.
-    constexpr int kMaxRows = 20;
+    constexpr int kMaxRows = 24;
 
     const ps2::debug::ProfileEvent * rows[kMaxRows];
     int numRows = 0;

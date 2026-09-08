@@ -82,15 +82,21 @@ constexpr float kGuardBandNdcLimit = 0.8f;
 // against - what an opaque primitive standing in for infinity wants. The
 // skybox is the caller: it draws at a finite 2300 units so the world can
 // occlude it, and must not occlude anything drawn after it out there in return.
+//
+// DynamicLights run the lit microprogram: the batch's vertex colour is computed
+// from the frame's dynamic point lights (see SetDynamicLights) instead of taken
+// from the input vertices, and Modulate batches add it on top of what they
+// modulate. Only meaningful for geometry submitted in world space.
 enum class DrawFlags : u32
 {
-    None         = 0,
-    Blended      = 1 << 0,
-    Untextured   = 1 << 1,
-    Additive     = 1 << 2,
-    Modulate     = 1 << 3,
-    DepthHack    = 1 << 4,
-    NoDepthWrite = 1 << 5,
+    None          = 0,
+    Blended       = 1 << 0,
+    Untextured    = 1 << 1,
+    Additive      = 1 << 2,
+    Modulate      = 1 << 3,
+    DepthHack     = 1 << 4,
+    NoDepthWrite  = 1 << 5,
+    DynamicLights = 1 << 6,
 };
 
 constexpr DrawFlags operator|(DrawFlags a, DrawFlags b)
@@ -220,6 +226,35 @@ static_assert(sizeof(ParticleVertex) == 16, "ParticleVertex must be exactly 1 qw
 void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const math::Vec3 & quadOffset, const ParticleVertex * particles,
                    int count, DrawFlags flags = DrawFlags::Blended);
+
+// ------------------------------------------------------------------------------------------------
+// Dynamic point lights
+// ------------------------------------------------------------------------------------------------
+
+// How many lights the microprogram evaluates at once. Four is not arbitrary: the
+// VU's SIMD lanes are four wide, so packing one light per lane costs the same as
+// packing one, and the FMAC's four-cycle latency is covered exactly.
+constexpr int kMaxDynamicLights = 4;
+
+// One point light, in world space. Attenuation is distance-only (no N.L term)
+// and reaches zero at 'radius' - Quake 2's dlight intensity is exactly that
+// radius in world units.
+struct DynamicLight
+{
+    math::Vec3 origin;
+    math::Vec3 color;  // 0..1
+    float      radius; // world units; attenuation is zero beyond it.
+};
+
+// Sets the frame's lights, shared by every batch drawn with
+// DrawFlags::DynamicLights until the next call. Fewer than kMaxDynamicLights is
+// fine - unused slots are zeroed and contribute nothing. Pass count 0 to turn
+// the lighting off without clearing the flag.
+//
+// Colours are pre-scaled here into the GS 0-255 range and pre-divided by the
+// radius squared, which is what lets the microprogram attenuate with a single
+// multiply-add and no divide or square root.
+void SetDynamicLights(const DynamicLight * lights, int count);
 
 // ------------------------------------------------------------------------------------------------
 // VU1 initialization and stats tracking

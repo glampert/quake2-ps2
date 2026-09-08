@@ -158,11 +158,23 @@ private:
 
     // ref_gl's gl_modulate: scales every luxel as it is accumulated.
     const cvar_t * m_modulate = nullptr;
+
+    // How far an animated lightstyle must move, against the value its surfaces
+    // were last baked at, before they are rebaked. Measured in 'white', which
+    // sums three RGB channels.
+    //
+    //   0    exact compare, as ref_gl - every 10Hz step rebuilds
+    //   0.3  drops sub-perceptual wobble, keeps every real animation
+    //   >1.0 also silences the stock flicker style, whose whole range is 1.0
+    //
+    // See ChainSurface for why the reference is the baked value and not a grid.
+    const cvar_t * m_styleEpsilon = nullptr;
 };
 
 void LightmapManager::Init()
 {
-    m_modulate = Cvar_Get("ps2_lightmap_modulate", "1", CVAR_ARCHIVE);
+    m_modulate     = Cvar_Get("ps2_lightmap_modulate", "1",    CVAR_ARCHIVE);
+    m_styleEpsilon = Cvar_Get("ps2_lightstyle_epsilon", "0.3", CVAR_ARCHIVE);
 
     for (lightstyle_t & style : s_defaultLightStyles)
     {
@@ -569,11 +581,32 @@ void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & vi
     }
     else
     {
-        // Has an animated style moved since these luxels were baked?
+        // Has an animated style moved far enough from what these luxels were
+        // baked at to be worth redoing them?
+        //
+        // Not an exact compare: CL_RunLightStyles steps every style on a 10Hz
+        // clock, and rebuilding costs a full per-luxel bake plus a whole atlas
+        // re-upload - ten times a second, for changes that are often invisible.
+        //
+        // The reference is the *baked* value, deliberately, not a fixed grid.
+        // Quake 2's flicker styles oscillate rather than ramp - the stock one
+        // spans white 3.0 to 4.0 - and an oscillation only settles if the
+        // tolerance band is centred on where the surface actually was baked.
+        // Snapping both sides onto absolute buckets instead lets any style
+        // straddling a bucket edge re-trigger forever however large the
+        // threshold, which is exactly what it did.
+        //
+        // So the threshold to silence a style is its peak-to-trough range in
+        // 'white', not its step size: > 1.0 for the stock flicker. Ramps are
+        // unaffected by the choice - either way they rebuild once per epsilon
+        // of travel, which is what keeps them animating.
+        const float styleEpsilon = m_styleEpsilon->value;
+
         bool styleMoved = false;
         for (int map = 0; map < mod::kMaxLightmaps && surf.styles[map] != 255; ++map)
         {
-            if (viewDef.lightstyles[surf.styles[map]].white != surf.cachedLight[map])
+            const float moved = viewDef.lightstyles[surf.styles[map]].white - surf.cachedLight[map];
+            if (math::Fabsf(moved) > styleEpsilon)
             {
                 styleMoved = true;
                 break;

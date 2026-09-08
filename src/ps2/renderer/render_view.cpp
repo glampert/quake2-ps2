@@ -73,6 +73,7 @@ static const cvar_t * s_skipParticles     = nullptr;
 static const cvar_t * s_forceNullModels   = nullptr;
 static const cvar_t * s_skipWeaponModel   = nullptr;
 static const cvar_t * s_dynamicLightmaps  = nullptr;
+static const cvar_t * s_dlightScale       = nullptr;
 static const cvar_t * s_lightmaps         = nullptr;
 static const cvar_t * s_lightmapOnly      = nullptr;
 static const cvar_t * s_lightmapColor     = nullptr;
@@ -271,6 +272,72 @@ void SetUpFrustum(const refdef_t & viewDef)
     }};
 }
 
+// True when dynamic lights are drawn as per-vertex point lights on VU1.
+inline bool VuDynamicLightsEnabled()
+{
+    return s_dynamicLightmaps->value == 2.0f;
+}
+
+// Hands the frame's dynamic lights to VU1 (mode 2 only).
+//
+// The microprogram evaluates four at once and attenuates per vertex, so lights
+// need no assignment to batches - one far from a surface simply contributes
+// nothing through the same max(). That means the only choice to make here is
+// which four matter most when the client sends more, which it rarely does:
+// MAX_DLIGHTS is 32 but a busy firefight runs two or three.
+//
+// Selection is by intensity, largest first. Quake 2's dlight intensity is the
+// radius in world units, so the brightest light is also the one reaching
+// furthest, which makes it the right one to keep.
+void SetUpDynamicLights(const refdef_t & viewDef)
+{
+    if (!VuDynamicLightsEnabled())
+    {
+        vu1::SetDynamicLights(nullptr, 0);
+        return;
+    }
+
+    vu1::DynamicLight chosen[vu1::kMaxDynamicLights];
+    int count = 0;
+
+    const float scale = s_dlightScale->value;
+    const int numDlights = viewDef.num_dlights;
+
+    for (int i = 0; i < numDlights; ++i)
+    {
+        const dlight_t & dl = viewDef.dlights[i];
+        if (dl.intensity <= 0.0f)
+        {
+            continue; // The client emits "dark lights" this path cannot express.
+        }
+
+        // Insertion sort into a four-deep list, weakest dropped off the end.
+        int slot = count;
+        while (slot > 0 && chosen[slot - 1].radius < dl.intensity)
+        {
+            if (slot < vu1::kMaxDynamicLights)
+            {
+                chosen[slot] = chosen[slot - 1];
+            }
+            --slot;
+        }
+        if (slot < vu1::kMaxDynamicLights)
+        {
+            chosen[slot] = {
+                { dl.origin[0], dl.origin[1], dl.origin[2] },
+                { dl.color[0] * scale, dl.color[1] * scale, dl.color[2] * scale },
+                dl.intensity
+            };
+            if (count < vu1::kMaxDynamicLights)
+            {
+                ++count;
+            }
+        }
+    }
+
+    vu1::SetDynamicLights(chosen, count);
+}
+
 // Extracts the six planes bounding the VU1 clip volume from a view-projection.
 //
 // The microprogram judges a vertex in clip space: inside while w - z >= 0
@@ -397,6 +464,7 @@ void SetupFrame(const refdef_t & viewDef)
 
     SetUpFrustum(viewDef);
     SetUpClipVolume(s_viewProjMatrix);
+    SetUpDynamicLights(viewDef);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1159,6 +1227,19 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     SurfaceDrawState state = base;
     state.rgba           = kFullBright; // alpha 0x80 keeps the luxel's own alpha
     state.flags          = vu1::DrawFlags::Modulate;
+
+    // Dynamic lights ride this pass rather than a third one: the Modulate blend
+    // leaves its source-colour term at zero, so the vertex colour was going
+    // spare, and the lit microprogram fills it with the point-light sum while
+    // the blend adds it on top of what the luxels modulate.
+    //
+    // World transform only - the microprogram lights in world space, and a brush
+    // model's vertices are in its own model space (see the same guard below).
+    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
+    {
+        state.flags = state.flags | vu1::DrawFlags::DynamicLights;
+    }
+
     state.vertexAlpha    = false;
     state.lightmapUVs    = true;
     state.lightmapColors = nullptr; // The chroma is the diffuse pass's half; this one carries the intensity.
@@ -1503,7 +1584,7 @@ void RenderDLights(const refdef_t & viewDef)
 
 void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance & world, const mod::ModelNode * node)
 {
-    PS2_Assert(s_dynamicLightmaps->value != 0.0f);
+    PS2_Assert(s_dynamicLightmaps->value == 1.0f); // Only the per-luxel rebuild path marks.
 
     if (node->contents != -1)
     {
@@ -1544,10 +1625,12 @@ void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance
 
 void PushDLights(const refdef_t & viewDef, const mod::ModelInstance & world)
 {
-    if (s_dynamicLightmaps->value == 0.0f)
+    if (s_dynamicLightmaps->value != 1.0f)
     {
-        // Dynamic lights are rendered as semi-transparent sprites instead.
-        // Below is the dynamic lightmaps code path.
+        // Mode 0 draws flares instead; mode 2 lights per vertex on VU1. Neither
+        // wants surfaces marked - not stamping dlightFrame is exactly what stops
+        // lm::ChainSurface taking its rebuild branch, so the whole per-luxel
+        // path switches itself off from here with no other change.
         return;
     }
 
@@ -1756,6 +1839,8 @@ constexpr float kBackFaceEpsilon = 0.01f;
 // and batched only across runs of the same texture.
 void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::EntBrush);
+
     if (s_skipBrushModels->value != 0.0f)
     {
         return; // Debug: skip brush model entities.
@@ -1817,8 +1902,12 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
 
     const math::Mat4 mvp = MakeEntityMatrix(entity, /*flipPitchAngle=*/false) * s_viewProjMatrix;
 
-    // Calculate dynamic lighting for bmodel
-    if (s_dynamicLightmaps->value != 0.0f)
+    // Calculate dynamic lighting for bmodel. Mode 1 only, exactly as PushDLights:
+    // marking here would put this submodel's surfaces back on the per-luxel
+    // rebuild path, and they share atlases with the world, so one lit door would
+    // re-dirty a whole 256x256 atlas and bring back the upload and GS drain the
+    // VU1 path exists to remove.
+    if (s_dynamicLightmaps->value == 1.0f)
     {
         const mod::ModelInstance * const world = mod::GetWorldModel();
         PS2_Assert(world != nullptr);
@@ -2347,20 +2436,21 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
 
 void Init()
 {
-    s_backFaceCull      = Cvar_Get("ps2_backface_cull",       "0", 0); // NOTE: Off by default. BSP already culls backfacing surfaces.
-    s_skipWorld         = Cvar_Get("ps2_skip_world",          "0", 0);
-    s_skipAlphaSurfaces = Cvar_Get("ps2_skip_alpha_surfaces", "0", 0); // Debug: drop the translucent glass/water pass.
-    s_skipBrushModels   = Cvar_Get("ps2_skip_brushmodels",    "0", 0);
-    s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0", 0);
-    s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0", 0);
-    s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0", 0);
-    s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0", 0); // Debug: draw every entity as the octahedron placeholder.
-    s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0", 0);
-    s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "1", 0); // Uses the RenderDLights flare fallback path when = 0.
-    s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1", 0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
-    s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0", 0); // Debug: 1 drops the diffuse textures, showing the lighting alone.
-    s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1", 0); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
-    s_polyblend         = Cvar_Get("ps2_polyblend",           "1", 0); // ref_gl's gl_polyblend: the full screen damage/powerup/underwater tint.
+    s_backFaceCull      = Cvar_Get("ps2_backface_cull",       "0",   0); // NOTE: Off by default. BSP already culls backfacing surfaces.
+    s_skipWorld         = Cvar_Get("ps2_skip_world",          "0",   0);
+    s_skipAlphaSurfaces = Cvar_Get("ps2_skip_alpha_surfaces", "0",   0); // Debug: drop the translucent glass/water pass.
+    s_skipBrushModels   = Cvar_Get("ps2_skip_brushmodels",    "0",   0);
+    s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0",   0);
+    s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0",   0);
+    s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0);
+    s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
+    s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0);
+    s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   0); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
+    s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", 0); // Brightness of the VU1 point lights.
+    s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
+    s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.
+    s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1",   0); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
+    s_polyblend         = Cvar_Get("ps2_polyblend",           "1",   0); // ref_gl's gl_polyblend: the full screen damage/powerup/underwater tint.
 
     // Registered by the lightmap manager, which owns it; this resolves the same
     // object so the entity lighting can scale by it too.

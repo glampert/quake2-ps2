@@ -19,18 +19,24 @@ namespace ps2::prof_evt {
 PS2_PROFILE_DEFINE_EVENT(Frame,      "Frame",      kScreenOverlay, 0);
 PS2_PROFILE_DEFINE_EVENT(VSync,      "VSync",      kScreenOverlay, 1);
 PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",     kScreenOverlay, 2);
-PS2_PROFILE_DEFINE_EVENT(View,       "View",       kScreenOverlay, 3);
-PS2_PROFILE_DEFINE_EVENT(World,      "World",      kScreenOverlay, 4);
-PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",        kScreenOverlay, 5);
-PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",    kScreenOverlay, 6);
-PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",   kScreenOverlay, 7);
-PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",  kScreenOverlay, 8);
-PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",  kScreenOverlay, 9);
-PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 10);
-PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 11);
-PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 12);
-PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 13);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 14);
+PS2_PROFILE_DEFINE_EVENT(DmaSend,    "DmaSend",    kScreenOverlay, 3);
+PS2_PROFILE_DEFINE_EVENT(View,       "View",       kScreenOverlay, 4);
+PS2_PROFILE_DEFINE_EVENT(World,      "World",      kScreenOverlay, 5);
+PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",        kScreenOverlay, 6);
+PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",    kScreenOverlay, 7);
+PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",   kScreenOverlay, 8);
+PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",  kScreenOverlay, 9);
+PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",  kScreenOverlay, 10);
+PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 11);
+PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 12);
+PS2_PROFILE_DEFINE_EVENT(EntCull,    " Cull",      kScreenOverlay, 13);
+PS2_PROFILE_DEFINE_EVENT(EntShade,   " Shade",     kScreenOverlay, 14);
+PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",      kScreenOverlay, 15);
+PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",    kScreenOverlay, 16);
+PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",     kScreenOverlay, 17);
+PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 18);
+PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 19);
+PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 20);
 
 } // namespace ps2::prof_evt
 
@@ -49,7 +55,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 15;
+constexpr int kNumEvents = 21;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -132,10 +138,12 @@ void FrameLogCapture()
     s.frameIndex = s_frameIndex;
 
     const ps2::debug::ProfileEvent * const events[kNumEvents] = {
-        &prof_evt::Frame,     &prof_evt::VSync,      &prof_evt::GsWait,     &prof_evt::View,
-        &prof_evt::World,     &prof_evt::Vis,        &prof_evt::MarkLeaves, &prof_evt::BspWalk,
-        &prof_evt::LmChain,   &prof_evt::TexChains,  &prof_evt::LmChains,   &prof_evt::Entities,
-        &prof_evt::Particles, &prof_evt::AlphaSurfs, &prof_evt::Sky,
+        &prof_evt::Frame,     &prof_evt::VSync,      &prof_evt::GsWait,     &prof_evt::DmaSend,
+        &prof_evt::View,      &prof_evt::World,      &prof_evt::Vis,        &prof_evt::MarkLeaves,
+        &prof_evt::BspWalk,   &prof_evt::LmChain,    &prof_evt::TexChains,  &prof_evt::LmChains,
+        &prof_evt::Entities,  &prof_evt::EntCull,    &prof_evt::EntShade,   &prof_evt::EntGeom,
+        &prof_evt::EntShadow, &prof_evt::EntBrush,   &prof_evt::Particles,  &prof_evt::AlphaSurfs,
+        &prof_evt::Sky,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {
@@ -186,8 +194,9 @@ void FrameLogFlush()
     {
         s_headerDone = true;
         std::printf("FLOG#hdr,frame,"
-                    "Frame,VSync,GsWait,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
-                    "TexChains,LmChains,Entities,Particles,AlphaSurfs,Sky,"
+                    "Frame,VSync,GsWait,DmaSend,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
+                    "TexChains,LmChains,Entities,EntCull,EntShade,EntGeom,EntShadow,EntBrush,"
+                    "Particles,AlphaSurfs,Sky,"
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"

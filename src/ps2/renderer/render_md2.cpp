@@ -32,6 +32,7 @@
 #include "ps2/renderer/batch.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/math/vec_mat.h"
+#include "ps2/renderer/render_profile.h"
 
 namespace ps2::view {
 namespace {
@@ -120,6 +121,8 @@ inline math::Mat4 MakeAliasMatrix(const entity_t & entity)
 // transform, translate + scale * [0, 255].
 bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, const daliasframe_t * oldFrame)
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::EntCull);
+
     vec3_t mins, maxs;
     for (int i = 0; i < 3; ++i)
     {
@@ -742,9 +745,14 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // read from the *current* frame only - the pose interpolates, the
     // lighting does not (ref_gl behaviour). 'lightSpot' anchors the shadow.
     vec3_t lightSpot = {};
-    const math::Vec3 shadeLight = ShadeEntity(viewDef, entity, lightSpot);
-    const float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
-    const u32 * const colorLUT = BuildColorLUT(entity, shadeLight, alpha);
+    math::Vec3 shadeLight;
+    const u32 * colorLUT;
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntShade);
+        shadeLight = ShadeEntity(viewDef, entity, lightSpot);
+        const float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
+        colorLUT = BuildColorLUT(entity, shadeLight, alpha);
+    }
 
     const float backlerp = (s_lerpModels->value != 0.0f) ? entity.backlerp : 0.0f;
     const LerpConsts lc = SetUpLerp(entity, frame, oldFrame, backlerp);
@@ -798,99 +806,105 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // path's triangles are counted by the gather buffer itself, since the
     // clipper is what decides how many of them there are.
     int emittedVerts = 0;
-    if (vuLerp)
+    // The pose expansion and batch submission - everything from here to the
+    // flush is per-triangle work, unlike Shade and Cull above.
     {
-        // The pose lerp runs on VU1: fold the uniform 'move' term into the matrix.
-        const math::Vec4 row3 = math::Transform(
-            math::Vec4{ lc.move.x, lc.move.y, lc.move.z, 1.0f }, mvp);
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntGeom);
 
-        mvp.m[3][0] = row3.x;
-        mvp.m[3][1] = row3.y;
-        mvp.m[3][2] = row3.z;
-        mvp.m[3][3] = row3.w;
-
-        ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+        if (vuLerp)
         {
-            if (s_lerpBatch.IsFull())
-            {
-                s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
-            }
+            // The pose lerp runs on VU1: fold the uniform 'move' term into the matrix.
+            const math::Vec4 row3 = math::Transform(
+                math::Vec4{ lc.move.x, lc.move.y, lc.move.z, 1.0f }, mvp);
 
-            auto dst = s_lerpBatch.PushVertex();
-            dst.pos.cur = bits_to_u32(frame->verts[index]);
-            dst.pos.old = bits_to_u32(oldFrame->verts[index]);
-            dst.attrib  = {
-                .rgba = colorLUT[frame->verts[index].lightnormalindex],
-                .s = s * stScaleS,
-                .t = t * stScaleT,
-                .q = 1.0f
-            };
-            ++emittedVerts;
-        });
-        s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
-    }
-    else
-    {
-        // Shells draw as a flat-coloured inflated silhouette: no skin, and
-        // always blended, whether or not the client tagged them translucent.
-        // OR-ed onto the batch flags rather than replacing them so an entity's
-        // depth range survives (Blended is idempotent if it was already set).
-        const bool powersuit = (entity.flags & kShellFlags) != 0;
-        const auto flags = powersuit
-                         ? (batchFlags | vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured)
-                         : batchFlags;
-
-        const math::Vec3 * const lerpedPositions =
-            LerpVertsEE(frame->verts, oldFrame->verts, hdr->num_xyz, lc, powersuit);
-
-        if (clipOnEE)
-        {
-            // The expansion hands over one corner at a time; clip and emit
-            // whole triangles as they complete.
-            clip::ClipVertex corners[3];
-            int cornerCount = 0;
+            mvp.m[3][0] = row3.x;
+            mvp.m[3][1] = row3.y;
+            mvp.m[3][2] = row3.z;
+            mvp.m[3][3] = row3.w;
 
             ExpandGLCmds(hdr, [&](float s, float t, s32 index)
             {
-                clip::ClipVertex & c = corners[cornerCount++];
-                const math::Vec3 & pos = lerpedPositions[index];
-                c.pos   = { pos.x, pos.y, pos.z, 1.0f };
-                c.st    = { powersuit ? 0.0f : (s * stScaleS),
-                            powersuit ? 0.0f : (t * stScaleT), 0.0f, 0.0f };
-                c.color = UnpackClipColor(colorLUT[frame->verts[index].lightnormalindex]);
-
-                if (cornerCount == 3)
+                if (s_lerpBatch.IsFull())
                 {
-                    cornerCount = 0;
-                    GatherClippedTriangle(corners, mvp, skin, flags);
+                    s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
                 }
+
+                auto dst = s_lerpBatch.PushVertex();
+                dst.pos.cur = bits_to_u32(frame->verts[index]);
+                dst.pos.old = bits_to_u32(oldFrame->verts[index]);
+                dst.attrib  = {
+                    .rgba = colorLUT[frame->verts[index].lightnormalindex],
+                    .s = s * stScaleS,
+                    .t = t * stScaleT,
+                    .q = 1.0f
+                };
+                ++emittedVerts;
             });
+            s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
         }
         else
         {
-            ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+            // Shells draw as a flat-coloured inflated silhouette: no skin, and
+            // always blended, whether or not the client tagged them translucent.
+            // OR-ed onto the batch flags rather than replacing them so an entity's
+            // depth range survives (Blended is idempotent if it was already set).
+            const bool powersuit = (entity.flags & kShellFlags) != 0;
+            const auto flags = powersuit
+                             ? (batchFlags | vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured)
+                             : batchFlags;
+
+            const math::Vec3 * const lerpedPositions =
+                LerpVertsEE(frame->verts, oldFrame->verts, hdr->num_xyz, lc, powersuit);
+
+            if (clipOnEE)
             {
-                if (s_batch.IsFull())
+                // The expansion hands over one corner at a time; clip and emit
+                // whole triangles as they complete.
+                clip::ClipVertex corners[3];
+                int cornerCount = 0;
+
+                ExpandGLCmds(hdr, [&](float s, float t, s32 index)
                 {
-                    s_batch.Flush(mvp, skin, flags); // Capacity is a triangle multiple,
-                }                                    // so this only fires between them.
+                    clip::ClipVertex & c = corners[cornerCount++];
+                    const math::Vec3 & pos = lerpedPositions[index];
+                    c.pos   = { pos.x, pos.y, pos.z, 1.0f };
+                    c.st    = { powersuit ? 0.0f : (s * stScaleS),
+                                powersuit ? 0.0f : (t * stScaleT), 0.0f, 0.0f };
+                    c.color = UnpackClipColor(colorLUT[frame->verts[index].lightnormalindex]);
 
-                vu1::DrawVertex  & dst = s_batch.PushVertex();
-                const math::Vec3 & pos = lerpedPositions[index];
-                dst.x    = pos.x;
-                dst.y    = pos.y;
-                dst.z    = pos.z;
-                dst.w    = 1.0f;
-                dst.rgba = colorLUT[frame->verts[index].lightnormalindex];
-                dst.s    = powersuit ? 0.0f : (s * stScaleS);
-                dst.t    = powersuit ? 0.0f : (t * stScaleT);
-                dst.q    = 1.0f;
-                ++emittedVerts;
-            });
+                    if (cornerCount == 3)
+                    {
+                        cornerCount = 0;
+                        GatherClippedTriangle(corners, mvp, skin, flags);
+                    }
+                });
+            }
+            else
+            {
+                ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+                {
+                    if (s_batch.IsFull())
+                    {
+                        s_batch.Flush(mvp, skin, flags); // Capacity is a triangle multiple,
+                    }                                    // so this only fires between them.
+
+                    vu1::DrawVertex  & dst = s_batch.PushVertex();
+                    const math::Vec3 & pos = lerpedPositions[index];
+                    dst.x    = pos.x;
+                    dst.y    = pos.y;
+                    dst.z    = pos.z;
+                    dst.w    = 1.0f;
+                    dst.rgba = colorLUT[frame->verts[index].lightnormalindex];
+                    dst.s    = powersuit ? 0.0f : (s * stScaleS);
+                    dst.t    = powersuit ? 0.0f : (t * stScaleT);
+                    dst.q    = 1.0f;
+                    ++emittedVerts;
+                });
+            }
+            s_batch.Flush(mvp, skin, flags);
         }
-        s_batch.Flush(mvp, skin, flags);
-    }
 
+    }
     GetDrawStats().trisDrawn += emittedVerts / 3;
 
     // The projected blob shadow. Skipped for the view weapon,
@@ -898,6 +912,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     if (s_shadows->value != 0.0f &&
         !(entity.flags & (RF_TRANSLUCENT | RF_WEAPONMODEL | RF_FULLBRIGHT | kShellFlags)))
     {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntShadow);
         DrawAliasMD2Shadow(entity, hdr, frame, oldFrame, lc, viewProj, skin, lightSpot, faceCull);
     }
 }

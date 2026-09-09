@@ -179,19 +179,60 @@ public:
     bool IsEmpty() const { return m_vertCount == 0; }
 
     // The VU-lerp equivalent of TriangleBatch::Flush, submitting the two SoA streams.
-    // if attribsOverride != null, overrides m_attribs.
+    //
+    // 'attribsOverride' replaces m_attribs, and is taken as a repeating block
+    // rather than a per-vertex stream: every caller that overrides does so
+    // because its attributes are the same for every vertex, so it only has to
+    // supply vu1::kMaxLerpVertsPerBatch of them however long the batch is.
     void Flush(const math::Mat4 & mvp, const tex::Texture & texture,
                const math::Vec3 & frontv, const math::Vec3 & backv,
                const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
                const vu1::LerpDrawAttrib * attribsOverride = nullptr)
     {
+        // Recorded even when there is nothing to send, so RedrawLastFlush after
+        // an empty flush draws nothing rather than the previous caller's model.
+        m_lastFlushedCount = m_vertCount;
+
         if (m_vertCount > 0)
         {
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv,
                                      m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
-                                     m_vertCount, faceCull, flags);
+                                     m_vertCount, faceCull, flags, (attribsOverride != nullptr));
             m_vertCount = 0;
+        }
+    }
+
+    // Draws the vertices of the most recent Flush again, under a different
+    // transform and attribute stream, without rebuilding them.
+    //
+    // Flush leaves both streams where they are and only resets the count, and
+    // DrawLerpedTriangles is synchronous - it returns once the GS has consumed
+    // the batch - so what the last submission referenced is still sitting there
+    // intact. The MD2 shadow is exactly this: the model's own keyframe bytes
+    // under a squashed matrix and a flat attribute stream, which the caller would
+    // otherwise walk the whole glcmds list a second time to rebuild identically.
+    //
+    // Only valid while nothing has been pushed since that Flush, and only worth
+    // anything if the geometry went out in a single batch - a caller that filled
+    // the buffer mid-model left only its tail behind.
+    //
+    // NOTE: this is one of the places that rests on draws being synchronous. If
+    // submission ever goes asynchronous, the stream has to stay owned until the
+    // frame's fence, like every other buffer the DMA references in place.
+    void RedrawLastFlush(const math::Mat4 & mvp, const tex::Texture & texture,
+                         const math::Vec3 & frontv, const math::Vec3 & backv,
+                         const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
+                         const vu1::LerpDrawAttrib * attribsOverride = nullptr)
+    {
+        PS2_AssertMsg(m_vertCount == 0, "RedrawLastFlush after pushing new vertices!");
+
+        if (m_lastFlushedCount > 0)
+        {
+            ++view::GetDrawStats().drawBatches;
+            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv,
+                                     m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
+                                     m_lastFlushedCount, faceCull, flags, (attribsOverride != nullptr));
         }
     }
 
@@ -209,8 +250,30 @@ public:
         return v;
     }
 
+    // Three consecutive slots of each stream, for a caller filling a whole
+    // triangle at once - the count then moves once instead of three times, and
+    // IsFull() is answered once instead of three times. Same contract as
+    // PushVertex: check IsFull() (and flush) first, which is enough because
+    // capacity is a triangle multiple.
+    struct Tri
+    {
+        vu1::LerpVertexBytes * pos;    // [3]
+        vu1::LerpDrawAttrib  * attrib; // [3]
+    };
+
+    Tri PushTriangle()
+    {
+        PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "VULerpTriangleBatch is full!");
+        const Tri t = { &m_vertBytes[m_vertCount], &m_attribs[m_vertCount] };
+        m_vertCount += 3;
+        return t;
+    }
+
 private:
     int m_vertCount = 0;
+
+    // Vertices the last Flush submitted; see RedrawLastFlush.
+    int m_lastFlushedCount = 0;
 
     // The +1 on the positions is the DrawLerpedTriangles pad element for odd flush counts (transferred, never read).
     alignas(16) vu1::LerpVertexBytes m_vertBytes[static_cast<size_t>(MaxVerts + 1)];

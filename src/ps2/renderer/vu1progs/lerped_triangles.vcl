@@ -22,7 +22,11 @@
 ; regions (the EE and this program share compile-time addresses):
 ;   +0    header: backface cull mode in .x (0 = keep everything,
 ;         1 = cull negative screen area, 2 = cull positive),
-;         vertex count in .w
+;         texture coordinate scale in .y/.z (the skin's size over
+;         its power-of-two TEX0 extent - applied here so the EE
+;         does not multiply it onto every vertex), vertex count
+;         in .w. Read both as integers (.x/.w) and as floats
+;         (.y/.z); the lanes never mix in one operation.
 ;   +1    frontv: current frame scale * (1 - backlerp), w = 0
 ;   +2    backv:  old frame scale * backlerp, w = 0
 ;   +3    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
@@ -107,6 +111,8 @@
 ;       dstScreen = gsOffset.xyz + pos.xyz * gsScale.xyz;
 ;       pos.xyz   = ftoi4(dstScreen.xyz);
 ;
+;       // ST scaled by the skin's power-of-two correction:
+;       stqScaled.yz   *= stScale.yz;
 ;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
 ;       out[offAD].x    = stq.x;          // native RGBAQ: packed color...
 ;       out[offAD].y    = q;              // ...with Q in the word above
@@ -151,6 +157,12 @@
     mula.xyz  acc,  fGSOffset, vf00[w]
     madd.xyz  dstScreen, fPos, fGSScale
     ftoi4.xyz fPos, dstScreen
+
+    ; The skin's power-of-two correction, which the EE used to multiply onto
+    ; every vertex before handing them over. Masked to .yz so the .x lane -
+    ; the packed color's raw bits - is never computed, and neither are the
+    ; header integers sitting in fStScale.x/.w.
+    mul.yz fStqScaled, fStqScaled, fStScale
 
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
@@ -265,6 +277,11 @@
     ilw.x  iCullMode, kBatchHeader(iBase)
     lq     fFrontV,   kFrontV(iBase)
     lq     fBackV,    kBackV(iBase)
+
+    ; The same header qword as a vector, for the ST scale in .y/.z. A raw
+    ; load, so .x and .w keep the integer bit patterns read above - only
+    ; ever used through a .yz mask, which never computes those lanes.
+    lq     fStScale,  kBatchHeader(iBase)
 
     ; Backface-test constants: -1.0 for the area clamp (vf00.w is the +1),
     ; the 16-bit sign mask, and the masked value a culled face matches -

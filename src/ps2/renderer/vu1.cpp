@@ -573,11 +573,10 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
 // Lerped-triangles batch layout (must match lerped_triangles.vcl)
 
-// Vertices per lerped VU run: the 3-qword-per-vertex batch (2 position
-// qwords + 1 attribute) fits fewer than the world path's 96. Whole
-// triangles, and even - so every full chunk's slice of the 8-byte position
-// stream is whole source qwords starting 16-byte aligned.
-constexpr int kMaxLerpVertsPerBatch = 78;
+// kMaxLerpVertsPerBatch (vu1.h) is the vertices per lerped VU run: the
+// 3-qword-per-vertex batch (2 position qwords + 1 attribute) fits fewer than the
+// world path's 96. Whole triangles, and even - so every full chunk's slice of
+// the 8-byte position stream is whole source qwords starting 16-byte aligned.
 
 // Chain footprint of one lerped chunk: header/frontv/backv/tags inline
 // unpack (1 + 10 qwords), two REF unpacks, FLUSH + MSCAL; ~15 in practice.
@@ -604,6 +603,7 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // the VU never reads (the fixed region has room: odd counts are < the even maximum).
 static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
+                              float stScaleS, float stScaleT,
                               const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
                               int vertCount, FaceCull faceCull, DrawFlags flags)
 {
@@ -613,8 +613,13 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
     pkt.OpenInlineUnpack(kLerpBatchHeaderAddr, true);
     {
         pkt.AddU32(static_cast<u32>(faceCull)); // backface cull mode in .x
-        pkt.AddU32(0);
-        pkt.AddU32(0);
+        // The skin's size over its power-of-two TEX0 extent, which the
+        // microprogram multiplies onto every vertex's ST. Here rather than on
+        // the EE because the VU has the multiply slot free and the EE does not:
+        // it is two mul.s per vertex saved out of an expansion loop that is the
+        // single largest marker in the frame.
+        pkt.AddFloat(stScaleS);                 // .y
+        pkt.AddFloat(stScaleT);                 // .z
         pkt.AddU32(static_cast<u32>(vertCount));
 
         pkt.AddFloat(frontv.x);
@@ -648,7 +653,7 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
-                         int vertCount, FaceCull faceCull, DrawFlags flags)
+                         int vertCount, FaceCull faceCull, DrawFlags flags, bool attribsRepeat)
 {
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawLerpedTriangles wants whole triangles!");
@@ -666,6 +671,11 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     s_frameSubmittedBytes += (vertCount + (vertCount & 1)) * static_cast<int>(sizeof(LerpVertexBytes))
                           + vertCount * static_cast<int>(sizeof(LerpDrawAttrib));
 
+    // A property of the texture, so it is resolved here rather than threaded
+    // down from every caller; StScaleFor is pure arithmetic on its dimensions.
+    float stScaleS, stScaleT;
+    tex::StScaleFor(texture, &stScaleS, &stScaleT);
+
     VifPacket & pkt = s_drawPacket;
     BeginDrawChain(pkt, mvp, flags);
 
@@ -682,8 +692,13 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxLerpVertsPerBatch) ? remaining : kMaxLerpVertsPerBatch;
-        AddLerpBatchChunk(pkt, texture, ctx, frontv, backv,
-                          positions + firstVert, attribs + firstVert, chunkVerts, faceCull, flags);
+
+        // A repeating block is re-read from its start by every chunk; a
+        // per-vertex stream advances with the positions.
+        const LerpDrawAttrib * const chunkAttribs = attribsRepeat ? attribs : (attribs + firstVert);
+
+        AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, stScaleS, stScaleT,
+                          positions + firstVert, chunkAttribs, chunkVerts, faceCull, flags);
     }
 
     SendChainAndWait(pkt);

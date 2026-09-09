@@ -214,10 +214,25 @@ static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qw
 // stream is DMA'd in whole qwords and the pad element fills the last one
 // (transferred, never read). Chunking, texture residency and synchronicity
 // as DrawTriangles.
+// Vertices one lerped chunk carries. Public only so a caller passing a repeating
+// attribute block (see 'attribsRepeat' below) knows how large it has to be.
+constexpr int kMaxLerpVertsPerBatch = 78;
+
+// 'attribs' normally holds one entry per vertex, indexed alongside 'positions'.
+// With 'attribsRepeat' it is instead a block of kMaxLerpVertsPerBatch entries
+// that every chunk re-reads from the start, for geometry whose attributes do not
+// vary at all - the projected shadow, which is one flat colour over the whole
+// model and would otherwise need an identical qword per vertex of the largest
+// model the batch can hold.
+//
+// It saves the memory, not the transfer: each chunk still unpacks its own copy
+// into its half of the VU's double buffer, so the DMA carries the same bytes
+// either way.
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
-                         int vertCount, FaceCull faceCull = FaceCull::None, DrawFlags flags = DrawFlags::None);
+                         int vertCount, FaceCull faceCull = FaceCull::None,
+                         DrawFlags flags = DrawFlags::None, bool attribsRepeat = false);
 
 // ------------------------------------------------------------------------------------------------
 // Particles

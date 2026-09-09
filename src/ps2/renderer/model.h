@@ -284,10 +284,6 @@ struct ModelInstance final
     Vec3 mins;
     Vec3 maxs;
 
-    // Solid volume for clipping.
-    Vec3 clipMins;
-    Vec3 clipMaxs;
-
     // Brush model.
     u16 firstModelSurface;
     u16 numModelSurfaces;

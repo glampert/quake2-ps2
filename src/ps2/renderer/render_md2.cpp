@@ -38,6 +38,16 @@ namespace ps2::view {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
+// Config Cvars
+// ------------------------------------------------------------------------------------------------
+
+static const cvar_t * s_lerpModels = nullptr;
+static const cvar_t * s_vuLerp     = nullptr;
+static const cvar_t * s_cullFace   = nullptr;
+static const cvar_t * s_shadows    = nullptr;
+static const cvar_t * s_clipWeapon = nullptr;
+
+// ------------------------------------------------------------------------------------------------
 // Vertex lighting tables
 // ------------------------------------------------------------------------------------------------
 
@@ -91,6 +101,26 @@ inline const s32 * GetAliasGLCmds(const dmdl_t * hdr)
     return static_cast<const s32 *>(static_cast<const void *>(bytes + hdr->ofs_glcmds));
 }
 
+// A keyframe's vertex array read as words rather than dtrivertx_t.
+//
+// One load then fetches a whole vertex: the struct is four bytes with
+// lightnormalindex last (DTRIVERTX_LNI), so the position bits and the normal
+// index come out together and the index is the top byte on the little-endian
+// PS2. daliasframe_t puts the array at offset 40, after six floats and a
+// 16-byte name, so it is word aligned.
+//
+// As a pointer to u32 rather than a bit cast per element, and this is not a
+// style choice: dtrivertx_t has alignment 1, so __builtin_bit_cast through a
+// dtrivertx_t* makes the compiler copy the struct a byte at a time through the
+// stack - nine instructions where the aligned load is one.
+inline const u32 * KeyframeVertWords(const daliasframe_t * const frame)
+{
+    static_assert(DTRIVERTX_SIZE == sizeof(u32) && sizeof(dtrivertx_t) == sizeof(u32),
+                  "dtrivertx_t must be exactly one word!");
+
+    return static_cast<const u32 *>(static_cast<const void *>(frame->verts));
+}
+
 // ------------------------------------------------------------------------------------------------
 // Frame state / scratch buffers
 // ------------------------------------------------------------------------------------------------
@@ -102,7 +132,14 @@ inline const s32 * GetAliasGLCmds(const dmdl_t * hdr)
 // is ever active for a given model at a time.
 constexpr int kBatchMaxVerts = 3 * 512;
 static batch::TriangleBatch<kBatchMaxVerts> s_batch;
-static batch::VULerpTriangleBatch<kBatchMaxVerts> s_lerpBatch;
+
+// The VU path's capacity decides whether a model's shadow costs anything: a
+// model that fits in one batch leaves its whole position stream behind for the
+// shadow to redraw, and one that does not has to be walked again (see the shadow
+// call site). 768 triangles covers 115 of the 119 stock models - everything but
+// the four bosses, which appear once each in a playthrough and fallback to a full shadow pass.
+constexpr int kLerpBatchMaxVerts = 3 * 768;
+static batch::VULerpTriangleBatch<kLerpBatchMaxVerts> s_lerpBatch;
 
 // ------------------------------------------------------------------------------------------------
 // Entity transform and frustum cull
@@ -502,11 +539,32 @@ inline void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const math::Ma
 // glcmds expansion
 // ------------------------------------------------------------------------------------------------
 
+// One expanded glcmds vertex. The records on disk are (float s, float t, s32 index)
+// but the list is typed s32 throughout, so the coordinates come out through a bit cast
+// rather than a misaligned float read.
+struct GLCmdVert
+{
+    float s;
+    float t;
+    s32 index;
+};
+
+inline GLCmdVert DecodeGLCmd(const s32 * const record)
+{
+    return { bits_to_f32(record[0]), bits_to_f32(record[1]), record[2] };
+}
+
 // Walks the model's glcmds - tristrips (count > 0) and trifans (count < 0)
 // of (float s, float t, s32 index) records, zero-terminated - expanded into
 // plain triangles: fans pivot on their first vertex, strips flip every odd
-// triangle so the whole strip keeps one facing. Calls emit(s, t, index)
-// three times per triangle.
+// triangle so the whole strip keeps one facing.
+//
+// Calls emit(r0, r1, r2) once per triangle, with pointers to the three records.
+// A whole triangle rather than a vertex at a time because that is what every
+// caller wants: the batches take three slots in one push, and the clipping path
+// cannot do anything at all until it holds all three corners. Decoding is left
+// to them through DecodeGLCmd - the shadow only needs the index, and would
+// otherwise pay for two float loads it throws away.
 template<typename EmitFn>
 void ExpandGLCmds(const dmdl_t * hdr, EmitFn && emit)
 {
@@ -529,41 +587,24 @@ void ExpandGLCmds(const dmdl_t * hdr, EmitFn && emit)
         const s32 * const verts = order; // 3 words per record
         order += count * 3;
 
-        const auto emitRecord = [&](s32 v)
-        {
-            const s32 * record = verts + (v * 3);
-            const float s   = *static_cast<const float *>(static_cast<const void *>(&record[0]));
-            const float t   = *static_cast<const float *>(static_cast<const void *>(&record[1]));
-            const s32 index = record[2];
-            PS2_Assert(index >= 0 && index < hdr->num_xyz);
-            emit(s, t, index);
-        };
-
         if (isFan)
         {
             for (s32 i = 1; i < count - 1; ++i)
             {
-                emitRecord(0);
-                emitRecord(i);
-                emitRecord(i + 1);
+                emit(verts, verts + (i * 3), verts + ((i + 1) * 3));
             }
         }
         else
         {
             for (s32 i = 0; i < count - 2; ++i)
             {
-                if (i & 1) // Odd strip triangles flip to preserve the facing.
-                {
-                    emitRecord(i + 1);
-                    emitRecord(i);
-                    emitRecord(i + 2);
-                }
-                else
-                {
-                    emitRecord(i);
-                    emitRecord(i + 1);
-                    emitRecord(i + 2);
-                }
+                const s32 * const a = verts + (i * 3);
+                const s32 * const b = a + 3;
+                const s32 * const c = a + 6;
+
+                // Odd strip triangles flip to preserve the facing.
+                if (i & 1) { emit(b, a, c); }
+                else       { emit(a, b, c); }
             }
         }
     }
@@ -573,10 +614,15 @@ void ExpandGLCmds(const dmdl_t * hdr, EmitFn && emit)
 // Projected shadow
 // ------------------------------------------------------------------------------------------------
 
-// The shadow's attribute stream: flat black at half alpha, identical for
-// every vertex of every shadow - filled once, referenced forever. Alpha
-// 0x40 = 0.5.
-static vu1::LerpDrawAttrib s_shadowAttribs[kBatchMaxVerts];
+// The shadow's attributes: flat black at half alpha, identical for every vertex
+// of every shadow - filled once, referenced forever. Alpha 0x40 = 0.5.
+//
+// One VU chunk's worth rather than one batch's worth. Every entry is the same,
+// so the draw takes it as a repeating block that each chunk re-reads from the
+// start (see vu1::DrawLerpedTriangles' attribsRepeat) instead of an array as
+// long as the largest model - which at this batch size would be 33 KB of
+// identical qwords.
+static vu1::LerpDrawAttrib s_shadowAttribs[vu1::kMaxLerpVertsPerBatch];
 
 // Draws the entity's planar projected shadow: the same keyframe byte streams
 // the model just drew, run through the same VU1 lerp, with the flattening
@@ -584,11 +630,11 @@ static vu1::LerpDrawAttrib s_shadowAttribs[kBatchMaxVerts];
 // per-vertex squash (DrawAliasMD2Shadow) is affine, so it rides the MVP for
 // free and no EE-side positions are ever needed. 'lightSpot' is where the
 // shading lightmap trace hit the ground below the entity.
-void DrawAliasMD2Shadow(const entity_t & entity, const dmdl_t * hdr,
-                        const daliasframe_t * frame, const daliasframe_t * oldFrame,
-                        const LerpConsts & lc, const math::Mat4 & viewProj,
-                        const tex::Texture & skin, const vec3_t lightSpot,
-                        const vu1::FaceCull faceCull)
+// The full model-to-screen transform a shadow draws under: the flattening
+// squash, the entity placement, the view projection, and the pose's uniform
+// translation folded into the last row.
+math::Mat4 ShadowMatrix(const entity_t & entity, const LerpConsts & lc,
+                        const math::Mat4 & viewProj, const vec3_t lightSpot)
 {
     // The reference's squash, in matrix form (row-vector convention):
     // x' = x - sv.x * (z + lheight), y' likewise, z' = height - i.e. model
@@ -614,25 +660,54 @@ void DrawAliasMD2Shadow(const entity_t & entity, const dmdl_t * hdr,
     mvp.m[3][1] = row3.y;
     mvp.m[3][2] = row3.z;
     mvp.m[3][3] = row3.w;
+    return mvp;
+}
+
+// The flags a shadow batch draws with: flat, blended, and never textured.
+constexpr vu1::DrawFlags kShadowFlags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured;
+
+// Rebuilds the model's position stream and draws it squashed. The slow path -
+// used only when the model did not go out in a single batch, so the stream the
+// main pass left behind is not the whole of it. See the call site.
+void DrawAliasMD2Shadow(const entity_t & entity, const dmdl_t * hdr,
+                        const daliasframe_t * frame, const daliasframe_t * oldFrame,
+                        const LerpConsts & lc, const math::Mat4 & viewProj,
+                        const tex::Texture & skin, const vec3_t lightSpot,
+                        const vu1::FaceCull faceCull)
+{
+    const math::Mat4 mvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 
     auto flushShadowVerts = [&]()
     {
         s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull,
-                          vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured,
-                          s_shadowAttribs); // Use shadow attribs override.
+                          kShadowFlags, s_shadowAttribs); // Use shadow attribs override.
     };
 
-    ExpandGLCmds(hdr, [&](float, float, s32 index)
+    // By value, not through the enclosing frame pointers: the loop stores through
+    // the batch's streams, and under -fno-strict-aliasing a captured reference
+    // would have to be re-read every iteration in case the store had changed it.
+    const u32 * const curVerts = KeyframeVertWords(frame);
+    const u32 * const oldVerts = KeyframeVertWords(oldFrame);
+
+    ExpandGLCmds(hdr, [&, curVerts, oldVerts](const s32 * r0, const s32 * r1, const s32 * r2)
     {
         if (s_lerpBatch.IsFull())
         {
             flushShadowVerts();
         }
 
-        auto dst = s_lerpBatch.PushVertex();
-        dst.pos.cur = bits_to_u32(frame->verts[index]);
-        dst.pos.old = bits_to_u32(oldFrame->verts[index]);
-        // NOTE: dst.attrib is unset, s_shadowAttribs overrides it.
+        const auto tri = s_lerpBatch.PushTriangle();
+        const s32 * const recs[3] = { r0, r1, r2 };
+
+        for (int i = 0; i < 3; ++i)
+        {
+            const s32 index = recs[i][2]; // Only the index; the shadow has no UVs.
+            PS2_Assert(index >= 0 && index < hdr->num_xyz);
+
+            tri.pos[i].cur = curVerts[index];
+            tri.pos[i].old = oldVerts[index];
+            // NOTE: tri.attrib is unset, s_shadowAttribs overrides it.
+        }
     });
     flushShadowVerts();
 }
@@ -664,16 +739,6 @@ const tex::Texture & SkinForEntity(const entity_t & entity, const mod::ModelInst
     }
     return *skin;
 }
-
-// ------------------------------------------------------------------------------------------------
-// Config Cvars
-// ------------------------------------------------------------------------------------------------
-
-static const cvar_t * s_lerpModels = nullptr;
-static const cvar_t * s_vuLerp     = nullptr;
-static const cvar_t * s_cullFace   = nullptr;
-static const cvar_t * s_shadows    = nullptr;
-static const cvar_t * s_clipWeapon = nullptr;
 
 } // namespace
 
@@ -822,23 +887,50 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             mvp.m[3][2] = row3.z;
             mvp.m[3][3] = row3.w;
 
-            ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+            // Everything the inner loop reads, by value. They look loop invariant
+            // but the loop stores through the batch's streams, and the renderer
+            // builds with -fno-strict-aliasing - captured by reference the
+            // compiler must assume each store could have changed them and re-read
+            // all of them every iteration.
+            const u32 * const curVerts = KeyframeVertWords(frame);
+            const u32 * const oldVerts = KeyframeVertWords(oldFrame);
+            const u32 * const lut = colorLUT;
+
+            ExpandGLCmds(hdr, [&, curVerts, oldVerts, lut]
+                              (const s32 * r0, const s32 * r1, const s32 * r2)
             {
                 if (s_lerpBatch.IsFull())
                 {
                     s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
                 }
 
-                auto dst = s_lerpBatch.PushVertex();
-                dst.pos.cur = bits_to_u32(frame->verts[index]);
-                dst.pos.old = bits_to_u32(oldFrame->verts[index]);
-                dst.attrib  = {
-                    .rgba = colorLUT[frame->verts[index].lightnormalindex],
-                    .s = s * stScaleS,
-                    .t = t * stScaleT,
-                    .q = 1.0f
-                };
-                ++emittedVerts;
+                const auto tri = s_lerpBatch.PushTriangle();
+                const s32 * const recs[3] = { r0, r1, r2 };
+
+                for (int i = 0; i < 3; ++i)
+                {
+                    const GLCmdVert v = DecodeGLCmd(recs[i]);
+                    PS2_Assert(v.index >= 0 && v.index < hdr->num_xyz);
+
+                    // One load of the keyframe vertex rather than two: the normal
+                    // index is the top byte of the word already in hand, so
+                    // reading it through the struct member would be a second trip
+                    // to the same address. See KeyframeVertWords.
+                    const u32 curBits = curVerts[v.index];
+
+                    tri.pos[i].cur = curBits;
+                    tri.pos[i].old = oldVerts[v.index];
+                    // The skin's power-of-two ST correction is applied by the
+                    // microprogram now (it had a spare multiply, this loop does
+                    // not), so the glcmds coordinates go over untouched.
+                    tri.attrib[i]  = {
+                        .rgba = lut[curBits >> (DTRIVERTX_LNI * 8)],
+                        .s = v.s,
+                        .t = v.t,
+                        .q = 1.0f
+                    };
+                }
+                emittedVerts += 3;
             });
             s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
         }
@@ -856,49 +948,65 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             const math::Vec3 * const lerpedPositions =
                 LerpVertsEE(frame->verts, oldFrame->verts, hdr->num_xyz, lc, powersuit);
 
+            // As in the VU path above: by value, so the stores into the gather
+            // buffer cannot force these to be re-read every iteration.
+            const u32 * const curVerts = KeyframeVertWords(frame);
+            const u32 * const lut = colorLUT;
+            // A powersuit shell has no skin, so its coordinates are simply zero.
+            const float scaleS = powersuit ? 0.0f : stScaleS;
+            const float scaleT = powersuit ? 0.0f : stScaleT;
+
             if (clipOnEE)
             {
-                // The expansion hands over one corner at a time; clip and emit
-                // whole triangles as they complete.
-                clip::ClipVertex corners[3];
-                int cornerCount = 0;
-
-                ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+                ExpandGLCmds(hdr, [&, lerpedPositions, curVerts, lut, scaleS, scaleT]
+                                  (const s32 * r0, const s32 * r1, const s32 * r2)
                 {
-                    clip::ClipVertex & c = corners[cornerCount++];
-                    const math::Vec3 & pos = lerpedPositions[index];
-                    c.pos   = { pos.x, pos.y, pos.z, 1.0f };
-                    c.st    = { powersuit ? 0.0f : (s * stScaleS),
-                                powersuit ? 0.0f : (t * stScaleT), 0.0f, 0.0f };
-                    c.color = UnpackClipColor(colorLUT[frame->verts[index].lightnormalindex]);
+                    const s32 * const recs[3] = { r0, r1, r2 };
+                    clip::ClipVertex corners[3];
 
-                    if (cornerCount == 3)
+                    for (int i = 0; i < 3; ++i)
                     {
-                        cornerCount = 0;
-                        GatherClippedTriangle(corners, mvp, skin, flags);
+                        const GLCmdVert v = DecodeGLCmd(recs[i]);
+                        PS2_Assert(v.index >= 0 && v.index < hdr->num_xyz);
+                        const math::Vec3 & pos = lerpedPositions[v.index];
+
+                        corners[i].pos   = { pos.x, pos.y, pos.z, 1.0f };
+                        corners[i].st    = { v.s * scaleS, v.t * scaleT, 0.0f, 0.0f };
+                        corners[i].color = UnpackClipColor(lut[curVerts[v.index] >> (DTRIVERTX_LNI * 8)]);
                     }
+
+                    GatherClippedTriangle(corners, mvp, skin, flags);
                 });
             }
             else
             {
-                ExpandGLCmds(hdr, [&](float s, float t, s32 index)
+                ExpandGLCmds(hdr, [&, lerpedPositions, curVerts, lut, scaleS, scaleT]
+                                  (const s32 * r0, const s32 * r1, const s32 * r2)
                 {
                     if (s_batch.IsFull())
                     {
                         s_batch.Flush(mvp, skin, flags); // Capacity is a triangle multiple,
                     }                                    // so this only fires between them.
 
-                    vu1::DrawVertex  & dst = s_batch.PushVertex();
-                    const math::Vec3 & pos = lerpedPositions[index];
-                    dst.x    = pos.x;
-                    dst.y    = pos.y;
-                    dst.z    = pos.z;
-                    dst.w    = 1.0f;
-                    dst.rgba = colorLUT[frame->verts[index].lightnormalindex];
-                    dst.s    = powersuit ? 0.0f : (s * stScaleS);
-                    dst.t    = powersuit ? 0.0f : (t * stScaleT);
-                    dst.q    = 1.0f;
-                    ++emittedVerts;
+                    vu1::DrawVertex * const dst = s_batch.PushTriangle();
+                    const s32 * const recs[3] = { r0, r1, r2 };
+
+                    for (int i = 0; i < 3; ++i)
+                    {
+                        const GLCmdVert v = DecodeGLCmd(recs[i]);
+                        PS2_Assert(v.index >= 0 && v.index < hdr->num_xyz);
+                        const math::Vec3 & pos = lerpedPositions[v.index];
+
+                        dst[i].x    = pos.x;
+                        dst[i].y    = pos.y;
+                        dst[i].z    = pos.z;
+                        dst[i].w    = 1.0f;
+                        dst[i].rgba = lut[curVerts[v.index] >> (DTRIVERTX_LNI * 8)];
+                        dst[i].s    = v.s * scaleS;
+                        dst[i].t    = v.t * scaleT;
+                        dst[i].q    = 1.0f;
+                    }
+                    emittedVerts += 3;
                 });
             }
             s_batch.Flush(mvp, skin, flags);
@@ -913,7 +1021,26 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         !(entity.flags & (RF_TRANSLUCENT | RF_WEAPONMODEL | RF_FULLBRIGHT | kShellFlags)))
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::EntShadow);
-        DrawAliasMD2Shadow(entity, hdr, frame, oldFrame, lc, viewProj, skin, lightSpot, faceCull);
+
+        // The shadow's vertices are the model's own, byte for byte - the squash
+        // rides in the matrix, not the data. So if the whole model went out in a
+        // single batch, that batch's position stream is still sitting in
+        // s_lerpBatch and the shadow is one more submission rather than a second
+        // walk of the entire glcmds list. 86% of the stock models fit.
+        //
+        // Both conditions are needed: only the VU lerp path fills that stream at
+        // all, and only a model that never filled the batch mid-way left all of
+        // itself in it rather than just its tail.
+        if (vuLerp && emittedVerts > 0 && emittedVerts <= kLerpBatchMaxVerts)
+        {
+            s_lerpBatch.RedrawLastFlush(ShadowMatrix(entity, lc, viewProj, lightSpot), skin,
+                                        lc.frontv, lc.backv, faceCull,
+                                        kShadowFlags, s_shadowAttribs);
+        }
+        else
+        {
+            DrawAliasMD2Shadow(entity, hdr, frame, oldFrame, lc, viewProj, skin, lightSpot, faceCull);
+        }
     }
 }
 

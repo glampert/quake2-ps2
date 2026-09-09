@@ -9,6 +9,10 @@
 
 #include "ps2/math/math.h"
 
+// TODO:
+// - Revise these functions and check if there are further optimizations possible.
+// - Update the Quake 2 engine code to also call these, or bring Q_rsqrt over from Quake 3.
+
 namespace ps2::math {
 
 // Asm code originally from Morten "Sparky" Mikkelsen's fast maths routines

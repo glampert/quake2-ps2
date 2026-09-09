@@ -12,6 +12,13 @@
  *  sums exactly what the loaders will allocate; the block is then filled by a
  *  bump-pointer allocator (HunkAllocator) and freed in one shot on eviction.
  *
+ *  MD2s are converted rather than stored: the strip/fan glcmds become a flat
+ *  triangle list of mod::AliasVertex, laid out so a draw path moves one whole
+ *  qword per vertex, and the file's header, st/triangle arrays and skin name
+ *  strings are consumed here and dropped. Everything the draw paths used to
+ *  re-check per vertex - every glcmds index, every lightnormalindex - is settled
+ *  once in LoadAliasMD2Model, which is what lets them run unchecked.
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
@@ -22,6 +29,7 @@
 #include "ps2/renderer/lightmap.h"
 
 #include <cmath>
+#include <cstddef> // offsetof
 #include <cstdio>
 #include <cstring>
 
@@ -1752,6 +1760,121 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
 // ALIAS MD2 MODELS
 // ------------------------------------------------------------------------------------------------
 
+// Byte offset of a keyframe's vertex array. sizeof(daliasframe_t) is not it: the
+// struct declares verts[1] to be variable sized, so it counts one vertex too many.
+constexpr u32 kFrameVertsOffset = offsetof(daliasframe_t, verts);
+
+// Bytes one keyframe occupies - the frame header plus its packed vertices. Must
+// match the file's own framesize, which is checked at load.
+constexpr u32 AliasFrameStride(const int numXyz)
+{
+    return kFrameVertsOffset + (static_cast<u32>(numXyz) * DTRIVERTX_SIZE);
+}
+
+// Expands a model's glcmds into a flat triangle list, three AliasVertex per
+// triangle in triangle order.
+//
+// The glcmds are tristrips (count > 0) and trifans (count < 0) of
+// (float s, float t, s32 index) records, zero-terminated: fans pivot on their
+// first vertex, strips flip every odd triangle so the whole strip keeps one
+// facing. That is the walk the renderer used to do every frame, per entity - here
+// it happens once, and the draw paths get a linear array with no primitive state.
+//
+// Returns the triangle count written, or -1 if the command list is malformed.
+// Everything it can reject here is a check the draw paths no longer have to make.
+int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
+                            const int maxTris, AliasVertex * const out, const char * const modelName)
+{
+    int at       = 0;
+    int numTris  = 0;
+    int numVerts = 0;
+
+    // Writes one expanded vertex, bounds-checking the index the draw paths will
+    // use unchecked. False means the model is refused.
+    const auto emitVertex = [&](const s32 * const record) -> bool
+    {
+        const s32 index = record[2];
+        if (index < 0 || index >= numXyz) [[unlikely]]
+        {
+            Com_Printf("ERROR: Model '%s' has a glcmds vertex index out of range (%i of %i)!\n",
+                       modelName, index, numXyz);
+            return false;
+        }
+
+        AliasVertex & v = out[numVerts++];
+        v.index = static_cast<u32>(index);
+        v.s     = bits_to_f32(record[0]);
+        v.t     = bits_to_f32(record[1]);
+        v.q     = 1.0f;
+        return true;
+    };
+
+    for (;;)
+    {
+        if (at >= numWords) [[unlikely]]
+        {
+            Com_Printf("ERROR: Model '%s' has an unterminated glcmds list!\n", modelName);
+            return -1;
+        }
+
+        const s32 count = glcmds[at++];
+        if (count == 0)
+        {
+            break; // End of the command list.
+        }
+
+        const bool isFan = (count < 0);
+        const int  numPrimVerts = isFan ? -count : count;
+
+        if (numPrimVerts < 3) [[unlikely]]
+        {
+            Com_Printf("ERROR: Model '%s' has a glcmds primitive of %i vertices!\n",
+                       modelName, numPrimVerts);
+            return -1;
+        }
+        // 3 words per record; the multiply cannot overflow because numPrimVerts came
+        // from a word count that is itself bounded by numWords.
+        if ((numPrimVerts * 3) > (numWords - at)) [[unlikely]]
+        {
+            Com_Printf("ERROR: Model '%s' has a glcmds primitive running past the list!\n", modelName);
+            return -1;
+        }
+
+        const s32 * const verts = glcmds + at;
+        at += numPrimVerts * 3;
+
+        const int primTris = numPrimVerts - 2;
+        if (primTris > (maxTris - numTris)) [[unlikely]]
+        {
+            Com_Printf("ERROR: Model '%s' has more glcmds triangles than num_tris (%i)!\n",
+                       modelName, maxTris);
+            return -1;
+        }
+
+        for (int i = 0; i < primTris; ++i)
+        {
+            const s32 * const v0 = verts + (i * 3);
+            const s32 * const v1 = v0 + 3;
+            const s32 * const v2 = v0 + 6;
+
+            // A fan pivots on vertex 0; a strip's odd triangles swap their first
+            // two corners to preserve the facing.
+            const s32 * a = v0;
+            const s32 * b = v1;
+            if (isFan)      { a = verts; b = v1; }
+            else if (i & 1) { a = v1;    b = v0; }
+
+            if (!emitVertex(a) || !emitVertex(b) || !emitVertex(v2)) [[unlikely]]
+            {
+                return -1;
+            }
+            ++numTris;
+        }
+    }
+
+    return numTris;
+}
+
 bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen)
 {
     PS2_Assert(file != nullptr);
@@ -1762,8 +1885,9 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
         return false;
     }
 
-    // Read and validate the header before committing a hunk to it. Every offset
-    // below is trusted afterwards, so this is the only place they are checked.
+    // Read and validate the header before committing a hunk to it. Everything the
+    // draw paths used to re-check per vertex, per frame, is settled here instead -
+    // see ExpandGLCmdsToTriangles and the lightnormalindex pass at the end.
     const long base = std::ftell(file);
     dmdl_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
@@ -1789,9 +1913,19 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
         Com_Printf("ERROR: Model '%s' has a bad vertex count (%i)!\n", mdl.name, header.num_xyz);
         return false;
     }
-    if (header.num_st <= 0 || header.num_tris <= 0 || header.num_frames <= 0)
+    if (header.num_tris <= 0 || header.num_tris > MAX_TRIANGLES)
     {
-        Com_Printf("ERROR: Model '%s' has no st verts / triangles / frames!\n", mdl.name);
+        Com_Printf("ERROR: Model '%s' has a bad triangle count (%i)!\n", mdl.name, header.num_tris);
+        return false;
+    }
+    if (header.num_frames <= 0 || header.num_frames > UINT16_MAX)
+    {
+        Com_Printf("ERROR: Model '%s' has a bad frame count (%i)!\n", mdl.name, header.num_frames);
+        return false;
+    }
+    if (header.num_glcmds <= 0)
+    {
+        Com_Printf("ERROR: Model '%s' has no glcmds!\n", mdl.name);
         return false;
     }
     if (header.num_skins < 0 || header.num_skins > kMaxMD2Skins)
@@ -1800,11 +1934,39 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
         return false;
     }
 
-    // MD2 needs no per-field expansion (no byte swap on the EE), so the hunk holds
-    // the file verbatim up to ofs_end and the read lands straight in it. The
-    // biggest MD2 in pak0 is just under 1 MB; staging it through a second buffer
-    // used to put 2 MB of the general heap under a single model load.
-    const u32 hunkSize = AlignUp(static_cast<u32>(header.ofs_end), kHunkAlign);
+    // The three blocks actually read below must each lie inside the file. Written
+    // as a subtraction so a hostile offset cannot overflow the addition.
+    const auto blockFits = [&header](const int ofs, const int bytes) -> bool
+    {
+        return ofs >= static_cast<int>(sizeof(dmdl_t)) && ofs <= header.ofs_end &&
+               bytes >= 0 && bytes <= (header.ofs_end - ofs);
+    };
+
+    const u32 frameStride = AliasFrameStride(header.num_xyz);
+    if (header.framesize != static_cast<int>(frameStride))
+    {
+        Com_Printf("ERROR: Model '%s' has framesize %i, expected %u for %i vertices!\n",
+                   mdl.name, header.framesize, frameStride, header.num_xyz);
+        return false;
+    }
+    if (!blockFits(header.ofs_skins, header.num_skins * MAX_SKINNAME) ||
+        !blockFits(header.ofs_glcmds, header.num_glcmds * 4) ||
+        !blockFits(header.ofs_frames, header.num_frames * header.framesize))
+    {
+        Com_Printf("ERROR: Model '%s' has a block running past the end of the file!\n", mdl.name);
+        return false;
+    }
+
+    // The hunk holds nothing but data: the expanded triangle stream, then the
+    // keyframes verbatim. The dmdl_t header, the st and triangle arrays, the
+    // glcmds and the skin name strings are all consumed here and dropped - the
+    // counts and pointers that replace them live in ModelInstance::AliasData.
+    const int numFlatVerts = header.num_tris * 3;
+
+    HunkSizer sizer{};
+    sizer.AddArray<AliasVertex>(numFlatVerts);
+    sizer.Add(static_cast<u32>(header.num_frames) * frameStride);
+    const u32 hunkSize = sizer.BytesUsed();
 
     HunkAllocator hunk{};
     hunk.Init(hunkSize, ps2::heap::MemTag::AliasMdl);
@@ -1812,31 +1974,113 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     mdl.hunkSize = hunkSize;
     mdl.type     = ModelType::AliasMD2;
 
-    auto * out = static_cast<dmdl_t *>(hunk.Alloc(static_cast<u32>(header.ofs_end)));
-    if (std::fseek(file, base, SEEK_SET) != 0)
+    AliasVertex * const vertexes = hunk.AllocArray<AliasVertex>(numFlatVerts);
+    u8 * const frames = static_cast<u8 *>(
+        hunk.Alloc(static_cast<u32>(header.num_frames) * frameStride));
+
+    mdl.numFrames = ToU16(header.num_frames);
+
+    ModelInstance::AliasData & alias = mdl.Alias();
+    alias.numSkins    = ToU16(header.num_skins);
+    alias.numTris     = ToU16(header.num_tris);
+    alias.numXyz      = ToU16(header.num_xyz);
+    alias.frameStride = ToU16(static_cast<int>(frameStride));
+    alias.vertexes    = vertexes;
+    alias.frames      = frames;
+
+    // Skins resolved once, here. ReferenceAllTextures touches these pointers on a
+    // cache hit rather than looking the names up again, so the strings go no
+    // further than this loop's stack buffer.
+    if (std::fseek(file, base + header.ofs_skins, SEEK_SET) != 0)
     {
-        Com_Printf("ERROR: Model '%s': cannot rewind to the start of the model\n", mdl.name);
+        Com_Printf("ERROR: Model '%s': cannot seek to the skin names\n", mdl.name);
         return false; // The caller's Unload releases the hunk.
     }
-    FS_Read(out, header.ofs_end, file);
-
-    mdl.numFrames = ToU16(out->num_frames);
-
-    // Resolved once, here. ReferenceAllTextures touches these pointers on a cache
-    // hit rather than looking the names up again, so the strings are not kept.
-    ModelInstance::AliasData & alias = mdl.Alias();
-    alias.numSkins = ToU16(out->num_skins);
-    for (int i = 0; i < out->num_skins; ++i)
+    for (int i = 0; i < header.num_skins; ++i)
     {
-        const char * skinName = reinterpret_cast<const char *>(out) + out->ofs_skins + (i * MAX_SKINNAME);
+        char skinName[MAX_SKINNAME];
+        FS_Read(skinName, static_cast<int>(sizeof(skinName)), file);
+        skinName[sizeof(skinName) - 1] = '\0'; // A truncated name must still terminate.
         alias.skins[i] = tex::Find(skinName, tex::ImageType::Skin);
     }
 
+    // The glcmds are the one thing that needs a scratch buffer: the flat list they
+    // expand into is 1.9x their size, so they cannot be unpacked in place. 32 KB
+    // for the largest model in pak0, freed before the frames are read, which keeps
+    // the peak far below the whole-file image this loader used to hold.
+    {
+        const u32 glcmdsBytes = static_cast<u32>(header.num_glcmds) * 4;
+        auto * const glcmds = static_cast<s32 *>(
+            ps2::heap::Alloc(glcmdsBytes, ps2::heap::MemTag::AliasMdl));
+
+        bool ok = (std::fseek(file, base + header.ofs_glcmds, SEEK_SET) == 0);
+        if (ok)
+        {
+            FS_Read(glcmds, static_cast<int>(glcmdsBytes), file);
+        }
+        else
+        {
+            Com_Printf("ERROR: Model '%s': cannot seek to the glcmds\n", mdl.name);
+        }
+
+        const int numTris = ok ? ExpandGLCmdsToTriangles(glcmds, header.num_glcmds, header.num_xyz,
+                                                         header.num_tris, vertexes, mdl.name)
+                               : -1;
+        ps2::heap::Free(glcmds, glcmdsBytes, ps2::heap::MemTag::AliasMdl);
+
+        if (numTris < 0)
+        {
+            return false;
+        }
+        if (numTris != header.num_tris)
+        {
+            Com_Printf("ERROR: Model '%s' expanded to %i triangles, but num_tris is %i!\n",
+                       mdl.name, numTris, header.num_tris);
+            return false;
+        }
+    }
+
+    // Keyframes are kept exactly as they are on disk: they are the bulk of the
+    // model, the microprogram consumes the packed bytes unchanged, and the
+    // renderer still walks them as daliasframe_t.
+    if (std::fseek(file, base + header.ofs_frames, SEEK_SET) != 0)
+    {
+        Com_Printf("ERROR: Model '%s': cannot seek to the keyframes\n", mdl.name);
+        return false;
+    }
+    FS_Read(frames, header.num_frames * header.framesize, file);
+
+    // Every draw path indexes a 162-entry table with a vertex's lightnormalindex,
+    // and the powersuit path indexes the normal table with it. Guarantee the range
+    // once here rather than masking it per vertex, per frame, forever after. No
+    // model in pak0 trips this - the highest index in the stock data is 161.
+    int clampedNormals = 0;
+    for (int f = 0; f < header.num_frames; ++f)
+    {
+        u8 * const frameVerts = frames + (static_cast<u32>(f) * frameStride) + kFrameVertsOffset;
+        for (int v = 0; v < header.num_xyz; ++v)
+        {
+            u8 & lightNormalIndex = frameVerts[(v * DTRIVERTX_SIZE) + DTRIVERTX_LNI];
+            if (lightNormalIndex >= kNumVertexNormals) [[unlikely]]
+            {
+                lightNormalIndex = 0;
+                ++clampedNormals;
+            }
+        }
+    }
+    if (clampedNormals != 0)
+    {
+        Com_Printf("WARNING: Model '%s' had %i vertex normal indexes out of range; clamped.\n",
+                   mdl.name, clampedNormals);
+    }
+
+    PS2_Assert(hunk.BytesUsed() == hunkSize);
+
     if (kVerboseModelLoading)
     {
-        Com_DPrintf("Alias model '%s' loaded (%u KB hunk, read in place).\n", mdl.name, hunkSize / 1024u);
+        Com_DPrintf("Alias model '%s' loaded (%u KB hunk, %i tris, %i frames).\n",
+                    mdl.name, hunkSize / 1024u, header.num_tris, header.num_frames);
     }
     return true;
 }
-
 } // namespace ps2::mod

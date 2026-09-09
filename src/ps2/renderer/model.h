@@ -58,6 +58,11 @@ constexpr int kMaxMD2SkinHeight = 480;
 constexpr int kMaxMD2Skins  = 32;
 constexpr int kMaxLightmaps = 4;
 
+// Entries in the shared Quake vertex-normal table (client/anorms.h), which every
+// keyframe vertex's lightnormalindex indexes. LoadAliasMD2Model clamps to this at
+// load, so the draw paths index the normal and shade-color tables unmasked.
+constexpr int kNumVertexNormals = 162;
+
 // ModelSurface::lightmapTextureNum when the surface has no lightmap at all -
 // sky, turbulent and translucent surfaces, which the lightmap builder skips.
 constexpr int kNotLightmapped = -1;

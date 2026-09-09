@@ -20,7 +20,7 @@
 #include <cstring>
 
 extern "C" {
-    #include "common/q_files.h" // IDBSPHEADER / dsprite_t / dmdl_t / MAX_SKINNAME
+    #include "common/q_files.h" // IDBSPHEADER / IDALIASHEADER / IDSPRITEHEADER
 }
 
 namespace ps2::mod {

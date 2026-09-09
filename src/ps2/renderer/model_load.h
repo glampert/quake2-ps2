@@ -27,11 +27,13 @@ bool IsWorldArenaBlock(const void * ptr);
 // All three take an open file positioned at the model's first byte, and none of
 // them closes it - the caller opened it to read the format tag and owns it.
 //
-// None of these formats needs a decode pass on the EE: a sprite and an MD2 are
-// stored in the hunk exactly as they sit on disk, and a .bsp is read lump by lump
-// into a hunk laid out up front. So every one of them reads straight into its
-// final destination. Nothing here ever holds a whole model file and a copy of it
-// at the same time, which for the biggest MD2 in pak0 would be 2 ~MB.
+// All three read straight into their final destination rather than staging the
+// file first: a sprite is stored in the hunk exactly as it sits on disk, a .bsp
+// is read lump by lump into a hunk laid out up front, and an MD2 reads its
+// keyframes in place around a conversion pass over its glcmds. None of them ever
+// holds a whole model file and a copy of it at once, which for the biggest MD2
+// in pak0 would be ~2 MB. The MD2 conversion's one scratch buffer is its glcmds
+// block, 32 KB at worst and freed before the keyframes are read.
 bool LoadBrushModel(ModelInstance & outModel, FILE * file, const char * fileName);
 bool LoadSpriteModel(ModelInstance & outModel, FILE * file, int fileLen);
 bool LoadAliasMD2Model(ModelInstance & outModel, FILE * file, int fileLen);

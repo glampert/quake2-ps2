@@ -206,6 +206,28 @@ struct alignas(16) LerpDrawAttrib
 };
 static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qword");
 
+// The one-qword sibling of CopyDrawVertex, for a caller whose source is already
+// laid out as a LerpDrawAttrib - mod::AliasVertex deliberately is, keeping the
+// keyframe index where the color goes so a model's baked attributes reach the
+// batch in one move and the color is written over lane 0 afterwards.
+//
+// Same two reasons as CopyDrawVertex: gcc never forms lq/sq of its own accord,
+// and the packed color must move through the integer path so no FMAC can flush
+// its denormal bit pattern. Templated on the source only to avoid a dependency
+// on the model headers here; the layout is asserted rather than assumed.
+template<typename SrcT>
+inline void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
+{
+    static_assert(sizeof(SrcT) == sizeof(LerpDrawAttrib) && alignof(SrcT) == 16,
+                  "CopyLerpAttrib's lq/sq need one qword-aligned qword");
+    asm volatile (
+        "lq      $8,  0x00(%1)     \n\t"
+        "sq      $8,  0x00(%2)     \n\t"
+        : "=m" (dst)
+        : "r" (&src), "r" (&dst), "m" (src)
+        : "$8");
+}
+
 // Draws textured triangles whose positions VU1 interpolates from the two
 // keyframe streams: position = cur * frontv + old * backv, plus the MVP's
 // row 3 - fold the MD2 lerp's uniform 'move' translation in there (see

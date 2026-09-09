@@ -177,13 +177,13 @@ constexpr u64 PackDitherMatrix(const signed char (&matrix)[16])
     return packed;
 }
 
-inline RenderPacket & FramePacket()
+Q_ALWAYS_INLINE RenderPacket & FramePacket()
 {
     return s_framePacket[s_packetIdx];
 }
 
 // Bytes of EE RAM the texture's pixel buffer occupies (linear width*height texels).
-inline int PixelBufferBytes(const tex::Texture & texture)
+Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
 {
     return texture.width * texture.height * tex::BytesPerTexel(texture.format);
 }

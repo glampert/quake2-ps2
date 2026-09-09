@@ -74,8 +74,8 @@ constexpr int kAtlasColorBytes = kAtlasLuxels * static_cast<int>(sizeof(u16));
 static lightstyle_t s_defaultLightStyles[MAX_LIGHTSTYLES];
 
 // Luxels a surface spans, from its texture-space extents.
-inline int LuxelsWide(const mod::ModelSurface & surf) { return (surf.extents[0] >> 4) + 1; }
-inline int LuxelsHigh(const mod::ModelSurface & surf) { return (surf.extents[1] >> 4) + 1; }
+Q_ALWAYS_INLINE int LuxelsWide(const mod::ModelSurface & surf) { return (surf.extents[0] >> 4) + 1; }
+Q_ALWAYS_INLINE int LuxelsHigh(const mod::ModelSurface & surf) { return (surf.extents[1] >> 4) + 1; }
 
 // ------------------------------------------------------------------------------------------------
 // LightmapManager

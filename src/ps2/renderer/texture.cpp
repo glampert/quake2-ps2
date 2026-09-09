@@ -22,7 +22,7 @@ namespace {
 
 // Cache lookup key: the name hash continued with the image type as one extra
 // FNV-1a byte, so the same file may be cached independently per ImageType.
-inline u64 LookupKey(const char * fullname, ImageType type)
+Q_ALWAYS_INLINE u64 LookupKey(const char * fullname, ImageType type)
 {
     u64 hash = HashStr64(fullname);
     hash ^= static_cast<u8>(type);

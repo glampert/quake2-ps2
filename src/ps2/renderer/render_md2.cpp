@@ -78,7 +78,7 @@ static const float s_vertexNormals[kNumVertexNormals][3] = {
 #pragma GCC diagnostic pop
 
 // The shade-dot row for the entity's yaw.
-inline const float * GetShadeDotsForEntity(const entity_t & entity)
+Q_ALWAYS_INLINE const float * GetShadeDotsForEntity(const entity_t & entity)
 {
     const u32 row = static_cast<u32>(static_cast<int>(
         entity.angles[YAW] * (kShadeDotQuant / 360.0f))) & (kShadeDotQuant - 1);
@@ -89,7 +89,7 @@ inline const float * GetShadeDotsForEntity(const entity_t & entity)
 // Converted mesh accessors
 // ------------------------------------------------------------------------------------------------
 
-inline const mod::ModelInstance::AliasData & GetAliasMesh(const mod::ModelInstance & model)
+Q_ALWAYS_INLINE const mod::ModelInstance::AliasData & GetAliasMesh(const mod::ModelInstance & model)
 {
     PS2_Assert(model.type == mod::ModelType::AliasMD2 && model.hunkBase != nullptr);
     return model.Alias();
@@ -98,7 +98,7 @@ inline const mod::ModelInstance::AliasData & GetAliasMesh(const mod::ModelInstan
 // Keyframes are the one part of the file the loader keeps verbatim, so they are
 // still daliasframe_t records - just packed at a stride of our own rather than
 // behind the file's ofs_frames.
-inline const daliasframe_t * GetAliasFrame(const mod::ModelInstance::AliasData & mesh, const int frameIndex)
+Q_ALWAYS_INLINE const daliasframe_t * GetAliasFrame(const mod::ModelInstance::AliasData & mesh, const int frameIndex)
 {
     return static_cast<const daliasframe_t *>(static_cast<const void *>(
         mesh.frames + (static_cast<u32>(frameIndex) * mesh.frameStride)));
@@ -116,7 +116,7 @@ inline const daliasframe_t * GetAliasFrame(const mod::ModelInstance::AliasData &
 // style choice: dtrivertx_t has alignment 1, so __builtin_bit_cast through a
 // dtrivertx_t* makes the compiler copy the struct a byte at a time through the
 // stack - nine instructions where the aligned load is one.
-inline const u32 * KeyframeVertWords(const daliasframe_t * const frame)
+Q_ALWAYS_INLINE const u32 * KeyframeVertWords(const daliasframe_t * const frame)
 {
     static_assert(DTRIVERTX_SIZE == sizeof(u32) && sizeof(dtrivertx_t) == sizeof(u32),
                   "dtrivertx_t must be exactly one word!");
@@ -150,7 +150,7 @@ static batch::VULerpTriangleBatch<kLerpBatchMaxVerts> s_lerpBatch;
 
 // The entity transform is shared with the brush model path;
 // alias models are the ones that take +pitch.
-inline math::Mat4 MakeAliasMatrix(const entity_t & entity)
+Q_ALWAYS_INLINE math::Mat4 MakeAliasMatrix(const entity_t & entity)
 {
     return MakeEntityMatrix(entity, /*flipPitchAngle=*/true);
 }
@@ -361,7 +361,7 @@ math::Vec3 ShadeEntity(const refdef_t & viewDef, const entity_t & entity, vec3_t
 // cast: converting a negative float to u32 is undefined, and the value it
 // produces would flood every channel through PackColorRGBA's shifts rather
 // than just darkening one.
-inline u32 ClampColorChannel(float c)
+Q_ALWAYS_INLINE u32 ClampColorChannel(float c)
 {
     return (c >= 255.0f) ? 255u : ((c <= 0.0f) ? 0u : static_cast<u32>(c));
 }
@@ -540,7 +540,7 @@ const math::Vec3 * LerpVertsEE(const dtrivertx_t * verts, const dtrivertx_t * ol
 // MD2 shades per vertex, so the colour has to survive a cut: it rides through
 // the clipper as unpacked 0..255 floats in ClipVertex::color, which interpolate
 // linearly like everything else there, and pack back on the way out.
-inline math::Vec4 UnpackClipColor(u32 rgba)
+Q_ALWAYS_INLINE math::Vec4 UnpackClipColor(u32 rgba)
 {
     return { static_cast<float>( rgba        & 0xFF),
              static_cast<float>((rgba >>  8) & 0xFF),
@@ -548,7 +548,7 @@ inline math::Vec4 UnpackClipColor(u32 rgba)
              static_cast<float>((rgba >> 24) & 0xFF) };
 }
 
-inline u32 PackClipColor(const math::Vec4 & c)
+Q_ALWAYS_INLINE u32 PackClipColor(const math::Vec4 & c)
 {
     const auto channel = [](float f) -> u32
     {
@@ -560,8 +560,8 @@ inline u32 PackClipColor(const math::Vec4 & c)
 // Clips one model triangle against the volume the VU judges and appends the
 // survivors to the gather buffer, flushing it when full. The vertex colour is
 // the shade the clipper interpolated, packed back down on the way out.
-inline void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & mvp,
-                                  const tex::Texture & texture, const vu1::DrawFlags flags)
+Q_ALWAYS_INLINE void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & mvp,
+                                           const tex::Texture & texture, const vu1::DrawFlags flags)
 {
     s_batch.GatherTriangle(corners, mvp, texture, flags,
                            [](const clip::ClipVertex & v) { return PackClipColor(v.color); });

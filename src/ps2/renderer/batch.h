@@ -57,8 +57,8 @@ public:
     static_assert((MaxVerts % 3) == 0, "Batch capacity must be a whole number of triangles!");
     static_assert(MaxVerts >= (clip::kMaxClippedVerts - 2) * 3, "Batch capacity must hold one worst-case clipped triangle!");
 
-    bool IsFull()  const { return m_vertCount == MaxVerts; }
-    bool IsEmpty() const { return m_vertCount == 0; }
+    Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
+    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
 
     // Sends the gathered triangles as one batch and empties the buffer. The
     // transform, texture and flags are the batch's; a caller that changes any
@@ -79,7 +79,7 @@ public:
     // submitting geometry the VU can be trusted to judge whole, so it never
     // meets the clipper. The caller must check IsFull() (and flush) first;
     // capacity is a triangle multiple, so that only ever fires between triangles.
-    vu1::DrawVertex & PushVertex()
+    Q_ALWAYS_INLINE vu1::DrawVertex & PushVertex()
     {
         PS2_AssertMsg(m_vertCount < MaxVerts, "TriangleBatch is full!");
         return m_verts[m_vertCount++];
@@ -89,7 +89,7 @@ public:
     // once, so the count moves once instead of three times. Same contract as
     // PushVertex - check IsFull() (and flush) first - and since capacity is a
     // triangle multiple, a buffer that is not full always has room for three.
-    vu1::DrawVertex * PushTriangle()
+    Q_ALWAYS_INLINE vu1::DrawVertex * PushTriangle()
     {
         PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "TriangleBatch is full!");
         vu1::DrawVertex * const tri = &m_verts[m_vertCount];
@@ -143,7 +143,7 @@ public:
     }
 
 private:
-    void EmitVertex(const clip::ClipVertex & v, const u32 rgba)
+    Q_ALWAYS_INLINE void EmitVertex(const clip::ClipVertex & v, const u32 rgba)
     {
         PS2_AssertMsg(m_vertCount < MaxVerts, "TriangleBatch is full!");
         vu1::DrawVertex & dst = m_verts[m_vertCount++];
@@ -175,8 +175,8 @@ public:
 
     static_assert((MaxVerts % 3) == 0, "Batch capacity must be a whole number of triangles!");
 
-    bool IsFull()  const { return m_vertCount == MaxVerts; }
-    bool IsEmpty() const { return m_vertCount == 0; }
+    Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
+    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
 
     // The VU-lerp equivalent of TriangleBatch::Flush, submitting the two SoA streams.
     //
@@ -242,7 +242,7 @@ public:
         vu1::LerpDrawAttrib  & attrib;
     };
 
-    Vert PushVertex()
+    Q_ALWAYS_INLINE Vert PushVertex()
     {
         PS2_AssertMsg(m_vertCount < MaxVerts, "VULerpTriangleBatch is full!");
         const Vert v = { m_vertBytes[m_vertCount], m_attribs[m_vertCount] };
@@ -261,7 +261,7 @@ public:
         vu1::LerpDrawAttrib  * attrib; // [3]
     };
 
-    Tri PushTriangle()
+    Q_ALWAYS_INLINE Tri PushTriangle()
     {
         PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "VULerpTriangleBatch is full!");
         const Tri t = { &m_vertBytes[m_vertCount], &m_attribs[m_vertCount] };

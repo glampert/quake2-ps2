@@ -230,7 +230,7 @@ const math::Mat4 * StoreAlphaEntityMatrix(const math::Mat4 & mvp)
 // Frame setup: camera matrices and frustum
 // ------------------------------------------------------------------------------------------------
 
-inline int SignBitsForPlane(const cplane_t & plane)
+Q_ALWAYS_INLINE int SignBitsForPlane(const cplane_t & plane)
 {
     // Sign bits are used for fast box-on-plane-side tests.
     int bits = 0;
@@ -273,7 +273,7 @@ void SetUpFrustum(const refdef_t & viewDef)
 }
 
 // True when dynamic lights are drawn as per-vertex point lights on VU1.
-inline bool VuDynamicLightsEnabled()
+Q_ALWAYS_INLINE bool VuDynamicLightsEnabled()
 {
     return s_dynamicLightmaps->value == 2.0f;
 }
@@ -392,7 +392,7 @@ void SetUpClipVolume(const math::Mat4 & viewProj)
 // off by - falls through to the clipper as before. The radius is scaled by the
 // plane's gradient length because the planes are left unnormalised, which keeps
 // the epsilon in the units the microprogram uses.
-inline bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
+Q_ALWAYS_INLINE bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
 {
     for (const ClipVolumePlane & p : s_clipVolume)
     {
@@ -409,7 +409,7 @@ inline bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
 }
 
 // True when the box is completely outside the frustum and must not draw.
-inline bool ShouldCullBBox(float * mins, float * maxs)
+Q_ALWAYS_INLINE bool ShouldCullBBox(float * mins, float * maxs)
 {
     for (cplane_t & plane : s_frustum)
     {
@@ -426,7 +426,7 @@ inline bool ShouldCullBBox(float * mins, float * maxs)
 // brush model passes already reject whole surfaces on the same side test
 // (their triangles are coplanar with the surface), so enabling this test
 // actually doesn't gain us anything. Left as a reference, disabled by default.
-inline bool WorldBackFaceCullEnabled()
+Q_ALWAYS_INLINE bool WorldBackFaceCullEnabled()
 {
     return s_backFaceCull->value != 0.0f;
 }
@@ -499,7 +499,7 @@ const mod::ModelLeaf * FindLeafNodeForPoint(const float * point, const mod::Mode
 //
 // The row lives in a shared buffer that the next call overwrites, so don't hold
 // on to it (MarkLeaves copies it into a temp before asking for the second one).
-inline const u8 * GetClusterPVS(const int cluster)
+Q_ALWAYS_INLINE const u8 * GetClusterPVS(const int cluster)
 {
     PS2_Assert(cluster != kInvalidCluster); // MarkLeaves handles that case itself.
     return CM_ClusterPVS(cluster);
@@ -840,7 +840,7 @@ using clip::ClipVertex;
 // 128, where the atlas mirror it was sampled from is only 5:6:5. Both gather
 // paths now derive the tint from the same bytes, so a surface that straddles the
 // clip volume shades identically to one that does not.
-inline math::Vec4 UnpackCachedLightmapColor(const u32 cached)
+Q_ALWAYS_INLINE math::Vec4 UnpackCachedLightmapColor(const u32 cached)
 {
     constexpr float kInv = 1.0f / 128.0f;
     return { static_cast<float>( cached        & 0xFFu) * kInv,
@@ -849,7 +849,7 @@ inline math::Vec4 UnpackCachedLightmapColor(const u32 cached)
              1.0f };
 }
 
-inline u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
+Q_ALWAYS_INLINE u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
 {
     if (base == kFullBright)
     {
@@ -868,7 +868,7 @@ inline u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
         | (base & 0xFF000000u); // The batch keeps its own alpha.
 }
 
-inline u32 ScaleChannel(u32 channel, float scale)
+Q_ALWAYS_INLINE u32 ScaleChannel(u32 channel, float scale)
 {
     const float scaled = (static_cast<float>(channel) * scale) + 0.5f;
     return (scaled <= 0.0f)   ? 0u
@@ -879,7 +879,7 @@ inline u32 ScaleChannel(u32 channel, float scale)
 // Tints the batch colour by this vertex's own, leaving the alpha byte alone -
 // the diffuse pass is opaque, and the lightmap pass that follows needs the
 // modulate identity there.
-inline u32 WithVertexColor(u32 rgba, const math::Vec4 & tint)
+Q_ALWAYS_INLINE u32 WithVertexColor(u32 rgba, const math::Vec4 & tint)
 {
     return ScaleChannel( rgba        & 0xFF, tint.x)
         | (ScaleChannel((rgba >>  8) & 0xFF, tint.y) <<  8)
@@ -889,7 +889,7 @@ inline u32 WithVertexColor(u32 rgba, const math::Vec4 & tint)
 
 // Swaps the batch colour's alpha for this vertex's own, clamped onto the GS's
 // 0..0x80 = 0..1.0 alpha scale.
-inline u32 WithVertexAlpha(u32 rgba, float alpha)
+Q_ALWAYS_INLINE u32 WithVertexAlpha(u32 rgba, float alpha)
 {
     const float scaled = alpha * 128.0f;
     const u32   packed = (scaled >= 128.0f) ? 128u
@@ -900,7 +900,7 @@ inline u32 WithVertexAlpha(u32 rgba, float alpha)
 
 // The colour one gathered vertex draws with: the batch colour, tinted by the
 // luxel chroma or wearing this vertex's own alpha, per the draw state.
-inline u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & state)
+Q_ALWAYS_INLINE u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & state)
 {
     return state.lightmapTint ? WithVertexColor(state.rgba, v.color)
          : state.vertexAlpha  ? WithVertexAlpha(state.rgba, v.st.z)
@@ -910,7 +910,7 @@ inline u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & state)
 // Clips one triangle against the VU clip volume and appends the survivors to
 // the gather buffer, flushing it when full. The corners arrive with their
 // position and UVs set; their clip distances are computed by the clipper.
-inline void GatherTriangle(ClipVertex (&corners)[3], const tex::Texture & texture, const SurfaceDrawState & state)
+Q_ALWAYS_INLINE void GatherTriangle(ClipVertex (&corners)[3], const tex::Texture & texture, const SurfaceDrawState & state)
 {
     // Reject a triangle facing away from the camera before any clipping work.
     // The test is cheaper than the six plane distances the clipper takes, and a
@@ -927,7 +927,7 @@ inline void GatherTriangle(ClipVertex (&corners)[3], const tex::Texture & textur
 }
 
 // Sends the gathered triangles as one batch and empties the buffer.
-inline void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & state)
+Q_ALWAYS_INLINE void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & state)
 {
     s_batch.Flush(*state.mvp, texture, state.flags);
 }
@@ -947,7 +947,7 @@ static vu1::DrawVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
 // arrives by reference, and the renderer builds with -fno-strict-aliasing - so
 // left in place the compiler must assume each store could have changed them and
 // reload all four every single time round.
-inline void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
+Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     const mod::PolyVertex * const verts = poly.vertexes;
 
@@ -1095,7 +1095,7 @@ constexpr float kTurbScale = static_cast<float>(kTurbSinSize) / (2.0f * math::kP
 // boundaries, so a leaf never exceeds that many ring vertices.
 constexpr int kMaxWarpPolyVerts = 64 + 2;
 
-inline float TurbSin(const float phase)
+Q_ALWAYS_INLINE float TurbSin(const float phase)
 {
     // Truncation toward zero and a two's complement mask, exactly as ref_gl
     // indexes the table - negative phases included.
@@ -1223,7 +1223,7 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
 // and the back-face test takes the world camera. Shared by the diffuse and
 // lightmap passes, which must agree on all of it or their triangles would not
 // land on the same pixels.
-inline SurfaceDrawState WorldSurfaceDrawState()
+Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState()
 {
     return SurfaceDrawState {
         .mvp   = &s_viewProjMatrix,
@@ -1239,7 +1239,7 @@ inline SurfaceDrawState WorldSurfaceDrawState()
 // Gated on the lightmap pass as well as its own cvar: the chroma is only half a
 // luxel, and laying it down without the intensity that goes with it would tint a
 // fullbright world rather than light it.
-inline bool LightmapColorEnabled()
+Q_ALWAYS_INLINE bool LightmapColorEnabled()
 {
     return (s_lightmaps->value != 0.0f) && (s_lightmapColor->value != 0.0f);
 }
@@ -1408,7 +1408,7 @@ void SetLightLevel(const refdef_t & viewDef)
 // Scales a 0..1 blend channel onto 0..255, clamped: refdef_t::blend comes
 // straight off the wire (cl_ents.c) or out of cl_testblend, and nothing
 // upstream promises the range a cast would need.
-inline u8 BlendChannelToByte(const float channel)
+Q_ALWAYS_INLINE u8 BlendChannelToByte(const float channel)
 {
     const float scaled = channel * 255.0f;
     return (scaled >= 255.0f) ? 255u
@@ -1455,7 +1455,7 @@ void RenderBlendedOverlay(const refdef_t & viewDef)
 // the GS's 0x80 = 1.0 scale. Surfaces that are turbulent but not explicitly
 // translucent (lava, slime) still go through the blend at full opacity, as
 // they do there.
-inline u32 AlphaSurfaceColor(const int texFlags)
+Q_ALWAYS_INLINE u32 AlphaSurfaceColor(const int texFlags)
 {
     u32 alpha = 0x80; // 1.0
     if (texFlags & SURF_TRANS33)
@@ -1581,7 +1581,7 @@ constexpr int kNumFlareSegs = 16;
 // ones for its "dark light" effects (cl_ents.c's V_AddLight(..., -1, -1, -1)),
 // which would wrap catastrophically through the unsigned cast. OpenGL clamps
 // these for free in glColor3f; we do it by hand.
-inline u32 FlareChannel(float colorComponent)
+Q_ALWAYS_INLINE u32 FlareChannel(float colorComponent)
 {
     const float scaled = colorComponent * 0.2f * 255.0f;
     return (scaled >= 255.0f) ? 255u : ((scaled <= 0.0f) ? 0u : static_cast<u32>(scaled));

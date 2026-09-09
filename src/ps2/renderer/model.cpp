@@ -169,7 +169,7 @@ static bool PeekModelType(const char * const name, ModelType & outType,
     u32 id = 0;
     FS_Read(&id, static_cast<int>(sizeof(id)), file);
 
-    if (base < 0 || std::fseek(file, base, SEEK_SET) != 0)
+    if (base < 0 || std::fseek(file, base, SEEK_SET) != 0) [[unlikely]]
     {
         Com_Printf("ERROR: ModelCache: Cannot rewind '%s' after reading its id!\n", name);
         FS_FCloseFile(file);
@@ -265,7 +265,7 @@ const ModelInstance * ModelCache::FindInlineModel(const char * const name)
 {
     const int idx = std::atoi(name + 1);
     if (idx < 1 || idx >= static_cast<int>(kMaxInlineModels) ||
-        m_worldModel == nullptr || idx >= m_worldModel->Brush().numSubModels)
+        m_worldModel == nullptr || idx >= m_worldModel->Brush().numSubModels) [[unlikely]]
     {
         Com_Printf("ERROR: ModelCache: Bad inline model number (%i) or null world model.\n", idx);
         return nullptr;

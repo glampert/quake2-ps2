@@ -96,8 +96,8 @@ static u8 * s_worldArena = nullptr;
 static u32 s_hunkPeakUsed    = 0;
 static u32 s_scratchPeakUsed = 0;
 
-inline u8 * WorldHunkBase()    { return s_worldArena; }
-inline u8 * WorldScratchBase() { return s_worldArena + kWorldHunkCapacity; }
+Q_ALWAYS_INLINE u8 * WorldHunkBase()    { return s_worldArena; }
+Q_ALWAYS_INLINE u8 * WorldScratchBase() { return s_worldArena + kWorldHunkCapacity; }
 
 constexpr u32 AlignUp(u32 value, u32 alignment)
 {
@@ -479,7 +479,7 @@ private:
 // through void* so the higher-alignment result doesn't trip -Wcast-align (the
 // scratch buffer is aligned well past any of these structs).
 template<typename T>
-inline const T * LumpAs(const void * const lumpData)
+Q_ALWAYS_INLINE const T * LumpAs(const void * const lumpData)
 {
     return static_cast<const T *>(lumpData);
 }
@@ -487,36 +487,36 @@ inline const T * LumpAs(const void * const lumpData)
 // Element count of a lump; used by the loaders after the pre-pass has validated
 // that filelen divides evenly.
 template<typename T>
-inline int LumpElemCount(const lump_t & l)
+Q_ALWAYS_INLINE int LumpElemCount(const lump_t & l)
 {
     return l.filelen / static_cast<int>(sizeof(T));
 }
 
-inline Vec3 ToVec3(const float * const p)
+Q_ALWAYS_INLINE Vec3 ToVec3(const float * const p)
 {
     return { p[0], p[1], p[2] };
 }
 
-inline float Component(const Vec3 & v, int axis)
+Q_ALWAYS_INLINE float Component(const Vec3 & v, int axis)
 {
     return (axis == 0) ? v.x : (axis == 1) ? v.y : v.z;
 }
 
 // Texture-plane projection s = v . vec + vec[3] (vec is a texinfo vecs[] row).
-inline float TexProject(const Vec3 & v, const float vec[4])
+Q_ALWAYS_INLINE float TexProject(const Vec3 & v, const float vec[4])
 {
     return (v.x * vec[0]) + (v.y * vec[1]) + (v.z * vec[2]) + vec[3];
 }
 
 // Same projection without the constant offset (used for turbulent surfaces).
-inline float Project3(const Vec3 & v, const float vec[4])
+Q_ALWAYS_INLINE float Project3(const Vec3 & v, const float vec[4])
 {
     return (v.x * vec[0]) + (v.y * vec[1]) + (v.z * vec[2]);
 }
 
 // Reconstructs a surface vertex position from a surfedge index (negative indices
 // walk the edge backwards). Shared by every surface-processing helper.
-inline const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
+Q_ALWAYS_INLINE const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
 {
     const ModelInstance::BrushData & brush = mdl.Brush();
     if (surfEdgeIndex > 0)
@@ -526,7 +526,7 @@ inline const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
     return brush.vertexes[brush.edges[-surfEdgeIndex].v[1]].position;
 }
 
-inline u16 ToU16(const int value)
+Q_ALWAYS_INLINE u16 ToU16(const int value)
 {
     if (value < 0 || value > UINT16_MAX) [[unlikely]]
     {
@@ -535,7 +535,7 @@ inline u16 ToU16(const int value)
     return static_cast<u16>(value);
 }
 
-inline s16 ToS16(const int value)
+Q_ALWAYS_INLINE s16 ToS16(const int value)
 {
     if (value < INT16_MIN || value > INT16_MAX) [[unlikely]]
     {
@@ -744,7 +744,7 @@ Vec3 ComputePolygonNormal(const ModelPoly & poly)
 
 // Two vertexes closer together than this are the same point as far as the
 // triangulation is concerned; the direction between them cannot be normalized.
-inline bool IsDegenerateEdge(const Vec3 & v)
+Q_ALWAYS_INLINE bool IsDegenerateEdge(const Vec3 & v)
 {
     constexpr float kMinEdgeLengthSqrd = 1e-8f;
     return math::Dot(v, v) < kMinEdgeLengthSqrd;

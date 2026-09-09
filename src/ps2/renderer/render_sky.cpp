@@ -335,7 +335,7 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 //
 // The sky is flat-shaded: every vertex takes the same colour, whatever the
 // clipper left behind.
-inline void GatherSkyTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & viewProj, const tex::Texture & texture)
+Q_ALWAYS_INLINE void GatherSkyTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & viewProj, const tex::Texture & texture)
 {
     s_batch.GatherTriangle(corners, viewProj, texture, kSkyDrawFlags,
                            [](const clip::ClipVertex &) { return kSkyColor; });

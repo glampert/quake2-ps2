@@ -822,14 +822,6 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     const float backlerp = (s_lerpModels->value != 0.0f) ? entity.backlerp : 0.0f;
     const LerpConsts lc = SetUpLerp(entity, frame, oldFrame, backlerp);
     const tex::Texture & skin = SkinForEntity(entity, *model);
-
-    // The glcmds' coordinates are normalized against the skin image, but the
-    // GS spreads normalized ST over the power-of-two TEX0 extent - and model
-    // skins essentially never are one (276x194 is the common size). Without
-    // this the skin samples squashed into a corner of a larger virtual image.
-    float stScaleS, stScaleT;
-    tex::StScaleFor(skin, &stScaleS, &stScaleT);
-
     math::Mat4 mvp = MakeAliasMatrix(entity) * viewProj;
 
     // The view weapon is clipped here on the EE instead of being left to the
@@ -952,9 +944,18 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // buffer cannot force these to be re-read every iteration.
             const u32 * const curVerts = KeyframeVertWords(frame);
             const u32 * const lut = colorLUT;
+
             // A powersuit shell has no skin, so its coordinates are simply zero.
-            const float scaleS = powersuit ? 0.0f : stScaleS;
-            const float scaleT = powersuit ? 0.0f : stScaleT;
+            float scaleS = 0.0f;
+            float scaleT = 0.0f;
+            if (!powersuit)
+            {
+                // The glcmds' coordinates are normalized against the skin image, but the
+                // GS spreads normalized ST over the power-of-two TEX0 extent - and model
+                // skins essentially never are one (276x194 is the common size). Without
+                // this the skin samples squashed into a corner of a larger virtual image.
+                tex::StScaleFor(skin, &scaleS, &scaleT);
+            }
 
             if (clipOnEE)
             {

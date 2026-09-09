@@ -21,10 +21,12 @@ namespace ps2::test {
 //
 //     set ps2_perftest "1"
 //
-// From there it takes itself: forces "developer 0" and "ps2_frame_log 1", drops
-// whatever the startup left running, plays each attract loop demo once, ends the
-// frame log cleanly and quits. The emulator log then holds one complete capture,
-// terminated by an "FLOG#end" row so a truncated one is recognisable.
+// From there it takes itself: forces "developer 0" and "ps2_frame_log 1", turns
+// off the on-screen debug panels (1.80ms a frame, and the frame log records
+// everything they show), drops whatever the startup left running, plays each
+// attract loop demo once, ends the frame log cleanly and quits. The emulator log
+// then holds one complete capture, terminated by an "FLOG#end" row so a truncated
+// one is recognisable.
 //
 // One shot: the cvar is archived and set back to 0 before quitting, so the config
 // written on the way out disarms the next launch. A run that does not finish

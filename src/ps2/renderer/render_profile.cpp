@@ -37,6 +37,9 @@ PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",     kScreenOverlay, 17);
 PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 18);
 PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 19);
 PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 20);
+PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",         kScreenOverlay, 21);
+PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",    kScreenOverlay, 22);
+PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",      kScreenOverlay, 23);
 
 } // namespace ps2::prof_evt
 
@@ -55,7 +58,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 21;
+constexpr int kNumEvents = 24;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -120,7 +123,7 @@ void WriteBatch()
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,Sky,"
+                    "Particles,AlphaSurfs,Sky,Ui,Overlay,Sound,"
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
@@ -197,7 +200,7 @@ void FrameLogCapture()
         &prof_evt::BspWalk,   &prof_evt::LmChain,  &prof_evt::TexChains, &prof_evt::LmChains,
         &prof_evt::Entities,  &prof_evt::EntCull,  &prof_evt::EntShade,  &prof_evt::EntGeom,
         &prof_evt::EntShadow, &prof_evt::EntBrush, &prof_evt::Particles, &prof_evt::AlphaSurfs,
-        &prof_evt::Sky,
+        &prof_evt::Sky,       &prof_evt::Ui,       &prof_evt::Overlay,   &prof_evt::Sound,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {

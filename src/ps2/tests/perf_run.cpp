@@ -137,7 +137,24 @@ void RunPerfTest()
         Cvar_Set("developer", "0");
         Cvar_Set("ps2_frame_log", "1");
 
-        Com_Printf("PerfRun: starting - %d demos, developer 0, frame log on.\n", ArrayLength(kDemos));
+        // And every on-screen debug panel off. Measured at 1.80ms per frame with
+        // all five on - 13% of the frame's EE work, and enough on its own to push
+        // 7% of a capture's frames past the 16.68ms target. The panels are ~900
+        // glyphs, each a textured quad pushed through the 2D path, and none of
+        // them is being read during an unattended run: the frame log already
+        // carries every number they display, and more.
+        //
+        // None of these is CVAR_ARCHIVE, so unlike ps2_perftest itself they do not
+        // need restoring - the config written on the way out never had them, and
+        // the next launch gets the PS2_QUAKE_DEBUG defaults back.
+        Cvar_Set("ps2_show_fps", "0");
+        Cvar_Set("ps2_show_memstats", "0");
+        Cvar_Set("ps2_show_vramstats", "0");
+        Cvar_Set("ps2_show_drawstats", "0");
+        Cvar_Set("ps2_show_profile", "0");
+
+        Com_Printf("PerfRun: starting - %d demos, developer 0, overlays off, frame log on.\n",
+                   ArrayLength(kDemos));
 
         // Whatever the startup left running - the d1 attract loop, or a map forced
         // in Qcommon_Init - is still up. Drop it, so the first demo's server coming

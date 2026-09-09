@@ -184,9 +184,10 @@ void DrawProfileOverlay()
     }
 
     // Cap the panel so a heavily instrumented build can't run off the screen.
-    // 12 overlay events today (FullFrame, the nine view tags, GSWait, VSync);
-    // the slack is for probes added while chasing a specific frame cost.
-    constexpr int kMaxRows = 24;
+    // 24 overlay events today; the slack is for probes added while chasing a
+    // specific frame cost. At 32 the panel is 338px tall, which still clears
+    // the bottom of a 448-line NTSC field.
+    constexpr int kMaxRows = 32;
 
     const ps2::debug::ProfileEvent * rows[kMaxRows];
     int numRows = 0;
@@ -564,8 +565,16 @@ struct image_s * PS2_RegisterPic(const char * name)
 // 2D overlay
 // ------------------------------------------------------------------------------------------------
 
+// Every entry point below charges the shared "Ui" event, so the overlay and the
+// frame log show one figure for the whole 2D pass the engine draws over the
+// world - HUD, console, menus - rather than nothing at all. None of them nest
+// (the debug overlays in PS2_EndFrame go straight to gs::, not through here), so
+// the total is a sum of disjoint scopes and can be compared against Frame.
+
 void PS2_DrawGetPicSize(int * w, int * h, const char * name)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     // Callable outside Begin/EndFrame. Placeholder dimensions keep the
     // callers' centering math sane when the pic is missing.
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
@@ -575,6 +584,8 @@ void PS2_DrawGetPicSize(int * w, int * h, const char * name)
 
 void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
     ps2::gs::SetTextureFor2D(texture);
     ps2::gs::DrawTexturedRect(x, y, w, h, 0, 0, texture.width, texture.height, kUiBrightness);
@@ -582,6 +593,8 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
 
 void PS2_DrawPic(int x, int y, const char * name)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
     ps2::gs::SetTextureFor2D(texture);
     ps2::gs::DrawTexturedRect(x, y, texture.width, texture.height,
@@ -590,11 +603,14 @@ void PS2_DrawPic(int x, int y, const char * name)
 
 void PS2_DrawChar(int x, int y, int c)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
     DrawGlyph(x, y, c, kUiBrightness);
 }
 
 void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     // Tiles the image over the given screen rectangle: texels are addressed in
     // screen space and wrap via the REPEAT mode set up in gs::Init().
     (void)name; // Quake only ever tiles "backtile" here.
@@ -604,6 +620,8 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
 
 void PS2_DrawFill(int x, int y, int w, int h, int c)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     const u32 p = global_palette[c & 0xFF];
     const u8  r = static_cast<u8>(p & 0xFFu);
     const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
@@ -613,6 +631,7 @@ void PS2_DrawFill(int x, int y, int w, int h, int c)
 
 void PS2_DrawFadeScreen()
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
     ps2::gs::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
 }
 
@@ -622,6 +641,8 @@ void PS2_DrawFadeScreen()
 
 void PS2_DrawStretchRaw(int x, int y, int w, int h, int cols, int rows, const byte * data)
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
+
     // Called every frame while a cinematic plays; the movie quad is a 2D draw,
     // so it joins the deferred overlay batch (opened lazily) like any other.
     ps2::cin::DrawFrame(x, y, w, h, cols, rows, data);
@@ -686,11 +707,20 @@ void PS2_EndFrame()
     ps2::test::RunPerfTest();
 #endif // PS2_QUAKE_DEBUG
 
-    DrawFpsCounter();
-    DrawProfileOverlay();
-    DrawMemUsageOverlay();
-    DrawVramUsageOverlay();
-    DrawDrawStatsOverlay();
+    // The backend's own debug overlays, kept out of "Ui" so the engine's 2D pass
+    // and our instrumentation can be told apart - the whole point of measuring
+    // them is to know how much of a capture is the thing doing the measuring.
+    // Each is cvar gated and returns immediately when off, so this reads near
+    // zero in a release-style configuration.
+    {
+        PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Overlay);
+
+        DrawFpsCounter();
+        DrawProfileOverlay();
+        DrawMemUsageOverlay();
+        DrawVramUsageOverlay();
+        DrawDrawStatsOverlay();
+    }
 
     ps2::gs::EndFrame();
 }

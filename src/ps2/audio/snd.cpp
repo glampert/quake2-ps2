@@ -17,6 +17,7 @@
 #include "ps2/audio/audsrv_device.h"
 #include "ps2/audio/mix_ring.h"
 #include "ps2/common.h"
+#include "ps2/renderer/render_profile.h"
 
 // The sound backend is client code (the engine's own win32/snd_win.c is the same): it
 // fills in the shared dma_t and reads the mixer's paintedtime. The legacy headers
@@ -121,6 +122,13 @@ void SNDDMA_BeginPainting()
 
 void SNDDMA_Submit()
 {
+    // Profiled because this is the one part of the sound path that is ours and is
+    // not free: Drain() calls audsrv_available() and audsrv_play_audio(), both
+    // blocking SIF RPCs, and the second copies the painted samples across to the
+    // IOP. The mixing above it is engine code (client/snd_mix.c) and is not
+    // covered here - what this measures is the hand-off, not the mix.
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Sound);
+
     // NOTE: `paintedtime` is a global defined by client/snd_dma.c
     s_mixRing.Drain(s_device, paintedtime);
 }

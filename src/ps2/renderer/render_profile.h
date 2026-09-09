@@ -1,7 +1,12 @@
 #pragma once
 /* ================================================================================================
  * File: render_profile.h
- * Brief: Profile events shared by more than one renderer source file.
+ * Brief: Profile events shared by more than one source file, and the CSV frame log.
+ *
+ *        Mostly renderer events, but not exclusively: the frame log writes one column
+ *        per event and so needs every one of them declared in a single place. Sound
+ *        (the audio backend's submit) lives here for that reason rather than because
+ *        it belongs to the renderer.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -31,6 +36,9 @@ PS2_PROFILE_DECLARE_EVENT(EntBrush);
 PS2_PROFILE_DECLARE_EVENT(Particles);
 PS2_PROFILE_DECLARE_EVENT(AlphaSurfs);
 PS2_PROFILE_DECLARE_EVENT(Sky);
+PS2_PROFILE_DECLARE_EVENT(Ui);
+PS2_PROFILE_DECLARE_EVENT(Overlay);
+PS2_PROFILE_DECLARE_EVENT(Sound);
 
 } // namespace ps2::prof_evt
 

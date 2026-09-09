@@ -769,12 +769,18 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // Shade colour and per-normal-index vertex colours. The normal index is
     // read from the *current* frame only - the pose interpolates, the
     // lighting does not (ref_gl behaviour). 'lightSpot' anchors the shadow.
+    // Timed apart because they scale with completely different things:
+    // ShadeEntity is per entity and walks the dlight list, BuildColorLUT is
+    // kNumVertexNormals packs whatever the scene looks like.
     vec3_t lightSpot = {};
     math::Vec3 shadeLight;
     const u32 * colorLUT;
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::EntShade);
         shadeLight = ShadeEntity(viewDef, entity, lightSpot);
+    }
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntColorLUT);
         const float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
         colorLUT = BuildColorLUT(entity, shadeLight, alpha);
     }

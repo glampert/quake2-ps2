@@ -31,15 +31,16 @@ PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 11);
 PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 12);
 PS2_PROFILE_DEFINE_EVENT(EntCull,    " Cull",      kScreenOverlay, 13);
 PS2_PROFILE_DEFINE_EVENT(EntShade,   " Shade",     kScreenOverlay, 14);
-PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",      kScreenOverlay, 15);
-PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",    kScreenOverlay, 16);
-PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",     kScreenOverlay, 17);
-PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 18);
-PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 19);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 20);
-PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",         kScreenOverlay, 21);
-PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",    kScreenOverlay, 22);
-PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",      kScreenOverlay, 23);
+PS2_PROFILE_DEFINE_EVENT(EntColorLUT," ColorLUT",  kScreenOverlay, 15);
+PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",      kScreenOverlay, 16);
+PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",    kScreenOverlay, 17);
+PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",     kScreenOverlay, 18);
+PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 19);
+PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 20);
+PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 21);
+PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",         kScreenOverlay, 22);
+PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",    kScreenOverlay, 23);
+PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",      kScreenOverlay, 24);
 
 } // namespace ps2::prof_evt
 
@@ -58,7 +59,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 24;
+constexpr int kNumEvents = 25;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -122,7 +123,7 @@ void WriteBatch()
         s_headerDone = true;
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
-                    "TexChains,LmChains,Entities,EntCull,EntShade,EntGeom,EntShadow,EntBrush,"
+                    "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,Sky,Ui,Overlay,Sound,"
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
                     "boxesCulled,batches,entities,particles,dlights,"
@@ -198,9 +199,10 @@ void FrameLogCapture()
         &prof_evt::Frame,     &prof_evt::VSync,    &prof_evt::GsWait,    &prof_evt::DmaSend,
         &prof_evt::View,      &prof_evt::World,    &prof_evt::Vis,       &prof_evt::MarkLeaves,
         &prof_evt::BspWalk,   &prof_evt::LmChain,  &prof_evt::TexChains, &prof_evt::LmChains,
-        &prof_evt::Entities,  &prof_evt::EntCull,  &prof_evt::EntShade,  &prof_evt::EntGeom,
-        &prof_evt::EntShadow, &prof_evt::EntBrush, &prof_evt::Particles, &prof_evt::AlphaSurfs,
-        &prof_evt::Sky,       &prof_evt::Ui,       &prof_evt::Overlay,   &prof_evt::Sound,
+        &prof_evt::Entities,  &prof_evt::EntCull,  &prof_evt::EntShade,  &prof_evt::EntColorLUT,
+        &prof_evt::EntGeom,   &prof_evt::EntShadow, &prof_evt::EntBrush,  &prof_evt::Particles,
+        &prof_evt::AlphaSurfs, &prof_evt::Sky,      &prof_evt::Ui,        &prof_evt::Overlay,
+        &prof_evt::Sound,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {

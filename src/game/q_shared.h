@@ -74,9 +74,11 @@ typedef enum
 #if defined(__GNUC__) || defined(__clang__)
 #define Q_PRINTF_FUNC(fmtIndex, varIndex) __attribute__((format(printf, fmtIndex, varIndex)))
 #define Q_COLD_FUNC __attribute__((cold))
+#define Q_ALWAYS_INLINE inline __attribute__((always_inline))
 #else // !GNU && !Clang
 #define Q_PRINTF_FUNC(fmtIndex, varIndex) /* unimplemented */
 #define Q_COLD_FUNC /* unimplemented */
+#define Q_ALWAYS_INLINE inline
 #endif // GNU/Clang
 
 // angle indexes

@@ -418,7 +418,7 @@ const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight
 
     const float * const shadeDots = GetShadeDotsForEntity(entity);
 
-    // The clamp is real - CalcPointLightColor can hand back components above 1
+    // The clamp is required - CalcPointLightColor can hand back components above 1
     // or below 0 - but whether it can ever fire is decidable once per entity
     // instead of 486 times. Inside this window every product provably lands in
     // [0, 255], so the fast loop is bit-identical, not an approximation.
@@ -436,6 +436,7 @@ const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight
         return s_colorLUT;
     }
 
+    // Slow path with ClampColorChannel.
     for (int i = 0; i < kNumVertexNormals; ++i)
     {
         const float l = shadeDots[i] * 128.0f;
@@ -735,13 +736,13 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     int frameIndex    = entity.frame;
     int oldFrameIndex = entity.oldframe;
 
-    if (frameIndex < 0 || frameIndex >= numFrames)
+    if (frameIndex < 0 || frameIndex >= numFrames) [[unlikely]]
     {
         Com_DPrintf("DrawAliasMD2Entity %s: no such frame %d\n", model->name, frameIndex);
         frameIndex    = 0;
         oldFrameIndex = 0;
     }
-    if (oldFrameIndex < 0 || oldFrameIndex >= numFrames)
+    if (oldFrameIndex < 0 || oldFrameIndex >= numFrames) [[unlikely]]
     {
         Com_DPrintf("DrawAliasMD2Entity %s: no such oldframe %d\n", model->name, oldFrameIndex);
         frameIndex    = 0;
@@ -929,7 +930,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     for (int i = 0; i < 3; ++i)
                     {
                         // All three read up front; see the note in the VU path.
-                        const u32 index = src[i].index;
+                        const u32 index  = src[i].index;
                         const float texS = src[i].s;
                         const float texT = src[i].t;
 
@@ -937,8 +938,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
                         corners[i].pos   = { pos.x, pos.y, pos.z, 1.0f };
                         corners[i].st    = { texS * scaleS, texT * scaleT, 0.0f, 0.0f };
-                        corners[i].color = UnpackClipColor(
-                            lut[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
+                        corners[i].color = UnpackClipColor(lut[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
                     }
 
                     GatherClippedTriangle(corners, mvp, skin, flags);
@@ -957,7 +957,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     for (int i = 0; i < 3; ++i)
                     {
                         // All three read up front; see the note in the VU path.
-                        const u32 index = src[i].index;
+                        const u32 index  = src[i].index;
                         const float texS = src[i].s;
                         const float texT = src[i].t;
 

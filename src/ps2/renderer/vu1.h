@@ -160,10 +160,10 @@ static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword a
 inline void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 {
     asm volatile (
-        "lq      $8,  0x00(%1)     \n\t"
-        "lq      $9,  0x10(%1)     \n\t"
-        "sq      $8,  0x00(%2)     \n\t"
-        "sq      $9,  0x10(%2)     \n\t"
+        "lq $8, 0x00(%1) \n\t"
+        "lq $9, 0x10(%1) \n\t"
+        "sq $8, 0x00(%2) \n\t"
+        "sq $9, 0x10(%2) \n\t"
         : "=m" (dst)
         : "r" (&src), "r" (&dst), "m" (src)
         : "$8", "$9");
@@ -220,9 +220,10 @@ inline void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
 {
     static_assert(sizeof(SrcT) == sizeof(LerpDrawAttrib) && alignof(SrcT) == 16,
                   "CopyLerpAttrib's lq/sq need one qword-aligned qword");
+
     asm volatile (
-        "lq      $8,  0x00(%1)     \n\t"
-        "sq      $8,  0x00(%2)     \n\t"
+        "lq $8, 0x00(%1) \n\t"
+        "sq $8, 0x00(%2) \n\t"
         : "=m" (dst)
         : "r" (&src), "r" (&dst), "m" (src)
         : "$8");

@@ -1698,7 +1698,7 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
 {
     PS2_Assert(file != nullptr);
 
-    if (fileLen < static_cast<int>(sizeof(dsprite_t)))
+    if (fileLen < static_cast<int>(sizeof(dsprite_t))) [[unlikely]]
     {
         Com_Printf("ERROR: Sprite '%s' is too small to hold a header (%i bytes)\n", mdl.name, fileLen);
         return false;
@@ -1710,13 +1710,13 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     dsprite_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
 
-    if (header.version != SPRITE_VERSION)
+    if (header.version != SPRITE_VERSION) [[unlikely]]
     {
         Com_Printf("ERROR: Sprite '%s' has wrong version (%i should be %i)\n",
                    mdl.name, header.version, SPRITE_VERSION);
         return false;
     }
-    if (header.numframes < 0 || header.numframes > kMaxMD2Skins)
+    if (header.numframes < 0 || header.numframes > kMaxMD2Skins) [[unlikely]]
     {
         Com_Printf("ERROR: Sprite '%s' has bad frame count (%i)\n", mdl.name, header.numframes);
         return false;
@@ -1733,7 +1733,7 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     mdl.type     = ModelType::Sprite;
 
     auto * out = static_cast<dsprite_t *>(hunk.Alloc(static_cast<u32>(fileLen)));
-    if (std::fseek(file, base, SEEK_SET) != 0)
+    if (std::fseek(file, base, SEEK_SET) != 0) [[unlikely]]
     {
         Com_Printf("ERROR: Sprite '%s': cannot rewind to the start of the model\n", mdl.name);
         return false; // The caller's Unload releases the hunk.
@@ -1762,13 +1762,13 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
 
 // Byte offset of a keyframe's vertex array. sizeof(daliasframe_t) is not it: the
 // struct declares verts[1] to be variable sized, so it counts one vertex too many.
-constexpr u32 kFrameVertsOffset = offsetof(daliasframe_t, verts);
+constexpr u32 kAliasFrameVertsOffset = offsetof(daliasframe_t, verts);
 
 // Bytes one keyframe occupies - the frame header plus its packed vertices. Must
 // match the file's own framesize, which is checked at load.
-constexpr u32 AliasFrameStride(const int numXyz)
+static constexpr u32 AliasFrameStride(const int numXyz)
 {
-    return kFrameVertsOffset + (static_cast<u32>(numXyz) * DTRIVERTX_SIZE);
+    return kAliasFrameVertsOffset + (static_cast<u32>(numXyz) * DTRIVERTX_SIZE);
 }
 
 // Expands a model's glcmds into a flat triangle list, three AliasVertex per
@@ -1782,8 +1782,8 @@ constexpr u32 AliasFrameStride(const int numXyz)
 //
 // Returns the triangle count written, or -1 if the command list is malformed.
 // Everything it can reject here is a check the draw paths no longer have to make.
-int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
-                            const int maxTris, AliasVertex * const out, const char * const modelName)
+static int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
+                                   const int maxTris, AliasVertex * const out, const char * const modelName)
 {
     int at       = 0;
     int numTris  = 0;
@@ -1879,7 +1879,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
 {
     PS2_Assert(file != nullptr);
 
-    if (fileLen < static_cast<int>(sizeof(dmdl_t)))
+    if (fileLen < static_cast<int>(sizeof(dmdl_t))) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' is too small to hold a header (%i bytes)\n", mdl.name, fileLen);
         return false;
@@ -1892,43 +1892,43 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     dmdl_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
 
-    if (header.version != ALIAS_VERSION)
+    if (header.version != ALIAS_VERSION) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has wrong version (%i should be %i)\n",
                    mdl.name, header.version, ALIAS_VERSION);
         return false;
     }
-    if (header.ofs_end <= 0 || header.ofs_end > fileLen)
+    if (header.ofs_end <= 0 || header.ofs_end > fileLen) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a bad end offset!\n", mdl.name);
         return false;
     }
-    if (header.skinheight > kMaxMD2SkinHeight)
+    if (header.skinheight > kMaxMD2SkinHeight) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a skin taller than %i.\n", mdl.name, kMaxMD2SkinHeight);
         return false;
     }
-    if (header.num_xyz <= 0 || header.num_xyz > MAX_VERTS)
+    if (header.num_xyz <= 0 || header.num_xyz > MAX_VERTS) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a bad vertex count (%i)!\n", mdl.name, header.num_xyz);
         return false;
     }
-    if (header.num_tris <= 0 || header.num_tris > MAX_TRIANGLES)
+    if (header.num_tris <= 0 || header.num_tris > MAX_TRIANGLES) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a bad triangle count (%i)!\n", mdl.name, header.num_tris);
         return false;
     }
-    if (header.num_frames <= 0 || header.num_frames > UINT16_MAX)
+    if (header.num_frames <= 0 || header.num_frames > UINT16_MAX) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a bad frame count (%i)!\n", mdl.name, header.num_frames);
         return false;
     }
-    if (header.num_glcmds <= 0)
+    if (header.num_glcmds <= 0) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has no glcmds!\n", mdl.name);
         return false;
     }
-    if (header.num_skins < 0 || header.num_skins > kMaxMD2Skins)
+    if (header.num_skins < 0 || header.num_skins > kMaxMD2Skins) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a bad skin count (%i)!\n", mdl.name, header.num_skins);
         return false;
@@ -1943,7 +1943,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     };
 
     const u32 frameStride = AliasFrameStride(header.num_xyz);
-    if (header.framesize != static_cast<int>(frameStride))
+    if (header.framesize != static_cast<int>(frameStride)) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has framesize %i, expected %u for %i vertices!\n",
                    mdl.name, header.framesize, frameStride, header.num_xyz);
@@ -1951,7 +1951,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     }
     if (!blockFits(header.ofs_skins, header.num_skins * MAX_SKINNAME) ||
         !blockFits(header.ofs_glcmds, header.num_glcmds * 4) ||
-        !blockFits(header.ofs_frames, header.num_frames * header.framesize))
+        !blockFits(header.ofs_frames, header.num_frames * header.framesize)) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s' has a block running past the end of the file!\n", mdl.name);
         return false;
@@ -1991,11 +1991,12 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     // Skins resolved once, here. ReferenceAllTextures touches these pointers on a
     // cache hit rather than looking the names up again, so the strings go no
     // further than this loop's stack buffer.
-    if (std::fseek(file, base + header.ofs_skins, SEEK_SET) != 0)
+    if (std::fseek(file, base + header.ofs_skins, SEEK_SET) != 0) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s': cannot seek to the skin names\n", mdl.name);
         return false; // The caller's Unload releases the hunk.
     }
+
     for (int i = 0; i < header.num_skins; ++i)
     {
         char skinName[MAX_SKINNAME];
@@ -2013,8 +2014,8 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
         auto * const glcmds = static_cast<s32 *>(
             ps2::heap::Alloc(glcmdsBytes, ps2::heap::MemTag::AliasMdl));
 
-        bool ok = (std::fseek(file, base + header.ofs_glcmds, SEEK_SET) == 0);
-        if (ok)
+        const bool ok = (std::fseek(file, base + header.ofs_glcmds, SEEK_SET) == 0);
+        if (ok) [[likely]]
         {
             FS_Read(glcmds, static_cast<int>(glcmdsBytes), file);
         }
@@ -2028,11 +2029,11 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
                                : -1;
         ps2::heap::Free(glcmds, glcmdsBytes, ps2::heap::MemTag::AliasMdl);
 
-        if (numTris < 0)
+        if (numTris < 0) [[unlikely]]
         {
             return false;
         }
-        if (numTris != header.num_tris)
+        if (numTris != header.num_tris) [[unlikely]]
         {
             Com_Printf("ERROR: Model '%s' expanded to %i triangles, but num_tris is %i!\n",
                        mdl.name, numTris, header.num_tris);
@@ -2043,7 +2044,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     // Keyframes are kept exactly as they are on disk: they are the bulk of the
     // model, the microprogram consumes the packed bytes unchanged, and the
     // renderer still walks them as daliasframe_t.
-    if (std::fseek(file, base + header.ofs_frames, SEEK_SET) != 0)
+    if (std::fseek(file, base + header.ofs_frames, SEEK_SET) != 0) [[unlikely]]
     {
         Com_Printf("ERROR: Model '%s': cannot seek to the keyframes\n", mdl.name);
         return false;
@@ -2057,7 +2058,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     int clampedNormals = 0;
     for (int f = 0; f < header.num_frames; ++f)
     {
-        u8 * const frameVerts = frames + (static_cast<u32>(f) * frameStride) + kFrameVertsOffset;
+        u8 * const frameVerts = frames + (static_cast<u32>(f) * frameStride) + kAliasFrameVertsOffset;
         for (int v = 0; v < header.num_xyz; ++v)
         {
             u8 & lightNormalIndex = frameVerts[(v * DTRIVERTX_SIZE) + DTRIVERTX_LNI];
@@ -2068,7 +2069,7 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
             }
         }
     }
-    if (clampedNormals != 0)
+    if (clampedNormals != 0) [[unlikely]]
     {
         Com_Printf("WARNING: Model '%s' had %i vertex normal indexes out of range; clamped.\n",
                    mdl.name, clampedNormals);
@@ -2083,4 +2084,5 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     }
     return true;
 }
+
 } // namespace ps2::mod

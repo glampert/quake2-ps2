@@ -63,6 +63,12 @@ constexpr int kMaxLightmaps = 4;
 // load, so the draw paths index the normal and shade-color tables unmasked.
 constexpr int kNumVertexNormals = 162;
 
+// Widest polygon TriangulatePolygon will accept, per polygon. A wider one is
+// refused at load with an error and left with a degenerate triangle list, so it
+// draws nothing; the draw paths rely on that to bound their own per-polygon
+// working sets by this.
+constexpr int kTriangulationMaxVerts = 128;
+
 // ModelSurface::lightmapTextureNum when the surface has no lightmap at all -
 // sky, turbulent and translucent surfaces, which the lightmap builder skips.
 constexpr int kNotLightmapped = -1;
@@ -70,6 +76,24 @@ constexpr int kNotLightmapped = -1;
 // ------------------------------------------------------------------------------------------------
 // In-memory representation of 3D models (world and entities)
 // ------------------------------------------------------------------------------------------------
+
+//
+// One vertex of an MD2's expanded triangle list, built at load time from the
+// model's glcmds (see LoadAliasMD2Model). Three of these per triangle, in
+// triangle order, so a draw path walks them linearly with no strip/fan state.
+//
+// Deliberately the same 16 bytes as vu1::LerpDrawAttrib, with the keyframe index
+// where that struct keeps its packed color: the draw loop copies the whole qword
+// into the batch's attribute slot and then overwrites lane 0 with the shaded
+// color, so the index costs nothing to store and nothing to strip back out.
+//
+struct alignas(16) AliasVertex
+{
+    u32 index;  // into the keyframe vertex array; becomes rgba at draw time
+    float s, t; // normalized skin coords, exactly as the glcmds held them
+    float q;    // always 1.0f
+};
+static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
 
 //
 // Vertex format used by ModelPoly.
@@ -102,12 +126,6 @@ struct ModelVertex
     Vec3 position;
 };
 
-// Widest polygon TriangulatePolygon will accept, per polygon. A wider one is
-// refused at load with an error and left with a degenerate triangle list, so it
-// draws nothing; the draw paths rely on that to bound their own per-polygon
-// working sets by this.
-constexpr int kTriangulationMaxVerts = 128;
-
 //
 // Model triangle vertex indexes, into the owning ModelPoly's vertexes[].
 // A byte each: TriangulatePolygon refuses polygons above kTriangulationMaxVerts,
@@ -118,24 +136,6 @@ struct ModelTriangle
 {
     u8 vertexes[3];
 };
-
-//
-// One vertex of an MD2's expanded triangle list, built at load time from the
-// model's glcmds (see LoadAliasMD2Model). Three of these per triangle, in
-// triangle order, so a draw path walks them linearly with no strip/fan state.
-//
-// Deliberately the same 16 bytes as vu1::LerpDrawAttrib, with the keyframe index
-// where that struct keeps its packed color: the draw loop copies the whole qword
-// into the batch's attribute slot and then overwrites lane 0 with the shaded
-// color, so the index costs nothing to store and nothing to strip back out.
-//
-struct alignas(16) AliasVertex
-{
-    u32 index;  // into the keyframe vertex array; becomes rgba at draw time
-    float s, t; // normalized skin coords, exactly as the glcmds held them
-    float q;    // always 1.0f
-};
-static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
 
 //
 // Edge description.
@@ -286,10 +286,9 @@ struct SubModelInfo
 // Whole model instance (world or entity or sprite).
 //
 // A model is exactly one kind once it has loaded, so the per-type fields share
-// storage rather than sitting side by side: laid out flat, a brush model carried
-// 32 unused skin pointers and an MD2 twelve unused BSP array counts. 'type' is
-// the discriminant, and the Brush()/Sprite()/Alias() accessors assert on it -
-// reach for those rather than 'payload' directly.
+// storage rather than sitting side by side. 'type' is the discriminant, and the
+// Brush()/Sprite()/Alias() accessors assert on it - reach for those rather than
+// 'payload' directly.
 //
 struct ModelInstance final
 {
@@ -340,7 +339,7 @@ struct ModelInstance final
         Vec3 maxs;
     };
 
-    // Sprite model. The hunk still holds the SP2 file image - these are only the
+    // Sprite model. The hunk holds the SP2 file image - these are only the
     // resolved frame textures, so the draw path needs no name lookup.
     struct SpriteData
     {
@@ -348,7 +347,7 @@ struct ModelInstance final
     };
 
     // MD2 entity model, converted at load (see model_load.cpp). The hunk holds
-    // nothing but the two arrays below point into: the expanded triangle stream
+    // the data two arrays below point into: the expanded triangle stream
     // and the keyframes.
     struct AliasData
     {
@@ -389,20 +388,20 @@ struct ModelInstance final
     // trivial aggregate, so SmallPool's `slot = {}` zeroes the whole union.
     union Payload
     {
-        BrushData brush;
+        BrushData  brush;
         SpriteData sprite;
-        AliasData alias;
+        AliasData  alias;
     };
     Payload payload;
 
-    BrushData & Brush() { PS2_Assert(type == ModelType::Brush); return payload.brush; }
-    const BrushData & Brush() const { PS2_Assert(type == ModelType::Brush); return payload.brush; }
+    Q_ALWAYS_INLINE BrushData & Brush() { PS2_Assert(type == ModelType::Brush); return payload.brush; }
+    Q_ALWAYS_INLINE const BrushData & Brush() const { PS2_Assert(type == ModelType::Brush); return payload.brush; }
 
-    SpriteData & Sprite() { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
-    const SpriteData & Sprite() const { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
+    Q_ALWAYS_INLINE SpriteData & Sprite() { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
+    Q_ALWAYS_INLINE const SpriteData & Sprite() const { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
 
-    AliasData & Alias() { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
-    const AliasData & Alias() const { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
+    Q_ALWAYS_INLINE AliasData & Alias() { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
+    Q_ALWAYS_INLINE const AliasData & Alias() const { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
 };
 
 // Asserted rather than commented because the model cache holds 544 of these (320
@@ -410,7 +409,6 @@ struct ModelInstance final
 // over the flat layout this replaced (308 bytes) is ~45KB. A jump here means a
 // field landed outside the union that should have been inside one.
 static_assert(sizeof(ModelInstance) == 224, "Unexpected ModelInstance size!");
-
 
 // ------------------------------------------------------------------------------------------------
 // Model loading and caching API

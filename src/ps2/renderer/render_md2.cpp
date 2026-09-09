@@ -727,11 +727,11 @@ const tex::Texture & SkinForEntity(const entity_t & entity, const mod::ModelInst
     const tex::Texture * skin = nullptr;
     if (entity.skinnum >= 0 && entity.skinnum < mod::kMaxMD2Skins)
     {
-        skin = model.skins[entity.skinnum];
+        skin = model.Alias().skins[entity.skinnum];
     }
     if (skin == nullptr)
     {
-        skin = model.skins[0];
+        skin = model.Alias().skins[0];
     }
     if (skin == nullptr)
     {

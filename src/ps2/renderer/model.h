@@ -115,6 +115,24 @@ struct ModelTriangle
 };
 
 //
+// One vertex of an MD2's expanded triangle list, built at load time from the
+// model's glcmds (see LoadAliasMD2Model). Three of these per triangle, in
+// triangle order, so a draw path walks them linearly with no strip/fan state.
+//
+// Deliberately the same 16 bytes as vu1::LerpDrawAttrib, with the keyframe index
+// where that struct keeps its packed color: the draw loop copies the whole qword
+// into the batch's attribute slot and then overwrites lane 0 with the shaded
+// color, so the index costs nothing to store and nothing to strip back out.
+//
+struct alignas(16) AliasVertex
+{
+    u32 index;  // into the keyframe vertex array; becomes rgba at draw time
+    float s, t; // normalized skin coords, exactly as the glcmds held them
+    float q;    // always 1.0f
+};
+static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
+
+//
 // Edge description.
 //
 struct ModelEdge
@@ -262,64 +280,97 @@ struct SubModelInfo
 //
 // Whole model instance (world or entity or sprite).
 //
+// A model is exactly one kind once it has loaded, so the per-type fields share
+// storage rather than sitting side by side: laid out flat, a brush model carried
+// 32 unused skin pointers and an MD2 twelve unused BSP array counts. 'type' is
+// the discriminant, and the Brush()/Sprite()/Alias() accessors assert on it -
+// reach for those rather than 'payload' directly.
+//
 struct ModelInstance final
 {
+    // World geometry. mins/maxs/radius live here because only DrawBrushModel
+    // reads them; an alias model derives its bounds from its keyframes and a
+    // sprite is sized per-frame at draw time.
+    struct BrushData
+    {
+        // True if from the inline models pool.
+        bool isInline;
+
+        u16 firstModelSurface;
+        u16 numModelSurfaces;
+
+        // Sizes of the arrays that follow.
+        u16 numSubModels;
+        u16 numPlanes;
+        u16 numLeafs; // Number of visible leafs, not counting 0.
+        u16 numVertexes;
+        u16 numEdges;
+        u16 numNodes;
+        s16 firstNode;
+        u16 numTexInfos;
+        u16 numSurfaces;
+        u16 numSurfEdges;
+        u16 numMarkSurfaces;
+
+        // Arrays sized by the above counts.
+        SubModelInfo * subModels;
+        cplane_s * planes;
+        ModelLeaf * leafs;
+        ModelVertex * vertexes;
+        ModelEdge * edges;
+        ModelNode * nodes;
+        ModelTexInfo * texInfos;
+        ModelSurface * surfaces;
+        int * surfEdges;
+        ModelSurface ** markSurfaces;
+
+        // No visibility lump here: the collision model already holds it verbatim
+        // in map_visibility[], so the view walk asks CM_ClusterPVS instead of
+        // carrying a second copy. See MarkLeaves.
+        u8 * lightData;
+
+        // Volume occupied by the model graphics.
+        float radius;
+        Vec3 mins;
+        Vec3 maxs;
+    };
+
+    // Sprite model. The hunk still holds the SP2 file image - these are only the
+    // resolved frame textures, so the draw path needs no name lookup.
+    struct SpriteData
+    {
+        const tex::Texture * frames[kMaxMD2Skins];
+    };
+
+    // MD2 entity model, converted at load (see model_load.cpp). The hunk holds
+    // nothing but the two arrays below point into: the expanded triangle stream
+    // and the keyframes.
+    struct AliasData
+    {
+        // Resolved once at load and re-stamped by ReferenceAllTextures, never
+        // re-resolved - which is why the skin name strings are not kept.
+        const tex::Texture * skins[kMaxMD2Skins];
+        u16 numSkins;
+
+        u16 numTris;     // vertexes[] holds numTris * 3
+        u16 numXyz;      // vertices per keyframe
+        u16 frameStride; // sizeof(daliasframe_t) + numXyz * 4
+
+        AliasVertex * vertexes; // numTris * 3, in triangle order
+        const u8 * frames;      // ModelInstance::numFrames daliasframe_t records, verbatim
+    };
+
     // File name with path (must be the first field - game code assumes this).
     char name[MAX_QPATH];
 
     // Registration number, so we know if it is currently referenced by the level being played.
     u32 regSequence;
 
-    // Model type flag.
+    // Model type flag - selects the live payload member below.
     ModelType type;
-
-    // True if from the inline models pool.
-    bool isInline;
 
     // Number of animation frames (usually = 2 for brush models: regular and alternate animation).
     u16 numFrames;
-
-    // Volume occupied by the model graphics.
-    float radius;
-    Vec3 mins;
-    Vec3 maxs;
-
-    // Brush model.
-    u16 firstModelSurface;
-    u16 numModelSurfaces;
-
-    // Sizes of the arrays that follow.
-    u16 numSubModels;
-    u16 numPlanes;
-    u16 numLeafs; // Number of visible leafs, not counting 0.
-    u16 numVertexes;
-    u16 numEdges;
-    u16 numNodes;
-    s16 firstNode;
-    u16 numTexInfos;
-    u16 numSurfaces;
-    u16 numSurfEdges;
-    u16 numMarkSurfaces;
-
-    // Arrays sized by the above counts.
-    SubModelInfo * subModels;
-    cplane_s * planes;
-    ModelLeaf * leafs;
-    ModelVertex * vertexes;
-    ModelEdge * edges;
-    ModelNode * nodes;
-    ModelTexInfo * texInfos;
-    ModelSurface * surfaces;
-    int * surfEdges;
-    ModelSurface ** markSurfaces;
-
-    // No visibility lump here: the collision model already holds it verbatim in
-    // map_visibility[], so the view walk asks CM_ClusterPVS instead of carrying a
-    // second copy. See MarkLeaves.
-    u8 * lightData;
-
-    // For alias models and skins.
-    const tex::Texture * skins[kMaxMD2Skins];
 
     // Backing store for everything loaded above: one heap block that all the
     // pointers index into, sized up front by a pre-pass and filled by a bump
@@ -328,7 +379,33 @@ struct ModelInstance final
     // block and leave hunkBase null so they never double-free.
     void * hunkBase;
     u32 hunkSize;
+
+    // Model variant - 'type' dictates which member is live. Every member is a
+    // trivial aggregate, so SmallPool's `slot = {}` zeroes the whole union.
+    union Payload
+    {
+        BrushData brush;
+        SpriteData sprite;
+        AliasData alias;
+    };
+    Payload payload;
+
+    BrushData & Brush() { PS2_Assert(type == ModelType::Brush); return payload.brush; }
+    const BrushData & Brush() const { PS2_Assert(type == ModelType::Brush); return payload.brush; }
+
+    SpriteData & Sprite() { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
+    const SpriteData & Sprite() const { PS2_Assert(type == ModelType::Sprite); return payload.sprite; }
+
+    AliasData & Alias() { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
+    const AliasData & Alias() const { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
 };
+
+// Asserted rather than commented because the model cache holds 544 of these (320
+// pool slots plus MAX_MAP_MODELS inline submodels), so the 84 bytes a slot saves
+// over the flat layout this replaced (308 bytes) is ~45KB. A jump here means a
+// field landed outside the union that should have been inside one.
+static_assert(sizeof(ModelInstance) == 224, "Unexpected ModelInstance size!");
+
 
 // ------------------------------------------------------------------------------------------------
 // Model loading and caching API

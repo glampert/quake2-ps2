@@ -510,11 +510,12 @@ inline float Project3(const Vec3 & v, const float vec[4])
 // walk the edge backwards). Shared by every surface-processing helper.
 inline const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
 {
+    const ModelInstance::BrushData & brush = mdl.Brush();
     if (surfEdgeIndex > 0)
     {
-        return mdl.vertexes[mdl.edges[surfEdgeIndex].v[0]].position;
+        return brush.vertexes[brush.edges[surfEdgeIndex].v[0]].position;
     }
-    return mdl.vertexes[mdl.edges[-surfEdgeIndex].v[1]].position;
+    return brush.vertexes[brush.edges[-surfEdgeIndex].v[1]].position;
 }
 
 inline u16 ToU16(const int value)
@@ -545,8 +546,8 @@ void LoadVertexes(ModelInstance & mdl, HunkAllocator & hunk, const void * const 
     const int count = LumpElemCount<dvertex_t>(l);
 
     ModelVertex * out = hunk.AllocArray<ModelVertex>(count);
-    mdl.vertexes    = out;
-    mdl.numVertexes = ToU16(count);
+    mdl.Brush().vertexes    = out;
+    mdl.Brush().numVertexes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -561,8 +562,8 @@ void LoadEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
 
     // One extra sentinel edge, matching ref_gl.
     ModelEdge * out = hunk.AllocArray<ModelEdge>(count + 1);
-    mdl.edges    = out;
-    mdl.numEdges = ToU16(count);
+    mdl.Brush().edges    = out;
+    mdl.Brush().numEdges = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -577,8 +578,8 @@ void LoadSurfEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const
     const int count = LumpElemCount<int>(l);
 
     int * out = hunk.AllocArray<int>(count);
-    mdl.surfEdges    = out;
-    mdl.numSurfEdges = ToU16(count);
+    mdl.Brush().surfEdges    = out;
+    mdl.Brush().numSurfEdges = ToU16(count);
 
     std::memcpy(out, in, static_cast<size_t>(count) * sizeof(int));
 }
@@ -590,12 +591,12 @@ void LoadLightingInto(ModelInstance & mdl, HunkAllocator & hunk, BspFileReader &
 {
     if (l.filelen <= 0)
     {
-        mdl.lightData = nullptr;
+        mdl.Brush().lightData = nullptr;
         return;
     }
 
-    mdl.lightData = hunk.AllocArray<u8>(l.filelen);
-    bsp.ReadLumpInto(LUMP_LIGHTING, mdl.lightData);
+    mdl.Brush().lightData = hunk.AllocArray<u8>(l.filelen);
+    bsp.ReadLumpInto(LUMP_LIGHTING, mdl.Brush().lightData);
 }
 
 void LoadPlanes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
@@ -608,8 +609,8 @@ void LoadPlanes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lu
     // never written and never read, since numPlanes bounds every consumer. It looks
     // like it was meant to back opposite planes that were never implemented.
     cplane_t * out = hunk.AllocArray<cplane_t>(count);
-    mdl.planes    = out;
-    mdl.numPlanes = ToU16(count);
+    mdl.Brush().planes    = out;
+    mdl.Brush().numPlanes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -634,8 +635,8 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
     const int count = LumpElemCount<textureinfo_t>(l);
 
     ModelTexInfo * out = hunk.AllocArray<ModelTexInfo>(count);
-    mdl.texInfos    = out;
-    mdl.numTexInfos = ToU16(count);
+    mdl.Brush().texInfos    = out;
+    mdl.Brush().numTexInfos = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -648,7 +649,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
         out[i].flags = ToU16(in[i].flags);
 
         const int next = in[i].nexttexinfo;
-        out[i].next = (next > 0) ? (mdl.texInfos + next) : nullptr;
+        out[i].next = (next > 0) ? (mdl.Brush().texInfos + next) : nullptr;
 
         char name[MAX_QPATH];
         std::snprintf(name, sizeof(name), "textures/%s.wal", in[i].texture);
@@ -666,7 +667,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
     // Count animation frames by walking each texture's animation chain.
     for (int i = 0; i < count; ++i)
     {
-        ModelTexInfo * base = &mdl.texInfos[i];
+        ModelTexInfo * base = &mdl.Brush().texInfos[i];
         base->numFrames = 1;
         for (const ModelTexInfo * step = base->next; step != nullptr && step != base; step = step->next)
         {
@@ -686,7 +687,7 @@ void CalcSurfaceExtents(const ModelInstance & mdl, ModelSurface & surf)
 
     for (int i = 0; i < surf.numEdges; ++i)
     {
-        const Vec3 & pos = EdgeVertex(mdl, mdl.surfEdges[surf.firstEdge + i]);
+        const Vec3 & pos = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
         for (int j = 0; j < 2; ++j)
         {
             const float val = TexProject(pos, tex->vecs[j]);
@@ -1010,7 +1011,8 @@ void ComputeSurfaceBounds(ModelSurface & surf)
 
 void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & surf)
 {
-    PS2_Assert(mdl.vertexes != nullptr && mdl.edges != nullptr && mdl.surfEdges != nullptr);
+    PS2_Assert(mdl.Brush().vertexes != nullptr && mdl.Brush().edges != nullptr &&
+               mdl.Brush().surfEdges != nullptr);
 
     const int numVerts     = surf.numEdges;
     const int numTriangles = (numVerts >= 3) ? (numVerts - 2) : 0;
@@ -1029,7 +1031,7 @@ void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSur
 
     for (int i = 0; i < numVerts; ++i)
     {
-        const Vec3 & pos = EdgeVertex(mdl, mdl.surfEdges[surf.firstEdge + i]);
+        const Vec3 & pos = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
         poly->vertexes[i].position = pos;
 
         // Colour texture coordinates.
@@ -1162,7 +1164,7 @@ int GatherSurfaceVerts(const ModelInstance & mdl, const ModelSurface & surf, Vec
         {
             return -1;
         }
-        out[count++] = EdgeVertex(mdl, mdl.surfEdges[surf.firstEdge + i]);
+        out[count++] = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
     }
     return count;
 }
@@ -1215,14 +1217,14 @@ void SubdivideSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & 
 
 void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
 {
-    PS2_Assert(mdl.planes != nullptr && mdl.texInfos != nullptr); // Load these first.
+    PS2_Assert(mdl.Brush().planes != nullptr && mdl.Brush().texInfos != nullptr); // Load these first.
 
     const auto * in = LumpAs<dface_t>(lumpData);
     const int count = LumpElemCount<dface_t>(l);
 
     ModelSurface * out = hunk.AllocArray<ModelSurface>(count);
-    mdl.surfaces    = out;
-    mdl.numSurfaces = ToU16(count);
+    mdl.Brush().surfaces    = out;
+    mdl.Brush().numSurfaces = ToU16(count);
 
     // Drops the previous map's lightmap atlases and opens a fresh one to pack
     // this map's faces into (ref_gl's GL_BeginBuildingLightmaps).
@@ -1241,14 +1243,14 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
         {
             surf.flags = surf.flags | SurfaceFlags::PlaneBack;
         }
-        surf.plane = mdl.planes + in[surfNum].planenum;
+        surf.plane = mdl.Brush().planes + in[surfNum].planenum;
 
         const int texNum = in[surfNum].texinfo;
-        if (texNum < 0 || texNum >= mdl.numTexInfos) [[unlikely]]
+        if (texNum < 0 || texNum >= mdl.Brush().numTexInfos) [[unlikely]]
         {
             Sys_Error("LoadFaces: Bad texinfo number: %i", texNum);
         }
-        surf.texInfo = mdl.texInfos + texNum;
+        surf.texInfo = mdl.Brush().texInfos + texNum;
 
         CalcSurfaceExtents(mdl, surf);
 
@@ -1258,7 +1260,7 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
             surf.styles[i] = in[surfNum].styles[i];
         }
         const int lightOfs = in[surfNum].lightofs;
-        surf.samples = (lightOfs == -1) ? nullptr : (mdl.lightData + lightOfs);
+        surf.samples = (lightOfs == -1) ? nullptr : (mdl.Brush().lightData + lightOfs);
 
         // Pack the surface's luxels into a lightmap atlas before its polygon is
         // built: BuildPolygonFromSurface bakes where they landed into the second
@@ -1300,36 +1302,36 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
 
 void LoadMarkSurfaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
 {
-    PS2_Assert(mdl.surfaces != nullptr); // Load faces first.
+    PS2_Assert(mdl.Brush().surfaces != nullptr); // Load faces first.
 
     const auto * in = LumpAs<s16>(lumpData);
     const int count = LumpElemCount<s16>(l);
 
     ModelSurface ** out = hunk.AllocArray<ModelSurface *>(count);
-    mdl.markSurfaces    = out;
-    mdl.numMarkSurfaces = ToU16(count);
+    mdl.Brush().markSurfaces    = out;
+    mdl.Brush().numMarkSurfaces = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
         const int j = in[i];
-        if (j < 0 || j >= mdl.numSurfaces) [[unlikely]]
+        if (j < 0 || j >= mdl.Brush().numSurfaces) [[unlikely]]
         {
             Sys_Error("LoadMarkSurfaces: Bad surface number: %i", j);
         }
-        out[i] = mdl.surfaces + j;
+        out[i] = mdl.Brush().surfaces + j;
     }
 }
 
 void LoadLeafs(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
 {
-    PS2_Assert(mdl.markSurfaces != nullptr); // Load mark surfaces first.
+    PS2_Assert(mdl.Brush().markSurfaces != nullptr); // Load mark surfaces first.
 
     const auto * in = LumpAs<dleaf_t>(lumpData);
     const int count = LumpElemCount<dleaf_t>(l);
 
     ModelLeaf * out = hunk.AllocArray<ModelLeaf>(count);
-    mdl.leafs    = out;
-    mdl.numLeafs = ToU16(count);
+    mdl.Brush().leafs    = out;
+    mdl.Brush().numLeafs = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1343,7 +1345,7 @@ void LoadLeafs(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
         out[i].cluster  = in[i].cluster;
         out[i].area     = in[i].area;
 
-        out[i].firstMarkSurface = mdl.markSurfaces + in[i].firstleafface;
+        out[i].firstMarkSurface = mdl.Brush().markSurfaces + in[i].firstleafface;
         out[i].numMarkSurfaces  = in[i].numleaffaces;
     }
 
@@ -1376,14 +1378,14 @@ void SetParentRecursive(ModelNode * node, ModelNode * parent)
 
 void LoadNodes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
 {
-    PS2_Assert(mdl.planes != nullptr && mdl.leafs != nullptr); // Load these first.
+    PS2_Assert(mdl.Brush().planes != nullptr && mdl.Brush().leafs != nullptr); // Load these first.
 
     const auto * in = LumpAs<dnode_t>(lumpData);
     const int count = LumpElemCount<dnode_t>(l);
 
     ModelNode * out = hunk.AllocArray<ModelNode>(count);
-    mdl.nodes    = out;
-    mdl.numNodes = ToU16(count);
+    mdl.Brush().nodes    = out;
+    mdl.Brush().numNodes = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1393,7 +1395,7 @@ void LoadNodes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
             out[i].minmaxs[j + 3] = in[i].maxs[j];
         }
 
-        out[i].plane        = mdl.planes + in[i].planenum;
+        out[i].plane        = mdl.Brush().planes + in[i].planenum;
         out[i].firstSurface = in[i].firstface;
         out[i].numSurfaces  = in[i].numfaces;
         out[i].contents     = -1; // Differentiates nodes from leafs.
@@ -1403,17 +1405,17 @@ void LoadNodes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
             const int p = in[i].children[j];
             if (p >= 0)
             {
-                out[i].children[j] = mdl.nodes + p;
+                out[i].children[j] = mdl.Brush().nodes + p;
             }
             else
             {
                 // Negative children index leafs, reinterpreted as nodes.
-                out[i].children[j] = reinterpret_cast<ModelNode *>(mdl.leafs + (-1 - p));
+                out[i].children[j] = reinterpret_cast<ModelNode *>(mdl.Brush().leafs + (-1 - p));
             }
         }
     }
 
-    SetParentRecursive(mdl.nodes, nullptr);
+    SetParentRecursive(mdl.Brush().nodes, nullptr);
 }
 
 float RadiusFromBounds(const Vec3 & mins, const Vec3 & maxs)
@@ -1432,8 +1434,8 @@ void LoadSubModels(ModelInstance & mdl, HunkAllocator & hunk, const void * const
     const int count = LumpElemCount<dmodel_t>(l);
 
     SubModelInfo * out = hunk.AllocArray<SubModelInfo>(count);
-    mdl.subModels    = out;
-    mdl.numSubModels = ToU16(count);
+    mdl.Brush().subModels    = out;
+    mdl.Brush().numSubModels = ToU16(count);
 
     for (int i = 0; i < count; ++i)
     {
@@ -1650,7 +1652,7 @@ bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const f
     // in the file, which is what lets a single buffer serve them in turn.
     // LUMP_LIGHTING is a verbatim copy, read straight into the hunk and skipping
     // the scratch entirely; it keeps its original slot in the sequence because
-    // LoadFaces resolves surf.samples against mdl.lightData, which therefore has
+    // LoadFaces resolves surf.samples against mdl.Brush().lightData, which therefore has
     // to be in place before it runs. LUMP_VISIBILITY is not read at all any more -
     // cmodel.c owns it (see MarkLeaves).
     LoadVertexes(mdl, hunk, bsp.ReadLump(LUMP_VERTEXES), header.lumps[LUMP_VERTEXES]);
@@ -1730,9 +1732,12 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     }
     FS_Read(out, fileLen, file);
 
+    // Resolved once, here. The frame rectangles are still read out of the hunk at
+    // draw time, but the names are not needed again: ReferenceAllTextures touches
+    // these pointers rather than looking them up.
     for (int i = 0; i < out->numframes; ++i)
     {
-        mdl.skins[i] = tex::Find(out->frames[i].name, tex::ImageType::Sprite);
+        mdl.Sprite().frames[i] = tex::Find(out->frames[i].name, tex::ImageType::Sprite);
     }
     mdl.numFrames = ToU16(out->numframes);
 
@@ -1815,15 +1820,16 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     }
     FS_Read(out, header.ofs_end, file);
 
-    // Default bounds (MD2s carry no bounds; the game clips against these).
-    mdl.mins = { -32.0f, -32.0f, -32.0f };
-    mdl.maxs = {  32.0f,  32.0f,  32.0f };
     mdl.numFrames = ToU16(out->num_frames);
 
+    // Resolved once, here. ReferenceAllTextures touches these pointers on a cache
+    // hit rather than looking the names up again, so the strings are not kept.
+    ModelInstance::AliasData & alias = mdl.Alias();
+    alias.numSkins = ToU16(out->num_skins);
     for (int i = 0; i < out->num_skins; ++i)
     {
         const char * skinName = reinterpret_cast<const char *>(out) + out->ofs_skins + (i * MAX_SKINNAME);
-        mdl.skins[i] = tex::Find(skinName, tex::ImageType::Skin);
+        alias.skins[i] = tex::Find(skinName, tex::ImageType::Skin);
     }
 
     if (kVerboseModelLoading)

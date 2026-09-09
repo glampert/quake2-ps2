@@ -473,9 +473,9 @@ void SetupFrame(const refdef_t & viewDef)
 
 const mod::ModelLeaf * FindLeafNodeForPoint(const float * point, const mod::ModelInstance & model)
 {
-    PS2_AssertMsg(model.nodes != nullptr, "World model has no nodes!");
+    PS2_AssertMsg(model.Brush().nodes != nullptr, "World model has no nodes!");
 
-    const mod::ModelNode * node = model.nodes;
+    const mod::ModelNode * node = model.Brush().nodes;
     for (;;)
     {
         if (node->contents != -1)
@@ -548,13 +548,13 @@ void MarkLeaves(const mod::ModelInstance & world)
     if (s_viewCluster == kInvalidCluster || !CM_HasVisibility())
     {
         // Outside the map or no PVS data: mark everything visible.
-        for (int i = 0; i < world.numLeafs; ++i)
+        for (int i = 0; i < world.Brush().numLeafs; ++i)
         {
-            world.leafs[i].visFrame = s_visFrameCount;
+            world.Brush().leafs[i].visFrame = s_visFrameCount;
         }
-        for (int i = 0; i < world.numNodes; ++i)
+        for (int i = 0; i < world.Brush().numNodes; ++i)
         {
-            world.nodes[i].visFrame = s_visFrameCount;
+            world.Brush().nodes[i].visFrame = s_visFrameCount;
         }
         return;
     }
@@ -572,14 +572,14 @@ void MarkLeaves(const mod::ModelInstance & world)
     {
         // Copy the first row out before asking for the second: CM_ClusterPVS
         // decompresses both into the same buffer.
-        std::memcpy(fatPvs, vis, static_cast<size_t>((world.numLeafs + 7) / 8));
+        std::memcpy(fatPvs, vis, static_cast<size_t>((world.Brush().numLeafs + 7) / 8));
         vis = GetClusterPVS(s_viewCluster2);
 
         // Both buffers are 16-byte aligned, so OR them a word at a time.
         u32 * fat = static_cast<u32 *>(static_cast<void *>(fatPvs));
         const u32 * add = static_cast<const u32 *>(static_cast<const void *>(vis));
 
-        const int words = (world.numLeafs + 31) / 32;
+        const int words = (world.Brush().numLeafs + 31) / 32;
         for (int i = 0; i < words; ++i)
         {
             fat[i] |= add[i];
@@ -587,8 +587,8 @@ void MarkLeaves(const mod::ModelInstance & world)
         vis = fatPvs;
     }
 
-    mod::ModelLeaf * leaf = world.leafs;
-    for (int i = 0; i < world.numLeafs; ++i, ++leaf)
+    mod::ModelLeaf * leaf = world.Brush().leafs;
+    for (int i = 0; i < world.Brush().numLeafs; ++i, ++leaf)
     {
         const int cluster = leaf->cluster;
         if (cluster == kInvalidCluster)
@@ -707,7 +707,7 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
     RecursiveWorldNode(viewDef, world, node->children[side]);
 
     // ...then chain this node's surfaces that face the camera...
-    mod::ModelSurface * surf = world.surfaces + node->firstSurface;
+    mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
     for (int i = 0; i < node->numSurfaces; ++i, ++surf)
     {
         if (surf->visFrame != s_frameCount)
@@ -1703,7 +1703,7 @@ void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance
         return;
     }
 
-    mod::ModelSurface * surf = world.surfaces + node->firstSurface;
+    mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
     const int numSurfaces = node->numSurfaces;
 
     // Mark the polygons:
@@ -1737,7 +1737,7 @@ void PushDLights(const refdef_t & viewDef, const mod::ModelInstance & world)
 
     for (int l = 0; l < numDlights; ++l, ++light)
     {
-        MarkDLights(light, 1 << l, world, world.nodes);
+        MarkDLights(light, 1 << l, world, world.Brush().nodes);
     }
 }
 
@@ -1774,7 +1774,7 @@ void RenderWorldModel(const refdef_t & viewDef)
         // per level. LmChain nests underneath this one.
         {
             PS2_PROFILE_SCOPED_EVENT(prof_evt::BspWalk);
-            RecursiveWorldNode(viewDef, *world, world->nodes);
+            RecursiveWorldNode(viewDef, *world, world->Brush().nodes);
         }
     }
 
@@ -1854,7 +1854,7 @@ LightSampleResult RecursiveLightPoint(const mod::ModelInstance & world, const mo
 
     // Check the crossing point against this node's surfaces.
     const int numSurfaces = node->numSurfaces;
-    const mod::ModelSurface * surf = world.surfaces + node->firstSurface;
+    const mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
     for (int i = 0; i < numSurfaces; ++i, ++surf)
     {
         if (HasFlag(surf->flags, mod::SurfaceFlags::DrawTurb | mod::SurfaceFlags::DrawSky))
@@ -1947,7 +1947,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     const auto * model = reinterpret_cast<const mod::ModelInstance *>(entity.model);
     PS2_Assert(model != nullptr);
 
-    if (model->numModelSurfaces == 0)
+    if (model->Brush().numModelSurfaces == 0)
     {
         return; // Submodel with no faces of its own (a pure clip brush).
     }
@@ -1962,14 +1962,14 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     {
         for (int i = 0; i < 3; ++i)
         {
-            mins[i] = entity.origin[i] - model->radius;
-            maxs[i] = entity.origin[i] + model->radius;
+            mins[i] = entity.origin[i] - model->Brush().radius;
+            maxs[i] = entity.origin[i] + model->Brush().radius;
         }
     }
     else
     {
-        const float * const modelMins = &model->mins.x;
-        const float * const modelMaxs = &model->maxs.x;
+        const float * const modelMins = &model->Brush().mins.x;
+        const float * const modelMaxs = &model->Brush().maxs.x;
         for (int i = 0; i < 3; ++i)
         {
             mins[i] = entity.origin[i] + modelMins[i];
@@ -2013,9 +2013,10 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         const int numDlights = viewDef.num_dlights;
         const dlight_t * light = viewDef.dlights;
 
+        const mod::ModelInstance::BrushData & modelBrush = model->Brush();
         for (int l = 0; l < numDlights; ++l, ++light)
         {
-            MarkDLights(light, 1 << l, *world, model->nodes + model->firstNode);
+            MarkDLights(light, 1 << l, *world, modelBrush.nodes + modelBrush.firstNode);
         }
     }
 
@@ -2043,8 +2044,9 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     // translucent surface that needs it (most models have none at all).
     const math::Mat4 * alphaMvp = nullptr;
 
-    mod::ModelSurface * surf = model->surfaces + model->firstModelSurface;
-    for (int i = 0; i < model->numModelSurfaces; ++i, ++surf)
+    const mod::ModelInstance::BrushData & brush = model->Brush();
+    mod::ModelSurface * surf = brush.surfaces + brush.firstModelSurface;
+    for (int i = 0; i < brush.numModelSurfaces; ++i, ++surf)
     {
         const cplane_t & plane = *surf->plane;
         const float dot = DotProduct(modelOrigin, plane.normal) - plane.dist;
@@ -2152,7 +2154,7 @@ void DrawSpriteEntity(const entity_t & entity)
     const int frameNum = (entity.frame >= 0) ? (entity.frame % sprite->numframes) : 0;
     const dsprframe_t & frame = sprite->frames[frameNum];
 
-    const tex::Texture * skin = model->skins[frameNum];
+    const tex::Texture * skin = model->Sprite().frames[frameNum];
     if (skin == nullptr)
     {
         skin = &tex::DebugTexture(); // Frame's .pcx failed to load.
@@ -2627,7 +2629,7 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
 {
     const mod::ModelInstance * world = mod::GetWorldModel();
 
-    if (world == nullptr || world->lightData == nullptr)
+    if (world == nullptr || world->Brush().lightData == nullptr)
     {
         // No world or a map compiled without light data: fullbright.
         VectorSet(outColor, 1.0f, 1.0f, 1.0f);
@@ -2638,7 +2640,7 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
     const vec3_t endPoint = { point[0], point[1], point[2] - 2048.0f };
 
     vec3_t sampled = {};
-    const auto r = RecursiveLightPoint(*world, world->nodes, viewDef.lightstyles,
+    const auto r = RecursiveLightPoint(*world, world->Brush().nodes, viewDef.lightstyles,
                                        point, endPoint, sampled, outLightSpot);
     if (r == NoHit)
     {

@@ -265,7 +265,7 @@ const ModelInstance * ModelCache::FindInlineModel(const char * const name)
 {
     const int idx = std::atoi(name + 1);
     if (idx < 1 || idx >= static_cast<int>(kMaxInlineModels) ||
-        m_worldModel == nullptr || idx >= m_worldModel->numSubModels)
+        m_worldModel == nullptr || idx >= m_worldModel->Brush().numSubModels)
     {
         Com_Printf("ERROR: ModelCache: Bad inline model number (%i) or null world model.\n", idx);
         return nullptr;
@@ -275,15 +275,17 @@ const ModelInstance * ModelCache::FindInlineModel(const char * const name)
 
 void ModelCache::SetUpInlineModels(ModelInstance & world)
 {
-    if (world.numSubModels > static_cast<int>(kMaxInlineModels)) [[unlikely]]
+    ModelInstance::BrushData & worldBrush = world.Brush();
+
+    if (worldBrush.numSubModels > static_cast<int>(kMaxInlineModels)) [[unlikely]]
     {
         Sys_Error("Map '%s' has too many submodels (%i)! Bump ModelCache::kMaxInlineModels (%u).",
-                  world.name, world.numSubModels, kMaxInlineModels);
+                  world.name, worldBrush.numSubModels, kMaxInlineModels);
     }
 
-    for (int i = 0; i < world.numSubModels; ++i)
+    for (int i = 0; i < worldBrush.numSubModels; ++i)
     {
-        const SubModelInfo & sm = world.subModels[i];
+        const SubModelInfo & sm = worldBrush.subModels[i];
         ModelInstance & inl = m_inlineModels[i];
 
         // Alias the world's geometry, then override the per-submodel bounds and
@@ -292,20 +294,22 @@ void ModelCache::SetUpInlineModels(ModelInstance & world)
         inl = world;
         inl.hunkBase = nullptr;
         inl.hunkSize = 0;
-        inl.isInline = true;
 
-        inl.firstModelSurface = sm.firstFace;
-        inl.numModelSurfaces  = sm.numFaces;
-        inl.firstNode         = sm.headNode;
-        inl.mins              = sm.mins;
-        inl.maxs              = sm.maxs;
-        inl.radius            = sm.radius;
+        ModelInstance::BrushData & inlBrush = inl.Brush();
+        inlBrush.isInline = true;
+
+        inlBrush.firstModelSurface = sm.firstFace;
+        inlBrush.numModelSurfaces  = sm.numFaces;
+        inlBrush.firstNode         = sm.headNode;
+        inlBrush.mins              = sm.mins;
+        inlBrush.maxs              = sm.maxs;
+        inlBrush.radius            = sm.radius;
 
         // Quake 2's on-disk dmodel_t carries no leaf count, and inline models
         // never walk the leaf array; only the world's LoadLeafs count matters.
-        inl.numLeafs = 0;
+        inlBrush.numLeafs = 0;
 
-        if (inl.firstNode >= world.numNodes) [[unlikely]]
+        if (inlBrush.firstNode >= worldBrush.numNodes) [[unlikely]]
         {
             Sys_Error("Inline model %i of '%s' has a bad first node!", i, world.name);
         }
@@ -315,51 +319,64 @@ void ModelCache::SetUpInlineModels(ModelInstance & world)
         // LoadLeafs, or MarkLeaves would have no leafs to stamp visible.
         if (i == 0)
         {
-            world.firstModelSurface = sm.firstFace;
-            world.numModelSurfaces  = sm.numFaces;
-            world.firstNode         = sm.headNode;
-            world.mins              = sm.mins;
-            world.maxs              = sm.maxs;
-            world.radius            = sm.radius;
+            worldBrush.firstModelSurface = sm.firstFace;
+            worldBrush.numModelSurfaces  = sm.numFaces;
+            worldBrush.firstNode         = sm.headNode;
+            worldBrush.mins              = sm.mins;
+            worldBrush.maxs              = sm.maxs;
+            worldBrush.radius            = sm.radius;
         }
     }
 }
 
+// Re-stamps every texture a cached model uses as referenced in the current
+// registration cycle, so tex::EndRegistration keeps them.
+//
+// A touch, never a Find: every type resolved its textures once at load and holds
+// the pointers, so there is no name to look up and no reason to. The pointers
+// cannot go stale either - this runs from ModelCache::Find on the cache hit, so a
+// model that survives a cycle has necessarily stamped its textures before the
+// texture sweep, and one that does not survive is freed itself.
 void ModelCache::ReferenceAllTextures(ModelInstance & mdl)
 {
     switch (mdl.type)
     {
     case ModelType::Brush:
-        // Re-stamp the wall textures so EndRegistration keeps them (no reload).
-        for (int i = 0; i < mdl.numTexInfos; ++i)
         {
-            if (mdl.texInfos[i].texture != nullptr)
+            const ModelInstance::BrushData & brush = mdl.Brush();
+            for (int i = 0; i < brush.numTexInfos; ++i)
             {
-                tex::TouchTexture(*mdl.texInfos[i].texture);
+                if (brush.texInfos[i].texture != nullptr)
+                {
+                    tex::TouchTexture(*brush.texInfos[i].texture);
+                }
             }
+            break;
         }
-        break;
 
     case ModelType::Sprite:
         {
-            const auto * sprite = static_cast<const dsprite_t *>(mdl.hunkBase);
-            for (int i = 0; i < sprite->numframes; ++i)
+            const ModelInstance::SpriteData & sprite = mdl.Sprite();
+            for (int i = 0; i < mdl.numFrames; ++i)
             {
-                mdl.skins[i] = tex::Find(sprite->frames[i].name, tex::ImageType::Sprite);
+                if (sprite.frames[i] != nullptr)
+                {
+                    tex::TouchTexture(*sprite.frames[i]);
+                }
             }
             break;
         }
 
     case ModelType::AliasMD2:
         {
-            const auto * md2 = static_cast<const dmdl_t *>(mdl.hunkBase);
-            for (int i = 0; i < md2->num_skins; ++i)
+            const ModelInstance::AliasData & alias = mdl.Alias();
+            for (int i = 0; i < alias.numSkins; ++i)
             {
-                const char * skinName = reinterpret_cast<const char *>(md2) + md2->ofs_skins + (i * MAX_SKINNAME);
-                mdl.skins[i] = tex::Find(skinName, tex::ImageType::Skin);
+                if (alias.skins[i] != nullptr)
+                {
+                    tex::TouchTexture(*alias.skins[i]);
+                }
             }
-            PS2_Assert(md2->num_frames >= 0 && md2->num_frames <= UINT16_MAX);
-            mdl.numFrames = static_cast<u16>(md2->num_frames);
             break;
         }
     }

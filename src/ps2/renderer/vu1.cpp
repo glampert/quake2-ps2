@@ -18,7 +18,7 @@
  *      4      GS scale  (2048, 2048, zScale)
  *      5      GS offset (2048 + w/2, 2048 + h/2, zScale)
  *      6      clip-judgement scale (guard band)
- *      7      reserved
+ *      7      color clamp (255, 255, 255, 255)
  *      8-999  the two XTOP double buffers (VIF1 BASE=8, OFFSET=496)
  *
  *  Batch layout inside a double buffer (relative to XTOP): input is one header
@@ -106,6 +106,12 @@ constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
 // crossing the near/far planes, z scale 1) are dropped whole via the ADC bit.
 constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
 
+// Value FrameConstants::clipScale is always set to.
+constexpr math::Vec4 kClipScale = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
+
+// Value FrameConstants::colorClamp is always set to.
+constexpr math::Vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
+
 // Unpacked to kFrameConstantsAddr before every batch. Static so the DMA REF
 // source stays valid; rebuilt per draw.
 struct alignas(16) FrameConstants
@@ -114,8 +120,15 @@ struct alignas(16) FrameConstants
     math::Vec4 gsScale;
     math::Vec4 gsOffset;
     math::Vec4 clipScale;
+
+    // The ceiling a computed vertex color is clamped to before ftoi0 packs it
+    // into GS bytes. A frame constant rather than a batch one because it is the
+    // same 255 for everybody, and qword 7 was reserved anyway.
+    math::Vec4 colorClamp;
 };
-static_assert(sizeof(FrameConstants) == 7 * 16, "Must match the VU memory layout");
+// Exactly the 8 qwords below kDoubleBufferBase, so this block cannot grow again
+// without moving the buffers.
+static_assert(sizeof(FrameConstants) == 8 * 16, "Must match the VU memory layout");
 
 static FrameConstants s_constants;
 static VifPacket s_drawPacket;
@@ -348,7 +361,7 @@ bool AddBatchStateBlock(VifPacket & pkt, const tex::Texture & texture, int ctx, 
 // without the ABE bit; untextured ones clear the TME bit (the texture
 // registers are still written, just not sampled).
 void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
-                     int vertCount, DrawFlags flags)
+                     int vertCount, DrawFlags flags, bool packedRgbaOut = false)
 {
     const bool blended = AddBatchStateBlock(pkt, texture, ctx, flags);
     const int  tme     = HasDrawFlag(flags, DrawFlags::Untextured) ? 0 : 1;
@@ -365,11 +378,12 @@ void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
     // inside the PRIM field, where PRIM_TRIANGLE (3) already has that bit
     // set. Nothing warned and the primitive still drew, just never blended.
     const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, ctx, 0);
-    // The lit program emits PACKED RGBAQ where the others emit an A+D write, so
-    // the register list has to follow which one this batch will run.
-    const bool lit = HasDrawFlag(flags, DrawFlags::DynamicLights);
+    // The programs that *compute* their color emit PACKED RGBAQ; the ones that
+    // receive it already packed emit an A+D write. The register list has to
+    // follow whichever this batch will run, so the caller says which.
+    const bool packedRgba = packedRgbaOut || HasDrawFlag(flags, DrawFlags::DynamicLights);
     pkt.AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
-                 lit ? kLitVertexRegList : kVertexRegList);
+                 packedRgba ? kLitVertexRegList : kVertexRegList);
 }
 
 // Rebuilds s_constants for a draw and opens the chain with its unpack to the
@@ -381,12 +395,13 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     float depthScale, depthOffset;
     DepthRangeFor(flags, &depthScale, &depthOffset);
 
-    s_constants.mvp       = mvp;
-    s_constants.gsScale   = { 2048.0f, 2048.0f, depthScale, 0.0f };
-    s_constants.gsOffset  = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
-                              2048.0f + static_cast<float>(gs::Height()) * 0.5f,
-                              depthOffset, 0.0f };
-    s_constants.clipScale = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
+    s_constants.mvp        = mvp;
+    s_constants.gsScale    = { 2048.0f, 2048.0f, depthScale, 0.0f };
+    s_constants.gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
+                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
+                               depthOffset, 0.0f };
+    s_constants.clipScale  = kClipScale;
+    s_constants.colorClamp = kColorClamp;
 
     pkt.Reset();
 
@@ -578,21 +593,24 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 // world path's 96. Whole triangles, and even - so every full chunk's slice of
 // the 8-byte position stream is whole source qwords starting 16-byte aligned.
 
-// Chain footprint of one lerped chunk: header/frontv/backv/tags inline
-// unpack (1 + 10 qwords), two REF unpacks, FLUSH + MSCAL; ~15 in practice.
-constexpr int kLerpChunkChainQwords = 20;
+// Chain footprint of one lerped chunk: header/frontv/backv/shadeLight/tags
+// inline unpack (1 + 11 qwords), two REF unpacks, FLUSH + MSCAL; ~18 in
+// practice. Over-declaring only sends the chain a chunk early; under-declaring
+// overruns the packet, which EnsureSpace turns into a Sys_Error.
+constexpr int kLerpChunkChainQwords = 22;
 
 // The regions sit at fixed offsets sized for the maximum chunk (short
 // chunks leave gaps), so the microprogram addresses them with immediates.
 constexpr int kLerpBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kLerpFrontVAddr      = 1; // current frame scale * (1 - backlerp)
 constexpr int kLerpBackVAddr       = 2; // old frame scale * backlerp
-constexpr int kLerpGifTagsAddr     = 3; // the same 7-qword block as the world path
+constexpr int kLerpShadeLightAddr  = 3; // entity light in GS units, vertex alpha in .w
+constexpr int kLerpGifTagsAddr     = 4; // the same 7-qword block as the world path
 constexpr int kLerpPositionsAddr   = kLerpGifTagsAddr + kNumGifTagQwords;              // 2 qwords per vertex
 constexpr int kLerpAttribsAddr     = kLerpPositionsAddr + (2 * kMaxLerpVertsPerBatch); // 1 qword per vertex
 constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // the GS packet
 
-static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpPositionsAddr == 10 && kLerpAttribsAddr == 166 && kLerpOutputAddr == 244, "Batch layout must match the #defines in lerped_triangles.vcl");
+static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 167 && kLerpOutputAddr == 245, "Batch layout must match the #defines in lerped_triangles.vcl");
 static_assert(kLerpOutputAddr + kNumGifTagQwords + (3 * kMaxLerpVertsPerBatch) <= kDoubleBufferOffset, "Lerp batch input + GS packet must fit one double-buffer half");
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
@@ -603,7 +621,7 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // the VU never reads (the fixed region has room: odd counts are < the even maximum).
 static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
-                              float stScaleS, float stScaleT,
+                              const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
                               const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
                               int vertCount, FaceCull faceCull, DrawFlags flags)
 {
@@ -618,8 +636,8 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
         // the EE because the VU has the multiply slot free and the EE does not:
         // it is two mul.s per vertex saved out of an expansion loop that is the
         // single largest marker in the frame.
-        pkt.AddFloat(stScaleS);                 // .y
-        pkt.AddFloat(stScaleT);                 // .z
+        pkt.AddFloat(stScaleS); // .y
+        pkt.AddFloat(stScaleT); // .z
         pkt.AddU32(static_cast<u32>(vertCount));
 
         pkt.AddFloat(frontv.x);
@@ -632,7 +650,15 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
         pkt.AddFloat(backv.z);
         pkt.AddFloat(0.0f);
 
-        AddBatchGifTags(pkt, texture, ctx, vertCount, flags);
+        // The entity's light, which the microprogram multiplies by each vertex's
+        // shade term to get its color. On the EE this was a 162-entry table
+        // rebuilt per entity per frame; here it is four floats per batch.
+        pkt.AddFloat(shadeLight.x);
+        pkt.AddFloat(shadeLight.y);
+        pkt.AddFloat(shadeLight.z);
+        pkt.AddFloat(shadeLight.w); // vertex alpha, GS units
+
+        AddBatchGifTags(pkt, texture, ctx, vertCount, flags, /*packedRgbaOut=*/true);
     }
     pkt.CloseInlineUnpack();
 
@@ -652,6 +678,7 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
 
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
+                         const math::Vec4 & shadeLight,
                          const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
                          int vertCount, FaceCull faceCull, DrawFlags flags, bool attribsRepeat)
 {
@@ -697,7 +724,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         // per-vertex stream advances with the positions.
         const LerpDrawAttrib * const chunkAttribs = attribsRepeat ? attribs : (attribs + firstVert);
 
-        AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, stScaleS, stScaleT,
+        AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, shadeLight, stScaleS, stScaleT,
                           positions + firstVert, chunkAttribs, chunkVerts, faceCull, flags);
     }
 

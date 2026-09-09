@@ -10,11 +10,18 @@
 ; the clip-space transform onward this is textured_triangles.vcl
 ; unchanged. Preprocessed with vclpp; -j injects the boilerplate.
 ;
+; Vertex colour is computed here rather than handed over packed:
+; each vertex carries a scalar shade term and the batch carries the
+; entity's light, so the colour is one broadcast multiply, a clamp
+; and an ftoi0. That replaces a 162-entry lookup table the EE used
+; to rebuild for every entity of every frame.
+;
 ; VU data memory layout (qwords; must match vu1.cpp):
 ;   0-3  MVP matrix rows (row-vector convention; row 3 carries 'move')
 ;   4    GS scale  (2048, 2048, zScale)
 ;   5    GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6    clip-judgement scale (guard band for x/y, 1.0 for z)
+;   7    colour clamp (255, 255, 255, 255)
 ;   8+   XTOP double buffers (VIF1 BASE/OFFSET)
 ;
 ; Batch layout at XTOP - fixed offsets sized for the 78-vertex
@@ -29,35 +36,39 @@
 ;         (.y/.z); the lanes never mix in one operation.
 ;   +1    frontv: current frame scale * (1 - backlerp), w = 0
 ;   +2    backv:  old frame scale * backlerp, w = 0
-;   +3    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
+;   +3    shadeLight: the entity's light in GS units (0-128 per
+;         channel) with the vertex alpha in .w
+;   +4    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
 ;         prim tag)
-;   +10   positions: 2 qwords per vertex - the current frame's
+;   +11   positions: 2 qwords per vertex - the current frame's
 ;         dtrivertx_t then the old frame's, each unpacked by the
 ;         VIF from V4_8 bytes to four *unsigned integers* per qword
 ;         (x, y, z, lightnormalindex; the last is baggage the EE
-;         indexed its color LUT with - never read here)
-;   +166  attributes: 1 qword per vertex: (rgba, s, t, q)
-;   +244  the GS packet built here: 7 tags + 3 qwords per vertex
+;         used to index its colour LUT with - never read here)
+;   +167  attributes: 1 qword per vertex: (shade, s, t, q)
+;   +245  the GS packet built here: 7 tags + 3 qwords per vertex
 ;
 ; The position qwords hold integer bit patterns until itof0
 ; converts them - they must only ever be touched by raw loads and
 ; itof0, never an FMAC op (integers look like denormals and would
-; flush to zero), the same rule the packed color follows.
+; flush to zero). The attribute qword carries no such thing any
+; more: every lane of it is a real float meant for the FMAC.
 ;--------------------------------------------------------------------
 
 ; Batch offsets, relative to XTOP:
 #define kBatchHeader 0
 #define kFrontV      1
 #define kBackV       2
-#define kGifTags     3
-#define kPositions   10
-#define kAttributes  166
-#define kOutput      244
+#define kShadeLight  3
+#define kGifTags     4
+#define kPositions   11
+#define kAttributes  167
+#define kOutput      245
 
 ; Transforms one vertex: two position qwords at offCur/offOld from
 ; iPosPtr (integer byte lanes of the two keyframes) and one attribute
-; qword at offStq from iAttrPtr become the ST, RGBAQ (via A+D) and
-; XYZ2 output qwords at offST/offAD/offXyz from iOutPtr. Leaves this
+; qword at offStq from iAttrPtr become the ST, RGBAQ (PACKED) and
+; XYZ2 output qwords at offST/offRGBA/offXyz from iOutPtr. Leaves this
 ; vertex's clipw flags as the newest entry in the clip flag register;
 ; the caller judges whole triangles with fcand after 3 calls and
 ; writes the XYZ2 .w ADC bit. 'dstScreen' additionally receives the
@@ -65,19 +76,18 @@
 ; backface test crosses across the triangle - one register per
 ; vertex, at no extra instruction (the madd lands there anyway).
 ;
-; The packed color is moved with raw copies only (lq/sq.x): FMAC ops
-; would flush denormal color bit patterns (e.g. 0x800000FF) to zero.
-; The position integers get the same treatment until itof0.
+; The position integers must not reach an FMAC before itof0 - they
+; look like denormals and would flush to zero.
 ;
 ; C-like pseudo-code ('pos'/'attr'/'out' are the qword arrays at
 ; iPosPtr/iAttrPtr/iOutPtr):
 ;
 ;   void DoVertex(int offCur, int offOld, int offStq,
-;                 int offST, int offAD, int offXyz)
+;                 int offST, int offRGBA, int offXyz)
 ;   {
 ;       ivec4 curI = pos[offCur];  // (x, y, z, normalindex) ints, 0-255
 ;       ivec4 oldI = pos[offOld];
-;       vec4  stq  = attr[offStq]; // (rgba, s, t, q); raw color in .x
+;       vec4  stq  = attr[offStq]; // (shade, s, t, q)
 ;
 ;       vec4 cur = itof(curI);
 ;       vec4 old = itof(oldI);
@@ -100,11 +110,19 @@
 ;
 ;       // Perspective divide; the STQ words share the 1/w so the GS
 ;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
-;       // The color bits get scaled too - garbage, but the rotate
+;       // The shade term gets scaled too - unused, but the rotate
 ;       // below moves it into the ST qword's ignored .w:
 ;       float q  = 1.0f / pos.w;
 ;       pos.xyz *= q;                    // now NDC
 ;       vec4 stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
+;
+;       // The vertex colour, from the unscaled shade term broadcast
+;       // across the entity's light. This is the whole of what the
+;       // EE's per-entity colour LUT used to compute, and the clamp
+;       // it needed 486 compares for is two instructions here:
+;       vec4 colour  = shadeLight * stq.x;   // .w = alpha * shade
+;       colour.xyz   = clamp(colour.xyz, 0, 255);
+;       colour.w     = shadeLight.w;         // alpha, untouched
 ;
 ;       // NDC to GS window coordinates; the float form feeds the
 ;       // caller's backface cross product, the 12.4 form the GS:
@@ -114,12 +132,11 @@
 ;       // ST scaled by the skin's power-of-two correction:
 ;       stqScaled.yz   *= stScale.yz;
 ;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
-;       out[offAD].x    = stq.x;          // native RGBAQ: packed color...
-;       out[offAD].y    = q;              // ...with Q in the word above
-;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
+;       out[offRGBA]    = ftoi0(colour);  // PACKED RGBAQ: one byte per word,
+;                                         // Q from the ST write just above
 ;       out[offXyz].xyz = pos.xyz;        // XYZ (.w ADC bit set by caller)
 ;   }
-#macro DoVertex: offCur, offOld, offStq, offST, offAD, offXyz, dstScreen
+#macro DoVertex: offCur, offOld, offStq, offST, offRGBA, offXyz, dstScreen
 
     lq fCurI, offCur(iPosPtr)
     lq fOldI, offOld(iPosPtr)
@@ -146,11 +163,11 @@
 
     ; Perspective divide, with the same 1/w multiplied onto the texture
     ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
-    ; interpolation - and captured into .y for the A+D RGBAQ qword.
+    ; interpolation. The rotate below lands that 1/w in the ST qword's
+    ; third word, which is where PACKED RGBAQ latches its Q from.
     div        q,          vf00[w], fPos[w]
     mul.xyz    fPos,       fPos,    q
     mulq       fStqScaled, fStq,    q
-    addq.y     fQ,         vf00,    q
 
     ; NDC to GS window coordinates: float into dstScreen for the caller's
     ; backface test, then 12.4 fixed point for the GS packet:
@@ -159,19 +176,29 @@
     ftoi4.xyz fPos, dstScreen
 
     ; The skin's power-of-two correction, which the EE used to multiply onto
-    ; every vertex before handing them over. Masked to .yz so the .x lane -
-    ; the packed color's raw bits - is never computed, and neither are the
-    ; header integers sitting in fStScale.x/.w.
+    ; every vertex before handing them over. Masked to .yz so the header
+    ; integers sitting in fStScale.x/.w are never computed.
     mul.yz fStqScaled, fStqScaled, fStScale
+
+    ; The vertex colour: the entity's light scaled by this vertex's shade
+    ; term, broadcast from the attribute's .x - which is the unscaled fStq,
+    ; not the perspective-divided copy above. Alpha is moved in rather than
+    ; multiplied; it is the batch's, not the vertex's. The clamp is the one
+    ; the EE spent 486 compares an entity on.
+    mulx.xyz fColor, fShadeLight, fStq
+    move.w   fColor, fShadeLight
+    max.xyz  fColor, fColor, vf00
+    mini.xyz fColor, fColor, fColorClamp
+    ftoi0    fRGBA,  fColor
 
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
 
-    sq     fST,  offST(iOutPtr)
-    sq.x   fStq, offAD(iOutPtr)
-    sq.y   fQ,   offAD(iOutPtr)
-    isw.z  iRegRGBAQ, offAD(iOutPtr)
-    sq.xyz fPos, offXyz(iOutPtr)
+    ; ST first: PACKED RGBAQ takes its Q from the internal register the ST
+    ; write latches, which is why the two cannot be reordered.
+    sq     fST,   offST(iOutPtr)
+    sq     fRGBA, offRGBA(iOutPtr)
+    sq.xyz fPos,  offXyz(iOutPtr)
 
 #endmacro
 
@@ -181,19 +208,21 @@
 ;   void VU1Prog_LerpedTriangles()
 ;   {
 ;       // Frame constants at the fixed low addresses:
-;       mat4 mvp       = vuMem[0..3];
-;       vec4 gsScale   = vuMem[4];
-;       vec4 gsOffset  = vuMem[5];
-;       vec4 clipScale = vuMem[6];
+;       mat4 mvp        = vuMem[0..3];
+;       vec4 gsScale    = vuMem[4];
+;       vec4 gsOffset   = vuMem[5];
+;       vec4 clipScale  = vuMem[6];
+;       vec4 colorClamp = vuMem[7];
 ;
 ;       // This batch, in the current double buffer:
 ;       qword* batch    = &vuMem[XTOP];
 ;       int    numVerts = batch[kBatchHeader].w;
 ;       int    cullMode = batch[kBatchHeader].x;
-;       vec4   frontv   = batch[kFrontV];
-;       vec4   backv    = batch[kBackV];
-;       qword* pos      = &batch[kPositions];  // 2 qwords per vertex
-;       qword* attr     = &batch[kAttributes]; // 1 qword per vertex
+;       vec4   frontv     = batch[kFrontV];
+;       vec4   backv      = batch[kBackV];
+;       vec4   shadeLight = batch[kShadeLight];
+;       qword* pos        = &batch[kPositions];  // 2 qwords per vertex
+;       qword* attr       = &batch[kAttributes]; // 1 qword per vertex
 ;
 ;       // The sign-bit value (see the backface test below) of a culled
 ;       // face: mode 1 culls negative areas (bit 15 set), mode 2
@@ -259,24 +288,22 @@
     fcset 0x000000
 
     ; Frame constants from the fixed low addresses:
-    lq fMVP0,      0(vi00)
-    lq fMVP1,      1(vi00)
-    lq fMVP2,      2(vi00)
-    lq fMVP3,      3(vi00)
-    lq fGSScale,   4(vi00)
-    lq fGSOffset,  5(vi00)
-    lq fClipScale, 6(vi00)
-
-    ; A+D destination address the per-vertex color qwords carry in .z
-    ; (0x01 = the RGBAQ register):
-    iaddiu iRegRGBAQ, vi00, 1
+    lq fMVP0,       0(vi00)
+    lq fMVP1,       1(vi00)
+    lq fMVP2,       2(vi00)
+    lq fMVP3,       3(vi00)
+    lq fGSScale,    4(vi00)
+    lq fGSOffset,   5(vi00)
+    lq fClipScale,  6(vi00)
+    lq fColorClamp, 7(vi00)
 
     ; Current double buffer, this batch's counts and lerp constants:
     xtop   iBase
-    ilw.w  iNumVerts, kBatchHeader(iBase)
-    ilw.x  iCullMode, kBatchHeader(iBase)
-    lq     fFrontV,   kFrontV(iBase)
-    lq     fBackV,    kBackV(iBase)
+    ilw.w  iNumVerts,   kBatchHeader(iBase)
+    ilw.x  iCullMode,   kBatchHeader(iBase)
+    lq     fFrontV,     kFrontV(iBase)
+    lq     fBackV,      kBackV(iBase)
+    lq     fShadeLight, kShadeLight(iBase)
 
     ; The same header qword as a vector, for the ST scale in .y/.z. A raw
     ; load, so .x and .w keep the integer bit patterns read above - only

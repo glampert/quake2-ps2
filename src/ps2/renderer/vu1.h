@@ -197,24 +197,30 @@ struct LerpVertexBytes
 };
 
 // Per-vertex attributes for DrawLerpedTriangles - everything but the
-// position. One qword, matching the microprogram's input layout; the
-// same packed-color placement rules as DrawVertex apply.
+// position. One qword, matching the microprogram's input layout.
+//
+// The color is not packed here: 'shade' is the vertex's shade term and the
+// microprogram multiplies the batch's shadeLight by it, clamps and converts,
+// which is the whole of what the EE used to do by building a 162-entry lookup
+// table per entity per frame. It also means this qword holds no packed color,
+// so the denormal rule that governs DrawVertex does not apply - every lane
+// here is a real float meant for the FMAC.
 struct alignas(16) LerpDrawAttrib
 {
-    u32 rgba;      // packed color, use PackColorRGBA()
+    float shade;   // per-vertex shade term, multiplied by the batch's shadeLight
     float s, t, q; // texture coords; q must be 1.0f
 };
 static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qword");
 
 // The one-qword sibling of CopyDrawVertex, for a caller whose source is already
 // laid out as a LerpDrawAttrib - mod::AliasVertex deliberately is, keeping the
-// keyframe index where the color goes so a model's baked attributes reach the
-// batch in one move and the color is written over lane 0 afterwards.
+// keyframe index where the shade goes so a model's baked attributes reach the
+// batch in one move and the shade is written over lane 0 afterwards.
 //
-// Same two reasons as CopyDrawVertex: gcc never forms lq/sq of its own accord,
-// and the packed color must move through the integer path so no FMAC can flush
-// its denormal bit pattern. Templated on the source only to avoid a dependency
-// on the model headers here; the layout is asserted rather than assumed.
+// The reason is gcc, not the FMAC: it never forms lq/sq of its own accord, so a
+// plain struct assignment becomes four ld/sd pairs in the innermost step of the
+// entity gather. Templated on the source only to avoid a dependency on the model
+// headers here; the layout is asserted rather than assumed.
 template<typename SrcT>
 inline void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
 {
@@ -251,8 +257,14 @@ constexpr int kMaxLerpVertsPerBatch = 78;
 // It saves the memory, not the transfer: each chunk still unpacks its own copy
 // into its half of the VU's double buffer, so the DMA carries the same bytes
 // either way.
+// 'shadeLight' is the batch's light color in GS units (0-128 per channel, the
+// entity's shade times the modulate identity) with the vertex alpha in .w. The
+// microprogram builds each vertex's color as clamp(shade * shadeLight), so an
+// all-zero .xyz gives flat black at whatever alpha .w carries - which is how the
+// projected shadow draws without its own attribute stream.
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
+                         const math::Vec4 & shadeLight,
                          const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
                          int vertCount, FaceCull faceCull = FaceCull::None,
                          DrawFlags flags = DrawFlags::None, bool attribsRepeat = false);

@@ -186,6 +186,7 @@ public:
     // supply vu1::kMaxLerpVertsPerBatch of them however long the batch is.
     void Flush(const math::Mat4 & mvp, const tex::Texture & texture,
                const math::Vec3 & frontv, const math::Vec3 & backv,
+               const math::Vec4 & shadeLight,
                const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
                const vu1::LerpDrawAttrib * attribsOverride = nullptr)
     {
@@ -196,7 +197,7 @@ public:
         if (m_vertCount > 0)
         {
             ++view::GetDrawStats().drawBatches;
-            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv,
+            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
                                      m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
                                      m_vertCount, faceCull, flags, (attribsOverride != nullptr));
             m_vertCount = 0;
@@ -210,8 +211,9 @@ public:
     // DrawLerpedTriangles is synchronous - it returns once the GS has consumed
     // the batch - so what the last submission referenced is still sitting there
     // intact. The MD2 shadow is exactly this: the model's own keyframe bytes
-    // under a squashed matrix and a flat attribute stream, which the caller would
-    // otherwise walk the whole glcmds list a second time to rebuild identically.
+    // under a squashed matrix, a flat attribute stream and an all-zero
+    // shadeLight, which the caller would otherwise walk the whole triangle
+    // stream a second time to rebuild identically.
     //
     // Only valid while nothing has been pushed since that Flush, and only worth
     // anything if the geometry went out in a single batch - a caller that filled
@@ -222,6 +224,7 @@ public:
     // frame's fence, like every other buffer the DMA references in place.
     void RedrawLastFlush(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
+                         const math::Vec4 & shadeLight,
                          const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
                          const vu1::LerpDrawAttrib * attribsOverride = nullptr)
     {
@@ -230,7 +233,7 @@ public:
         if (m_lastFlushedCount > 0)
         {
             ++view::GetDrawStats().drawBatches;
-            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv,
+            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
                                      m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
                                      m_lastFlushedCount, faceCull, flags, (attribsOverride != nullptr));
         }

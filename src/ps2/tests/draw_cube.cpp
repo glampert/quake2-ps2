@@ -65,7 +65,14 @@ alignas(16) static vu1::LerpDrawAttrib  s_faceAttribs[kMaxTess * kMaxTess * 6];
 // streams: byte = (coord + H) * 255 / (2H) - the exact inverse of the
 // frontv/backv scale and row-3 offset the vulerp draw sets up. Both
 // keyframes get the same bytes.
-void QuantizeFaceForVuLerp(int numVerts)
+//
+// The lerped program computes its colour from a scalar shade term times a
+// per-batch light, so the cube's per-vertex colour gradient cannot survive the
+// trip: every vertex shades at 1.0 and the face's first corner becomes the
+// batch light, which leaves the six faces differently coloured but flat. This
+// is a bring-up scene for the transform and texturing, so that is enough -
+// returns the light for the caller to hand to the draw.
+math::Vec4 QuantizeFaceForVuLerp(int numVerts)
 {
     constexpr float kQuant = 255.0f / (2.0f * kCubeHalfSize);
 
@@ -81,8 +88,14 @@ void QuantizeFaceForVuLerp(int numVerts)
         s_facePosBytes[v].cur = packed;
         s_facePosBytes[v].old = packed;
 
-        s_faceAttribs[v] = { src.rgba, src.s, src.t, src.q };
+        s_faceAttribs[v] = { 1.0f, src.s, src.t, src.q };
     }
+
+    const u32 rgba = s_faceVerts[0].rgba;
+    return { static_cast<float>(rgba & 0xFFu),
+             static_cast<float>((rgba >> 8) & 0xFFu),
+             static_cast<float>((rgba >> 16) & 0xFFu),
+             static_cast<float>((rgba >> 24) & 0xFFu) };
 }
 
 // Emits the vertex at (u, v) in [0,1]^2 of a face: position and color are the
@@ -239,9 +252,9 @@ void DrawRotatingCube()
 
         if (vuLerp)
         {
-            QuantizeFaceForVuLerp(numVerts);
+            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(numVerts);
             vu1::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
-                                     s_facePosBytes, s_faceAttribs, numVerts);
+                                     shadeLight, s_facePosBytes, s_faceAttribs, numVerts);
         }
         else
         {

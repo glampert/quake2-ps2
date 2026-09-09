@@ -366,6 +366,23 @@ Q_ALWAYS_INLINE u32 ClampColorChannel(float c)
     return (c >= 255.0f) ? 255u : ((c <= 0.0f) ? 0u : static_cast<u32>(c));
 }
 
+// The entity's alpha in GS units. 0x80 is the GS's 1.0, and it is clamped
+// because 'alpha' is whatever the game put on the entity.
+Q_ALWAYS_INLINE float ScaledEntityAlpha(const float alpha)
+{
+    const float scaled = alpha * 128.0f;
+    return (scaled >= 128.0f) ? 128.0f : ((scaled <= 0.0f) ? 0.0f : scaled);
+}
+
+// The entity light the lerped microprogram multiplies each vertex's shade term
+// by, in the same GS units the color LUT below packs: the shade times the
+// modulate identity, with the alpha it should draw at in .w. This is the whole
+// of what the VU path needs; no per-entity table at all.
+Q_ALWAYS_INLINE math::Vec4 VertexShadeLight(const math::Vec3 & shadeLight, const float alpha)
+{
+    return { shadeLight.x * 128.0f, shadeLight.y * 128.0f, shadeLight.z * 128.0f, ScaledEntityAlpha(alpha) };
+}
+
 // Per-entity packed vertex colours, indexed by the current frame's
 // lightnormalindex: min(shadeDots[n] * shadeLight * 128, 255) per channel
 // (128 = unmodulated texels on the GS; the dots exceed 1.0 by design).
@@ -386,14 +403,14 @@ constexpr float kMaxShadeDot = 1.99f;
 // by far - only an entity sitting inside a bright dlight goes over.
 constexpr float kNoClampShadeLight = 255.0f / (128.0f * kMaxShadeDot);
 
+// Packed per-normal colors for the paths that cannot compute them on the VU:
+// the EE lerp paths feed the shared textured program, which the world also
+// draws through and which therefore expects a color already packed. That is the
+// view weapon and the powersuit shells, one or two entities a frame - the
+// VU-lerp path, which is everything else, no longer calls this.
 const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight, const float alpha)
 {
-    // 0x80 is the GS's 1.0. Clamped because 'alpha' is whatever the game put
-    // on the entity, and the same unsigned-cast hazard applies.
-    const float scaledAlpha = alpha * 128.0f;
-    const u32   a = (scaledAlpha >= 128.0f) ? 128u
-                  : (scaledAlpha <= 0.0f)   ? 0u
-                                            : static_cast<u32>(scaledAlpha);
+    const u32 a = static_cast<u32>(ScaledEntityAlpha(alpha));
 
     if (entity.flags & kShellFlags)
     {
@@ -571,8 +588,10 @@ Q_ALWAYS_INLINE void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const
 // Projected shadow
 // ------------------------------------------------------------------------------------------------
 
-// The shadow's attributes: flat black at half alpha, identical for every vertex
-// of every shadow - filled once, referenced forever. Alpha 0x40 = 0.5.
+// The shadow's attributes, identical for every vertex of every shadow - filled
+// once, referenced forever. The colour is not in here: kShadowShadeLight is all
+// zero, so any shade term multiplies out to black and only the alpha in that
+// vector matters. These carry the zeroed ST the untextured draw wants.
 //
 // One VU chunk's worth rather than one batch's worth. Every entry is the same,
 // so the draw takes it as a repeating block that each chunk re-reads from the
@@ -623,6 +642,12 @@ math::Mat4 ShadowMatrix(const entity_t & entity, const LerpConsts & lc,
 // The flags a shadow batch draws with: flat, blended, and never textured.
 constexpr vu1::DrawFlags kShadowFlags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured;
 
+// A shadow's light: no colour at all, so whatever shade term the attribute
+// stream carries multiplies out to black, at the half alpha in .w. This is what
+// lets the shadow reuse the model's own position stream with a constant
+// attribute block - the colour never depended on the vertex to begin with.
+constexpr math::Vec4 kShadowShadeLight = { 0.0f, 0.0f, 0.0f, 64.0f };
+
 // Rebuilds the model's position stream and draws it squashed. The slow path -
 // used only when the model did not go out in a single batch, so the stream the
 // main pass left behind is not the whole of it. See the call site.
@@ -636,7 +661,7 @@ void DrawAliasMD2Shadow(const entity_t & entity, const mod::ModelInstance::Alias
 
     auto flushShadowVerts = [&]()
     {
-        s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull,
+        s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, kShadowShadeLight, faceCull,
                           kShadowFlags, s_shadowAttribs); // Use shadow attribs override.
     };
 
@@ -712,9 +737,11 @@ void InitEntityRendering()
     s_shadows    = Cvar_Get("ps2_md2_shadows",     "1", 0);
     s_clipWeapon = Cvar_Get("ps2_md2_clip_weapon", "1", 0);
 
+    // Shade zero, no texture coords, q = 1. The shadow's colour and alpha come
+    // from kShadowShadeLight, not from here.
     for (vu1::LerpDrawAttrib & attrib : s_shadowAttribs)
     {
-        attrib = { vu1::PackColorRGBA(0, 0, 0, 0x40), 0.0f, 0.0f, 1.0f };
+        attrib = { 0.0f, 0.0f, 0.0f, 1.0f };
     }
 
     for (u32 & color : s_colorLUT)
@@ -766,25 +793,17 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     PS2_Assert(mesh.numXyz > 0 && mesh.numXyz <= MAX_VERTS);
     ++GetDrawStats().entities;
 
-    // Shade colour and per-normal-index vertex colours. The normal index is
-    // read from the *current* frame only - the pose interpolates, the
-    // lighting does not (ref_gl behaviour). 'lightSpot' anchors the shadow.
-    // Timed apart because they scale with completely different things:
-    // ShadeEntity is per entity and walks the dlight list, BuildColorLUT is
-    // kNumVertexNormals packs whatever the scene looks like.
+    // The entity's shade colour. The normal index is read from the *current*
+    // frame only - the pose interpolates, the lighting does not (ref_gl
+    // behaviour). 'lightSpot' anchors the shadow.
     vec3_t lightSpot = {};
     math::Vec3 shadeLight;
-    const u32 * colorLUT;
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::EntShade);
         shadeLight = ShadeEntity(viewDef, entity, lightSpot);
     }
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntColorLUT);
-        const float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
-        colorLUT = BuildColorLUT(entity, shadeLight, alpha);
-    }
 
+    const float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
     const float backlerp = (s_lerpModels->value != 0.0f) ? entity.backlerp : 0.0f;
     const LerpConsts lc = SetUpLerp(entity, frame, oldFrame, backlerp);
     const tex::Texture & skin = SkinForEntity(entity, *model);
@@ -801,6 +820,18 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     const bool clipOnEE = (entity.flags & RF_WEAPONMODEL) && (s_clipWeapon->value != 0.0f);
     const bool vuLerp   = (s_vuLerp->value != 0.0f) && !(entity.flags & kShellFlags) && !clipOnEE;
     const auto faceCull = static_cast<vu1::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
+
+    // The VU path shades on the VU: it takes the entity's light as a batch
+    // constant and each vertex's raw shade dot, so there is no table to build.
+    // The EE paths draw through the shared textured program, which the world
+    // also uses and which therefore wants a color already packed - they still
+    // need the 162-entry LUT, but they are one or two entities a frame.
+    const u32 * colorLUT = nullptr;
+    if (!vuLerp)
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::EntColorLUT);
+        colorLUT = BuildColorLUT(entity, shadeLight, alpha);
+    }
 
     // Translucent entities blend over the finished opaque scene (the entity
     // pass draws them last) with alpha already folded into the colour LUT.
@@ -836,6 +867,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
         if (vuLerp)
         {
+            const math::Vec4 vertexShadeLight = VertexShadeLight(shadeLight, alpha);
+
             // The pose lerp runs on VU1: fold the uniform 'move' term into the matrix.
             const math::Vec4 row3 = math::Transform(
                 math::Vec4{ lc.move.x, lc.move.y, lc.move.z, 1.0f }, mvp);
@@ -852,7 +885,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // all of them every iteration.
             const u32 * const curVerts = KeyframeVertWords(frame);
             const u32 * const oldVerts = KeyframeVertWords(oldFrame);
-            const u32 * const lut = colorLUT;
+            const float * const dots = GetShadeDotsForEntity(entity);
 
             const mod::AliasVertex * src = mesh.vertexes;
             const int numTris = mesh.numTris;
@@ -861,7 +894,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             {
                 if (s_lerpBatch.IsFull())
                 {
-                    s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
+                    s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
+                                      faceCull, batchFlags);
                 }
 
                 const auto tri = s_lerpBatch.PushTriangle();
@@ -888,11 +922,16 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
                     tri.pos[i].cur = curBits;
                     tri.pos[i].old = oldVerts[index];
-                    tri.attrib[i].rgba = lut[curBits >> (DTRIVERTX_LNI * 8)];
+
+                    // The raw shade dot, not a packed color: the microprogram
+                    // multiplies the batch's shadeLight by it and converts. Same
+                    // indexed load and store the color LUT cost, minus the table.
+                    tri.attrib[i].shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
                 }
                 emittedVerts += 3;
             }
-            s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, faceCull, batchFlags);
+            s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
+                              faceCull, batchFlags);
         }
         else
         {
@@ -911,7 +950,6 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // As in the VU path above: by value, so the stores into the gather
             // buffer cannot force these to be re-read every iteration.
             const u32 * const curVerts = KeyframeVertWords(frame);
-            const u32 * const lut = colorLUT;
 
             // A powersuit shell has no skin, so its coordinates are simply zero.
             float scaleS = 0.0f;
@@ -944,7 +982,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
                         corners[i].pos   = { pos.x, pos.y, pos.z, 1.0f };
                         corners[i].st    = { texS * scaleS, texT * scaleT, 0.0f, 0.0f };
-                        corners[i].color = UnpackClipColor(lut[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
+                        corners[i].color = UnpackClipColor(colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
                     }
 
                     GatherClippedTriangle(corners, mvp, skin, flags);
@@ -973,7 +1011,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                         dst[i].y    = pos.y;
                         dst[i].z    = pos.z;
                         dst[i].w    = 1.0f;
-                        dst[i].rgba = lut[curVerts[index] >> (DTRIVERTX_LNI * 8)];
+                        dst[i].rgba = colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)];
                         dst[i].s    = texS * scaleS;
                         dst[i].t    = texT * scaleT;
                         dst[i].q    = 1.0f;
@@ -1006,7 +1044,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         if (vuLerp && emittedVerts > 0 && emittedVerts <= kLerpBatchMaxVerts)
         {
             s_lerpBatch.RedrawLastFlush(ShadowMatrix(entity, lc, viewProj, lightSpot), skin,
-                                        lc.frontv, lc.backv, faceCull,
+                                        lc.frontv, lc.backv, kShadowShadeLight, faceCull,
                                         kShadowFlags, s_shadowAttribs);
         }
         else

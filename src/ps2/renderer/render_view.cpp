@@ -449,6 +449,14 @@ Q_ALWAYS_INLINE bool WorldBackFaceCullEnabled()
 
 void SetupFrame(const refdef_t & viewDef)
 {
+    PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
+
+    lm::BeginFrame();
+
+    s_drawStats = {};
+    s_alphaSurfaceCount = 0;
+    s_alphaEntityMatrixCount = 0;
+
     ++s_frameCount;
 
     s_eyePosition = { viewDef.vieworg[0], viewDef.vieworg[1], viewDef.vieworg[2], 1.0f };
@@ -2817,12 +2825,6 @@ SphereCull FrustumCullsSphere(const vec3_t center, const float radius)
 void RenderFrame(const refdef_t & viewDef)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::View);
-
-    PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
-    s_drawStats              = {};
-    s_alphaSurfaceCount      = 0;
-    s_alphaEntityMatrixCount = 0;
-    lm::BeginFrame();
 
     SetupFrame(viewDef);
 

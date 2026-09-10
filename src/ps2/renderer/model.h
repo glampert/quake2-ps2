@@ -93,6 +93,7 @@ struct alignas(16) AliasVertex
     float s, t; // normalized skin coords, exactly as the glcmds held them
     float q;    // always 1.0f
 };
+
 static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
 
 //
@@ -118,13 +119,8 @@ struct PolyVertex
     u32 lightmapColor;
 };
 
-//
-// Model vertex position.
-//
-struct ModelVertex
-{
-    Vec3 position;
-};
+// See comment below on ModelSurface about why we need this.
+static_assert(sizeof(PolyVertex) == 32, "Update SZ_POLY_VERTEX in src/tools/bspinfo.cpp!");
 
 //
 // Model triangle vertex indexes, into the owning ModelPoly's vertexes[].
@@ -135,14 +131,6 @@ struct ModelVertex
 struct ModelTriangle
 {
     u8 vertexes[3];
-};
-
-//
-// Edge description.
-//
-struct ModelEdge
-{
-    u16 v[2]; // Vertex numbers/indexes.
 };
 
 //
@@ -182,8 +170,8 @@ struct ModelSurface
     int visFrame; // should be drawn when node is crossed.
     cplane_s * plane;
 
-    int firstEdge; // look up in model->surfEdges[], negative numbers are backwards edges.
-    s16 numEdges;  // dface_t::numedges is a s16 on disk, so this cannot truncate.
+    // No surfedge range here: only the loader's polygon builders ever wanted it,
+    // and they take it as a local off the dface_t (see SurfaceEdges in model_load.cpp).
 
     // lightmap tex coordinates, in luxels into the atlas - bounded by the
     // lightmap texture dimensions, far inside s16.
@@ -223,6 +211,12 @@ struct ModelSurface
     // that must be rebuilt from 'samples' once the light stops touching it.
     int lightmapDynamicFrame;
 };
+
+// The world hunk is sized from these two in src/tools/bspinfo.cpp, which cannot
+// include this header (it is a host build, 64-bit pointers). Asserted here so a
+// layout change breaks the build rather than silently invalidating the world
+// arena reservation.
+static_assert(sizeof(ModelSurface) == 92, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
 
 //
 // BSP world node.
@@ -269,20 +263,6 @@ struct ModelLeaf
 };
 
 //
-// Sub-model mesh information.
-//
-struct SubModelInfo
-{
-    Vec3 mins;
-    Vec3 maxs;
-    Vec3 origin;
-    float radius;
-    s16 headNode;
-    u16 firstFace;
-    u16 numFaces;
-};
-
-//
 // Whole model instance (world or entity or sprite).
 //
 // A model is exactly one kind once it has loaded, so the per-type fields share
@@ -307,25 +287,22 @@ struct ModelInstance final
         u16 numSubModels;
         u16 numPlanes;
         u16 numLeafs; // Number of visible leafs, not counting 0.
-        u16 numVertexes;
-        u16 numEdges;
         u16 numNodes;
         s16 firstNode;
         u16 numTexInfos;
         u16 numSurfaces;
-        u16 numSurfEdges;
         u16 numMarkSurfaces;
 
         // Arrays sized by the above counts.
-        SubModelInfo * subModels;
+        //
+        // The BSP's vertex, edge and surfedge lumps are deliberately absent: they
+        // exist only so the loader can rebuild face polygons, and the draw paths
+        // read the baked PolyVertex instead.
         cplane_s * planes;
         ModelLeaf * leafs;
-        ModelVertex * vertexes;
-        ModelEdge * edges;
         ModelNode * nodes;
         ModelTexInfo * texInfos;
         ModelSurface * surfaces;
-        int * surfEdges;
         ModelSurface ** markSurfaces;
 
         // No visibility lump here: the collision model already holds it verbatim
@@ -405,10 +382,43 @@ struct ModelInstance final
 };
 
 // Asserted rather than commented because the model cache holds 544 of these (320
-// pool slots plus MAX_MAP_MODELS inline submodels), so the 84 bytes a slot saves
-// over the flat layout this replaced (308 bytes) is ~45KB. A jump here means a
-// field landed outside the union that should have been inside one.
+// pool slots plus MAX_MAP_MODELS inline submodels). A jump here means a field landed
+// outside the union that should have been inside one.
 static_assert(sizeof(ModelInstance) == 224, "Unexpected ModelInstance size!");
+
+// Narrowing conversions that refuse to truncate. The BSP counts and indices they
+// guard are validated at load, so a failure here is a malformed map rather than
+// something to recover from.
+Q_ALWAYS_INLINE u16 ToU16(const int value)
+{
+    if (value < 0 || value > UINT16_MAX) [[unlikely]]
+    {
+        Sys_Error("%i cannot be represented as u16!", value);
+    }
+    return static_cast<u16>(value);
+}
+
+Q_ALWAYS_INLINE s16 ToS16(const int value)
+{
+    if (value < INT16_MIN || value > INT16_MAX) [[unlikely]]
+    {
+        Sys_Error("%i cannot be represented as s16!", value);
+    }
+    return static_cast<s16>(value);
+}
+
+// Bounding-sphere radius of an axis-aligned box about the origin. Shared because
+// the loader bakes it into brush models and the inline-model setup derives it for
+// each submodel straight off the BSP lump.
+Q_ALWAYS_INLINE float RadiusFromBounds(const Vec3 & mins, const Vec3 & maxs)
+{
+    const Vec3 corner = {
+        math::Maxf(math::Fabsf(mins.x), math::Fabsf(maxs.x)),
+        math::Maxf(math::Fabsf(mins.y), math::Fabsf(maxs.y)),
+        math::Maxf(math::Fabsf(mins.z), math::Fabsf(maxs.z)),
+    };
+    return math::Length(corner);
+}
 
 // ------------------------------------------------------------------------------------------------
 // Model loading and caching API

@@ -51,7 +51,7 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // ------------------------------------------------------------------------------------------------
 // World arena
 //
-// The world hunk is the largest single allocation the program makes - 6.67 MB on
+// The world hunk is the largest single allocation the program makes - 6.57 MB on
 // power2 - and it is allocated and freed on every map change. dlmalloc cannot move
 // live blocks, so once a few hundred longer-lived allocations have settled into the
 // holes left behind, no contiguous run that big survives.
@@ -64,7 +64,7 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // Both capacities come from build/tools/bspinfo, which mirrors the sizers here and
 // reports the worst case over a map set:
 //
-//     WORST HUNK   : power2.bsp needs 6991792 bytes (6.67 MB)
+//     WORST HUNK   : power2.bsp needs 6886368 bytes (6.57 MB)
 //     WORST SCRATCH: lab.bsp    needs  954048 bytes (0.91 MB)
 //
 // with ~4% on top for maps that are not in pak0. Re-run bspinfo after adding a
@@ -83,7 +83,7 @@ constexpr u32 kHunkAlign = 16;
 // out to be the tighter of the two - an earlier 10% margin cost 384 KB and moved the
 // failure from the world hunk to a 1 MB model load. A map that overruns either
 // capacity says so and names the constant to raise, so being wrong is loud.
-constexpr u32 kWorldHunkCapacity    = 7100u * 1024u; // 6.94 MB, power2.bsp + 4.0%
+constexpr u32 kWorldHunkCapacity    = 7000u * 1024u; // 6.84 MB, power2.bsp + 4.1%
 constexpr u32 kWorldScratchCapacity = 972u  * 1024u; // 0.95 MB, lab.bsp + 4.3%
 constexpr u32 kWorldArenaBytes      = kWorldHunkCapacity + kWorldScratchCapacity;
 
@@ -290,7 +290,6 @@ public:
     BspFileReader() = default;
     BspFileReader(const BspFileReader &) = delete;
     BspFileReader & operator=(const BspFileReader &) = delete;
-
     ~BspFileReader() { Close(); }
 
     // Adopts an already-open file positioned at the .bsp's first byte, validates
@@ -304,7 +303,7 @@ public:
         // Lump offsets are relative to the start of the .bsp, which inside a pak
         // is not the start of the stream - the caller left us seeked there.
         m_baseOffset = std::ftell(m_file);
-        if (m_baseOffset < 0)
+        if (m_baseOffset < 0) [[unlikely]]
         {
             Com_Printf("ERROR: LoadBrushModel: Cannot tell position in '%s'!\n", name);
             Close();
@@ -313,13 +312,13 @@ public:
 
         FS_Read(&m_header, static_cast<int>(sizeof(m_header)), m_file);
 
-        if (m_header.ident != IDBSPHEADER)
+        if (m_header.ident != IDBSPHEADER) [[unlikely]]
         {
             Com_Printf("ERROR: LoadBrushModel: '%s' has bad file ident!\n", name);
             Close();
             return false;
         }
-        if (m_header.version != BSPVERSION)
+        if (m_header.version != BSPVERSION) [[unlikely]]
         {
             Com_Printf("ERROR: LoadBrushModel: '%s' has wrong version (%i should be %i)\n",
                        name, m_header.version, BSPVERSION);
@@ -329,7 +328,7 @@ public:
 
         for (const auto & l : m_header.lumps)
         {
-            if (l.fileofs < 0 || l.filelen < 0)
+            if (l.fileofs < 0 || l.filelen < 0) [[unlikely]]
             {
                 Com_Printf("ERROR: LoadBrushModel: '%s' has a negative lump offset/length!\n", name);
                 Close();
@@ -341,7 +340,7 @@ public:
         PS2_AssertMsg(s_worldArena != nullptr, "World arena used before it was reserved!");
 
         m_scratchSize = RequiredScratchBytes();
-        if (m_scratchSize > kWorldScratchCapacity)
+        if (m_scratchSize > kWorldScratchCapacity) [[unlikely]]
         {
             Com_Printf("ERROR: LoadBrushModel: '%s' needs a %u KB lump scratch but the reserved\n"
                        "       arena is only %u KB. Re-run build/tools/bspinfo over this map set\n"
@@ -371,8 +370,10 @@ public:
     // How much of the reserved scratch this map actually needs. Valid until Close().
     u32 ScratchSize() const { return m_scratchSize; }
 
-    // Reads one lump into the scratch buffer at 'atOffset' and returns it. The
-    // result stays valid until another read overlaps it.
+    // Reads one lump into the streaming window and returns it. The result stays
+    // valid until the next ReadLump. 'atOffset' is relative to the window, which
+    // starts past whatever ReadPrePassLumps pinned - so streaming a lump can
+    // never tread on the geometry the polygon builders are still reading.
     const void * ReadLump(const int lumpIndex, const u32 atOffset = 0)
     {
         const lump_t & l = m_header.lumps[lumpIndex];
@@ -380,9 +381,10 @@ public:
 
         // The scratch was sized from these same lengths, so overflowing it means
         // the header changed under us or the sizing rule below is wrong.
-        PS2_AssertMsg(atOffset + len <= m_scratchSize, "BSP lump overruns the scratch buffer!");
+        const u32 at = m_pinnedBytes + atOffset;
+        PS2_AssertMsg(at + len <= m_scratchSize, "BSP lump overruns the scratch buffer!");
 
-        u8 * const dest = m_scratch + atOffset;
+        u8 * const dest = m_scratch + at;
         ReadAt(l, dest);
         return dest;
     }
@@ -395,15 +397,32 @@ public:
     }
 
     // Fills 'out' with the five pre-pass lumps packed back to back in scratch.
+    //
+    // The first kNumPinnedLumps of them - surfedges, edges and vertexes - stay
+    // there for the whole load: the polygon builders read them face by face, and
+    // keeping them here rather than copying them into the hunk is worth ~500 KB.
+    // Everything streamed afterwards lands past them; see ReadLump.
     PrePassLumps ReadPrePassLumps()
     {
         PrePassLumps out{};
-        u32 ofs = 0;
+
+        // Zero for the whole of this loop so the offsets below are absolute: the
+        // pre-pass fills the scratch from the front, pinned lumps included, and
+        // only afterwards does the window move past them.
+        m_pinnedBytes = 0;
+
+        u32 ofs    = 0;
+        u32 pinned = 0;
         for (int i = 0; i < kNumPrePassLumps; ++i)
         {
             const int lump = kPrePassLumps[i];
             const void * const p = ReadLump(lump, ofs);
             ofs += AlignUp(static_cast<u32>(m_header.lumps[lump].filelen), kHunkAlign);
+
+            if (i + 1 == kNumPinnedLumps)
+            {
+                pinned = ofs; // Everything read after this point is disposable.
+            }
 
             switch (lump)
             {
@@ -415,6 +434,10 @@ public:
             default             : break;
             }
         }
+
+        // From here on ReadLump streams past the pinned block, so the geometry the
+        // polygon builders are about to walk cannot be overwritten.
+        m_pinnedBytes = pinned;
         return out;
     }
 
@@ -432,34 +455,55 @@ private:
     // The five the pre-pass walks together, and every lump read through the
     // scratch afterwards. Lighting and visibility are absent from both: they go
     // straight into the hunk.
+    //
+    // The pinned three come first so they occupy one contiguous block at the
+    // front and the streaming window starts after them. They are the geometry the
+    // polygon builders read for the whole of LoadFaces (see BspGeometry).
     static constexpr int kNumPrePassLumps = 5;
+    static constexpr int kNumPinnedLumps  = 3;
     static constexpr int kPrePassLumps[kNumPrePassLumps] = {
-        LUMP_FACES, LUMP_TEXINFO, LUMP_SURFEDGES, LUMP_EDGES, LUMP_VERTEXES
+        LUMP_SURFEDGES, LUMP_EDGES, LUMP_VERTEXES, // pinned
+        LUMP_FACES, LUMP_TEXINFO
     };
     static constexpr int kStreamedLumps[] = {
-        LUMP_FACES, LUMP_TEXINFO, LUMP_SURFEDGES, LUMP_EDGES, LUMP_VERTEXES,
-        LUMP_PLANES, LUMP_LEAFFACES, LUMP_LEAFS, LUMP_NODES, LUMP_MODELS
+        LUMP_FACES, LUMP_TEXINFO, LUMP_PLANES,
+        LUMP_LEAFFACES, LUMP_LEAFS, LUMP_NODES,
+        LUMP_MODELS
     };
 
-    // Big enough for the pre-pass set held together, and for the largest single
-    // lump transformed after it - whichever is larger. Measured over the stock
-    // maps this peaks at ~0.91 MB (lab.bsp), against a 3.1 MB whole-file read.
+    // The pinned block, plus a window big enough for either the rest of the
+    // pre-pass set or the largest lump streamed afterwards. Measured over the
+    // stock maps this peaks at ~0.91 MB (lab.bsp) - unchanged by the pinning,
+    // because faces+texinfo already exceeds every single streamed lump on every
+    // stock map, so the window was that size regardless.
     u32 RequiredScratchBytes() const
     {
-        u32 prePassTotal = 0;
-        for (int i = 0; i < kNumPrePassLumps; ++i)
+        const auto lumpBytes = [this](const int lump) -> u32
         {
-            prePassTotal += AlignUp(static_cast<u32>(m_header.lumps[kPrePassLumps[i]].filelen), kHunkAlign);
+            return AlignUp(static_cast<u32>(m_header.lumps[lump].filelen), kHunkAlign);
+        };
+
+        u32 pinned = 0;
+        for (int i = 0; i < kNumPinnedLumps; ++i)
+        {
+            pinned += lumpBytes(kPrePassLumps[i]);
+        }
+
+        u32 prePassRest = 0;
+        for (int i = kNumPinnedLumps; i < kNumPrePassLumps; ++i)
+        {
+            prePassRest += lumpBytes(kPrePassLumps[i]);
         }
 
         u32 largestSingle = 0;
         for (const int lump : kStreamedLumps)
         {
-            const u32 len = AlignUp(static_cast<u32>(m_header.lumps[lump].filelen), kHunkAlign);
+            const u32 len = lumpBytes(lump);
             if (len > largestSingle) { largestSingle = len; }
         }
 
-        const u32 needed = (prePassTotal > largestSingle) ? prePassTotal : largestSingle;
+        const u32 window = (prePassRest > largestSingle) ? prePassRest : largestSingle;
+        const u32 needed = pinned + window;
         return (needed != 0u) ? needed : kHunkAlign; // never a zero-size allocation
     }
 
@@ -468,6 +512,11 @@ private:
     dheader_t m_header      = {};
     u8 *      m_scratch     = nullptr;
     u32       m_scratchSize = 0;
+
+    // Bytes at the front of the scratch that ReadLump must not tread on; set by
+    // ReadPrePassLumps. Zero until then, which is what lets the pre-pass read the
+    // pinned lumps through the same window.
+    u32       m_pinnedBytes = 0;
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -514,82 +563,66 @@ Q_ALWAYS_INLINE float Project3(const Vec3 & v, const float vec[4])
     return (v.x * vec[0]) + (v.y * vec[1]) + (v.z * vec[2]);
 }
 
+// The BSP's raw vertex/edge/surfedge lumps, pinned in the lump scratch for the
+// duration of the load.
+//
+// None of it reaches the hunk, because nothing outside this file ever reads it:
+// the draw paths read PolyVertex, which BuildPolygonFromSurface bakes out of
+// these. Keeping them out of the hunk is worth 499 KB on power2 and 582 KB on
+// lab - more than the two struct growths that pushed power2 over its reservation
+// in the first place.
+struct BspGeometry
+{
+    const dvertex_t * vertexes;
+    const dedge_t *   edges;
+    const int *       surfEdges;
+    int               numVertexes;
+    int               numEdges;
+    int               numSurfEdges;
+};
+
+// One face's slice of the surfedge lump. Read out of the dface_t in LoadFaces and
+// passed down, rather than parked on ModelSurface: only the polygon builders below
+// want it, and at ~11,500 surfaces a map those six bytes are 90 KB of hunk.
+struct SurfaceEdges
+{
+    int firstEdge;
+    int numEdges;
+};
+
 // Reconstructs a surface vertex position from a surfedge index (negative indices
 // walk the edge backwards). Shared by every surface-processing helper.
-Q_ALWAYS_INLINE const Vec3 & EdgeVertex(const ModelInstance & mdl, int surfEdgeIndex)
+//
+// Returns by value rather than by reference: the source is now the on-disk
+// dvertex_t (three bare floats, same bytes as the Vec3 this used to hand back a
+// reference into), so there is no Vec3 in the scratch to point at.
+Q_ALWAYS_INLINE Vec3 EdgeVertex(const BspGeometry & geom, int surfEdgeIndex)
 {
-    const ModelInstance::BrushData & brush = mdl.Brush();
     if (surfEdgeIndex > 0)
     {
-        return brush.vertexes[brush.edges[surfEdgeIndex].v[0]].position;
+        return ToVec3(geom.vertexes[geom.edges[surfEdgeIndex].v[0]].point);
     }
-    return brush.vertexes[brush.edges[-surfEdgeIndex].v[1]].position;
-}
-
-Q_ALWAYS_INLINE u16 ToU16(const int value)
-{
-    if (value < 0 || value > UINT16_MAX) [[unlikely]]
-    {
-        Sys_Error("%i cannot be represented as u16!", value);
-    }
-    return static_cast<u16>(value);
-}
-
-Q_ALWAYS_INLINE s16 ToS16(const int value)
-{
-    if (value < INT16_MIN || value > INT16_MAX) [[unlikely]]
-    {
-        Sys_Error("%i cannot be represented as s16!", value);
-    }
-    return static_cast<s16>(value);
+    return ToVec3(geom.vertexes[geom.edges[-surfEdgeIndex].v[1]].point);
 }
 
 // ------------------------------------------------------------------------------------------------
 // Brush model lumps
 // ------------------------------------------------------------------------------------------------
 
-void LoadVertexes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
+// Points BspGeometry at the three lumps the pre-pass left pinned in the scratch.
+// There is nothing to convert: the EE is little-endian like the file, so the
+// on-disk dvertex_t / dedge_t / surfedge layouts are already the ones the
+// polygon builders want to read.
+BspGeometry MakeBspGeometry(const PrePassLumps & pre, const dheader_t & header)
 {
-    const auto * in = LumpAs<dvertex_t>(lumpData);
-    const int count = LumpElemCount<dvertex_t>(l);
-
-    ModelVertex * out = hunk.AllocArray<ModelVertex>(count);
-    mdl.Brush().vertexes    = out;
-    mdl.Brush().numVertexes = ToU16(count);
-
-    for (int i = 0; i < count; ++i)
-    {
-        out[i].position = ToVec3(in[i].point);
-    }
-}
-
-void LoadEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
-{
-    const auto * in = LumpAs<dedge_t>(lumpData);
-    const int count = LumpElemCount<dedge_t>(l);
-
-    // One extra sentinel edge, matching ref_gl.
-    ModelEdge * out = hunk.AllocArray<ModelEdge>(count + 1);
-    mdl.Brush().edges    = out;
-    mdl.Brush().numEdges = ToU16(count);
-
-    for (int i = 0; i < count; ++i)
-    {
-        out[i].v[0] = in[i].v[0];
-        out[i].v[1] = in[i].v[1];
-    }
-}
-
-void LoadSurfEdges(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
-{
-    const int * in  = LumpAs<int>(lumpData);
-    const int count = LumpElemCount<int>(l);
-
-    int * out = hunk.AllocArray<int>(count);
-    mdl.Brush().surfEdges    = out;
-    mdl.Brush().numSurfEdges = ToU16(count);
-
-    std::memcpy(out, in, static_cast<size_t>(count) * sizeof(int));
+    return BspGeometry {
+        .vertexes     = LumpAs<dvertex_t>(pre.vertexes),
+        .edges        = LumpAs<dedge_t>(pre.edges),
+        .surfEdges    = LumpAs<int>(pre.surfEdges),
+        .numVertexes  = LumpElemCount<dvertex_t>(header.lumps[LUMP_VERTEXES]),
+        .numEdges     = LumpElemCount<dedge_t>(header.lumps[LUMP_EDGES]),
+        .numSurfEdges = LumpElemCount<int>(header.lumps[LUMP_SURFEDGES])
+    };
 }
 
 // Lighting is copied byte-for-byte, so it is read from the file straight into its
@@ -663,7 +696,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
         std::snprintf(name, sizeof(name), "textures/%s.wal", in[i].texture);
 
         const tex::Texture * texture = tex::Find(name, tex::ImageType::Wall);
-        if (texture == nullptr)
+        if (texture == nullptr) [[unlikely]]
         {
             // A visible checkerboard stands in for a missing wall texture.
             texture = &tex::DebugTexture(0);
@@ -685,7 +718,7 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
     }
 }
 
-void CalcSurfaceExtents(const ModelInstance & mdl, ModelSurface & surf)
+void CalcSurfaceExtents(const BspGeometry & geom, const SurfaceEdges & edges, ModelSurface & surf)
 {
     float mins[2] = { 999999.0f, 999999.0f };
     float maxs[2] = { -99999.0f, -99999.0f };
@@ -693,9 +726,9 @@ void CalcSurfaceExtents(const ModelInstance & mdl, ModelSurface & surf)
     const ModelTexInfo * const tex = surf.texInfo;
     PS2_Assert(tex != nullptr);
 
-    for (int i = 0; i < surf.numEdges; ++i)
+    for (int i = 0; i < edges.numEdges; ++i)
     {
-        const Vec3 & pos = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
+        const Vec3 pos = EdgeVertex(geom, geom.surfEdges[edges.firstEdge + i]);
         for (int j = 0; j < 2; ++j)
         {
             const float val = TexProject(pos, tex->vecs[j]);
@@ -827,7 +860,7 @@ void TriangulatePolygon(ModelPoly & poly)
     // Already a triangle, or a degenerate polygon.
     if (poly.numVerts <= 3)
     {
-        if (poly.numVerts == 3)
+        if (poly.numVerts == 3) [[likely]]
         {
             PS2_Assert(poly.triangles != nullptr);
             poly.triangles->vertexes[0] = 0;
@@ -845,7 +878,7 @@ void TriangulatePolygon(ModelPoly & poly)
     const int numVerts     = poly.numVerts;
     const int numTriangles = numVerts - 2;
 
-    if (numVerts > kTriangulationMaxVerts)
+    if (numVerts > kTriangulationMaxVerts) [[unlikely]]
     {
         // Just make kTriangulationMaxVerts bigger if this ever fires (1 byte/entry).
         Com_Printf("ERROR: TriangulatePolygon: kTriangulationMaxVerts (%i) exceeded!\n", kTriangulationMaxVerts);
@@ -873,7 +906,7 @@ void TriangulatePolygon(ModelPoly & poly)
 
     auto EmitTriangle = [&triesDone, numTriangles, &trisPtr](int v0, int v1, int v2)
     {
-        if (triesDone == numTriangles)
+        if (triesDone == numTriangles) [[unlikely]]
         {
             Com_Printf("ERROR: TriangulatePolygon: Triangle list overflowed!\n");
             return;
@@ -959,7 +992,7 @@ void TriangulatePolygon(ModelPoly & poly)
     // simply has fewer than numVerts - 2 non-degenerate triangles in it, so the
     // count can legitimately come up short. What was emitted still covers the
     // polygon's area; the unused triangles stay zeroed and draw nothing.
-    if (triesDone != numTriangles)
+    if (triesDone != numTriangles) [[unlikely]]
     {
         Com_DPrintf("TriangulatePolygon: %i of %i triangles from a %i-vert polygon (degenerate winding).\n",
                     triesDone, numTriangles, numVerts);
@@ -1017,12 +1050,12 @@ void ComputeSurfaceBounds(ModelSurface & surf)
     surf.boundsRadius = math::Sqrtf(radiusSqr);
 }
 
-void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & surf)
+void BuildPolygonFromSurface(const BspGeometry & geom, const SurfaceEdges & edges,
+                             HunkAllocator & hunk, ModelSurface & surf)
 {
-    PS2_Assert(mdl.Brush().vertexes != nullptr && mdl.Brush().edges != nullptr &&
-               mdl.Brush().surfEdges != nullptr);
+    PS2_Assert(geom.vertexes != nullptr && geom.edges != nullptr && geom.surfEdges != nullptr);
 
-    const int numVerts     = surf.numEdges;
+    const int numVerts     = edges.numEdges;
     const int numTriangles = (numVerts >= 3) ? (numVerts - 2) : 0;
 
     ModelPoly * poly = AllocPolyBlock(hunk, numVerts, numTriangles);
@@ -1039,7 +1072,7 @@ void BuildPolygonFromSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSur
 
     for (int i = 0; i < numVerts; ++i)
     {
-        const Vec3 & pos = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
+        const Vec3 pos = EdgeVertex(geom, geom.surfEdges[edges.firstEdge + i]);
         poly->vertexes[i].position = pos;
 
         // Colour texture coordinates.
@@ -1163,24 +1196,25 @@ void SubdividePolygon(int numVerts, const Vec3 * verts, EmitFn emit)
 
 // Gathers a surface's polygon into 'out' (up to kSubdivideSize verts). Returns
 // the count, or -1 if the surface has more verts than the subdivision buffers hold.
-int GatherSurfaceVerts(const ModelInstance & mdl, const ModelSurface & surf, Vec3 * out)
+int GatherSurfaceVerts(const BspGeometry & geom, const SurfaceEdges & edges, Vec3 * out)
 {
     int count = 0;
-    for (int i = 0; i < surf.numEdges; ++i)
+    for (int i = 0; i < edges.numEdges; ++i)
     {
         if (count >= kSubdivideSize)
         {
             return -1;
         }
-        out[count++] = EdgeVertex(mdl, mdl.Brush().surfEdges[surf.firstEdge + i]);
+        out[count++] = EdgeVertex(geom, geom.surfEdges[edges.firstEdge + i]);
     }
     return count;
 }
 
-void SubdivideSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & surf)
+void SubdivideSurface(const BspGeometry & geom, const SurfaceEdges & edges,
+                      HunkAllocator & hunk, ModelSurface & surf)
 {
     Vec3 verts[kSubdivideSize];
-    const int count = GatherSurfaceVerts(mdl, surf, verts);
+    const int count = GatherSurfaceVerts(geom, edges, verts);
     if (count < 0) [[unlikely]]
     {
         Sys_Error("SubdivideSurface: Max verts exceeded!");
@@ -1223,7 +1257,8 @@ void SubdivideSurface(ModelInstance & mdl, HunkAllocator & hunk, ModelSurface & 
     });
 }
 
-void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
+void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData,
+               const lump_t & l, const BspGeometry & geom)
 {
     PS2_Assert(mdl.Brush().planes != nullptr && mdl.Brush().texInfos != nullptr); // Load these first.
 
@@ -1241,8 +1276,6 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
     for (int surfNum = 0; surfNum < count; ++surfNum)
     {
         ModelSurface & surf = out[surfNum];
-        surf.firstEdge = in[surfNum].firstedge;
-        surf.numEdges  = in[surfNum].numedges;
         surf.flags     = SurfaceFlags::None;
         surf.polys     = nullptr;
         surf.lightmapTextureNum = kNotLightmapped;
@@ -1260,7 +1293,11 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
         }
         surf.texInfo = mdl.Brush().texInfos + texNum;
 
-        CalcSurfaceExtents(mdl, surf);
+        // The face's surfedge range travels as a local: the polygon builders below
+        // are the last things that ever want it.
+        const SurfaceEdges edges = { in[surfNum].firstedge, in[surfNum].numedges };
+
+        CalcSurfaceExtents(geom, edges, surf);
 
         // Lightmap styles / sample pointer (lightmap building itself is stubbed).
         for (int i = 0; i < kMaxLightmaps; ++i)
@@ -1290,11 +1327,11 @@ void LoadFaces(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
                 surf.extents[i]     = 16384;
                 surf.textureMins[i] = -8192;
             }
-            SubdivideSurface(mdl, hunk, surf);
+            SubdivideSurface(geom, edges, hunk, surf);
         }
         else
         {
-            BuildPolygonFromSurface(mdl, hunk, surf);
+            BuildPolygonFromSurface(geom, edges, hunk, surf);
         }
 
         ComputeSurfaceBounds(surf);
@@ -1426,37 +1463,16 @@ void LoadNodes(ModelInstance & mdl, HunkAllocator & hunk, const void * const lum
     SetParentRecursive(mdl.Brush().nodes, nullptr);
 }
 
-float RadiusFromBounds(const Vec3 & mins, const Vec3 & maxs)
+// Nothing to load: the submodels are handed to the caller where they lie in the
+// scratch, and the count is all the model itself keeps (FindInlineModel range
+// checks against it). See SubModelTable.
+void LoadSubModels(ModelInstance & mdl, const void * const lumpData, const lump_t & l, SubModelTable & outSubModels)
 {
-    const Vec3 corner = {
-        math::Maxf(math::Fabsf(mins.x), math::Fabsf(maxs.x)),
-        math::Maxf(math::Fabsf(mins.y), math::Fabsf(maxs.y)),
-        math::Maxf(math::Fabsf(mins.z), math::Fabsf(maxs.z)),
-    };
-    return math::Length(corner);
-}
-
-void LoadSubModels(ModelInstance & mdl, HunkAllocator & hunk, const void * const lumpData, const lump_t & l)
-{
-    const auto * in = LumpAs<dmodel_t>(lumpData);
     const int count = LumpElemCount<dmodel_t>(l);
 
-    SubModelInfo * out = hunk.AllocArray<SubModelInfo>(count);
-    mdl.Brush().subModels    = out;
     mdl.Brush().numSubModels = ToU16(count);
-
-    for (int i = 0; i < count; ++i)
-    {
-        // Spread the bounds by a unit, matching ref_gl.
-        out[i].mins   = { in[i].mins[0] - 1.0f, in[i].mins[1] - 1.0f, in[i].mins[2] - 1.0f };
-        out[i].maxs   = { in[i].maxs[0] + 1.0f, in[i].maxs[1] + 1.0f, in[i].maxs[2] + 1.0f };
-        out[i].origin = ToVec3(in[i].origin);
-
-        out[i].radius    = RadiusFromBounds(out[i].mins, out[i].maxs);
-        out[i].headNode  = ToS16(in[i].headnode);
-        out[i].firstFace = ToU16(in[i].firstface);
-        out[i].numFaces  = ToU16(in[i].numfaces);
-    }
+    outSubModels.models      = lumpData;
+    outSubModels.count       = count;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1469,9 +1485,9 @@ void LoadSubModels(ModelInstance & mdl, HunkAllocator & hunk, const void * const
 // ------------------------------------------------------------------------------------------------
 
 // filelen must be a whole multiple of elemSize. Returns the element count, or -1.
-int CheckedLumpCount(const lump_t & l, size_t elemSize, const char * what, const char * name)
+Q_ALWAYS_INLINE int CheckedLumpCount(const lump_t & l, size_t elemSize, const char * what, const char * name)
 {
-    if ((static_cast<size_t>(l.filelen) % elemSize) != 0)
+    if ((static_cast<size_t>(l.filelen) % elemSize) != 0) [[unlikely]]
     {
         Com_Printf("ERROR: LoadBrushModel: Funny %s lump size in '%s'\n", what, name);
         return -1;
@@ -1483,21 +1499,21 @@ bool ComputeBrushHunkSize(const dheader_t * header, const PrePassLumps & pre, co
 {
     HunkSizer m{};
 
+    // Vertexes, edges and surfedges reserve nothing: they stay in the lump scratch
+    // and never reach the hunk (see BspGeometry). Still validated here, because
+    // the polygon builders index them unchecked.
     const int numVertexes = CheckedLumpCount(header->lumps[LUMP_VERTEXES], sizeof(dvertex_t), "vertexes", name);
     if (numVertexes < 0) { return false; }
-    m.AddArray<ModelVertex>(numVertexes);
 
     const int numEdges = CheckedLumpCount(header->lumps[LUMP_EDGES], sizeof(dedge_t), "edges", name);
     if (numEdges < 0) { return false; }
-    m.AddArray<ModelEdge>(numEdges + 1);
 
     const int numSurfEdges = CheckedLumpCount(header->lumps[LUMP_SURFEDGES], sizeof(int), "surfedges", name);
-    if (numSurfEdges < 1 || numSurfEdges >= MAX_MAP_SURFEDGES)
+    if (numSurfEdges < 1 || numSurfEdges >= MAX_MAP_SURFEDGES) [[unlikely]]
     {
         Com_Printf("ERROR: LoadBrushModel: Bad surfedges count in '%s': %i\n", name, numSurfEdges);
         return false;
     }
-    m.AddArray<int>(numSurfEdges);
 
     const int lightingLen = header->lumps[LUMP_LIGHTING].filelen;
     if (lightingLen > 0) { m.Add(static_cast<u32>(lightingLen)); }
@@ -1544,7 +1560,7 @@ bool ComputeBrushHunkSize(const dheader_t * header, const PrePassLumps & pre, co
             const int firstEdge = faces[f].firstedge;
             for (int i = 0; i < numEdgesForFace; ++i)
             {
-                if (vertCount >= kSubdivideSize)
+                if (vertCount >= kSubdivideSize) [[unlikely]]
                 {
                     Com_Printf("ERROR: LoadBrushModel: Warp surface too large in '%s'\n", name);
                     return false;
@@ -1576,9 +1592,11 @@ bool ComputeBrushHunkSize(const dheader_t * header, const PrePassLumps & pre, co
     if (numNodes < 0) { return false; }
     m.AddArray<ModelNode>(numNodes);
 
+    // Submodels reserve nothing either - they are handed back where they lie in
+    // the scratch and read once (see SubModelTable). Still counted, because the
+    // count is what FindInlineModel range checks against.
     const int numSubModels = CheckedLumpCount(header->lumps[LUMP_MODELS], sizeof(dmodel_t), "models", name);
     if (numSubModels < 0) { return false; }
-    m.AddArray<SubModelInfo>(numSubModels);
 
     outSize = m.BytesUsed();
     return true;
@@ -1611,7 +1629,7 @@ bool IsWorldArenaBlock(const void * const ptr)
 // BRUSH MODELS (WORLD MAP)
 // ------------------------------------------------------------------------------------------------
 
-bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const fileName)
+bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const fileName, SubModelTable & outSubModels)
 {
     PS2_Assert(file != nullptr && fileName != nullptr);
 
@@ -1636,13 +1654,17 @@ bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const f
 
     // Pass 1: measure. Needs the five geometry lumps together, since the warp
     // faces are sized by actually running the subdivision over their vertices.
+    //
+    // The read outlives the measuring: surfedges, edges and vertexes stay pinned
+    // at the front of the scratch and LoadFaces reads them from there, so they
+    // never reach the hunk at all.
+    const PrePassLumps pre = bsp.ReadPrePassLumps();
+    const BspGeometry geom = MakeBspGeometry(pre, header);
+
     u32 hunkSize = 0;
+    if (!ComputeBrushHunkSize(&header, pre, mdl.name, hunkSize))
     {
-        const PrePassLumps pre = bsp.ReadPrePassLumps();
-        if (!ComputeBrushHunkSize(&header, pre, mdl.name, hunkSize))
-        {
-            return false;
-        }
+        return false;
     }
 
     HunkAllocator hunk{};
@@ -1662,18 +1684,16 @@ bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const f
     // the scratch entirely; it keeps its original slot in the sequence because
     // LoadFaces resolves surf.samples against mdl.Brush().lightData, which therefore has
     // to be in place before it runs. LUMP_VISIBILITY is not read at all any more -
-    // cmodel.c owns it (see MarkLeaves).
-    LoadVertexes(mdl, hunk, bsp.ReadLump(LUMP_VERTEXES), header.lumps[LUMP_VERTEXES]);
-    LoadEdges(mdl, hunk, bsp.ReadLump(LUMP_EDGES), header.lumps[LUMP_EDGES]);
-    LoadSurfEdges(mdl, hunk, bsp.ReadLump(LUMP_SURFEDGES), header.lumps[LUMP_SURFEDGES]);
+    // cmodel.c owns it (see MarkLeaves). Vertexes, edges and surfedges are absent
+    // too: 'geom' already points at them, pinned in the scratch by the pre-pass.
     LoadLightingInto(mdl, hunk, bsp, header.lumps[LUMP_LIGHTING]);
     LoadPlanes(mdl, hunk, bsp.ReadLump(LUMP_PLANES), header.lumps[LUMP_PLANES]);
     LoadTexInfo(mdl, hunk, bsp.ReadLump(LUMP_TEXINFO), header.lumps[LUMP_TEXINFO]);
-    LoadFaces(mdl, hunk, bsp.ReadLump(LUMP_FACES), header.lumps[LUMP_FACES]);
+    LoadFaces(mdl, hunk, bsp.ReadLump(LUMP_FACES), header.lumps[LUMP_FACES], geom);
     LoadMarkSurfaces(mdl, hunk, bsp.ReadLump(LUMP_LEAFFACES), header.lumps[LUMP_LEAFFACES]);
     LoadLeafs(mdl, hunk, bsp.ReadLump(LUMP_LEAFS), header.lumps[LUMP_LEAFS]);
     LoadNodes(mdl, hunk, bsp.ReadLump(LUMP_NODES), header.lumps[LUMP_NODES]);
-    LoadSubModels(mdl, hunk, bsp.ReadLump(LUMP_MODELS), header.lumps[LUMP_MODELS]);
+    LoadSubModels(mdl, bsp.ReadLump(LUMP_MODELS), header.lumps[LUMP_MODELS], outSubModels);
 
     mdl.numFrames = 2; // Regular and alternate animation.
 

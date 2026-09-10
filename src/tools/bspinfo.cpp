@@ -105,7 +105,6 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
     /* 18 */ { "AREAPORTALS", 8,  64,      "MAX_MAP_AREAPORTALS", true  },
 };
 
-
 /*
  * ================================================================================================
  * World hunk sizing
@@ -132,19 +131,18 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
    (we can't easily include model.h here because of ps2sdk header dependencies,
    but also, pointers on the EE are 32 bits and this a host 64 bits executable,
    so all sizes would be wrong!). */
-#define SZ_MODEL_VERTEX     12
-#define SZ_MODEL_EDGE        4
-#define SZ_SURF_EDGE         4  /* int */
+/* The BSP's vertex, edge and surfedge lumps stay in the loader's lump scratch and
+   never reach the hunk, so they have no size here - see BspGeometry in
+   model_load.cpp. Same for the submodel table; see SubModelTable. */
 #define SZ_CPLANE           20
 #define SZ_MODEL_TEXINFO    44
-#define SZ_MODEL_SURFACE    84
+#define SZ_MODEL_SURFACE    92
 #define SZ_MODEL_POLY       16
-#define SZ_POLY_VERTEX      28
+#define SZ_POLY_VERTEX      32
 #define SZ_MODEL_TRIANGLE    3
 #define SZ_MARK_SURFACE      4  /* ModelSurface * */
 #define SZ_MODEL_LEAF       52
 #define SZ_MODEL_NODE       52
-#define SZ_SUBMODEL_INFO    48
 
 /* From model.h / q_files.h. */
 #define SUBDIVIDE_SIZE      64
@@ -278,17 +276,25 @@ static bool subdivide_polygon(int num_verts, const vec3_t3 * verts, long * out_b
    load today and is a candidate for the same up-front reservation. */
 static long compute_scratch_size(const bsp_header_t * hdr)
 {
-    /* LUMP_FACES, TEXINFO, SURFEDGES, EDGES, VERTEXES */
-    static const int pre_pass[]  = { 6, 5, 12, 11, 2 };
-    /* the above, plus PLANES, LEAFFACES, LEAFS, NODES, MODELS */
-    static const int streamed[]  = { 6, 5, 12, 11, 2, 1, 9, 8, 4, 13 };
+    /* SURFEDGES, EDGES, VERTEXES - pinned at the front for the whole load, since
+       the polygon builders read them face by face instead of copying them into
+       the hunk. */
+    static const int pinned[]    = { 12, 11, 2 };
+    /* The rest of the pre-pass set: LUMP_FACES, TEXINFO. */
+    static const int pre_rest[]  = { 6, 5 };
+    /* Everything read through the streaming window after the pre-pass. */
+    static const int streamed[]  = { 6, 5, 1, 9, 8, 4, 13 };
 
-    long pre_total = 0, largest = 0, needed;
+    long pinned_total = 0, rest_total = 0, largest = 0, window, needed;
     size_t i;
 
-    for (i = 0; i < sizeof(pre_pass) / sizeof(pre_pass[0]); ++i)
+    for (i = 0; i < sizeof(pinned) / sizeof(pinned[0]); ++i)
     {
-        pre_total += align_up(hdr->lumps[pre_pass[i]].filelen, HUNK_ALIGN);
+        pinned_total += align_up(hdr->lumps[pinned[i]].filelen, HUNK_ALIGN);
+    }
+    for (i = 0; i < sizeof(pre_rest) / sizeof(pre_rest[0]); ++i)
+    {
+        rest_total += align_up(hdr->lumps[pre_rest[i]].filelen, HUNK_ALIGN);
     }
     for (i = 0; i < sizeof(streamed) / sizeof(streamed[0]); ++i)
     {
@@ -296,7 +302,8 @@ static long compute_scratch_size(const bsp_header_t * hdr)
         if (len > largest) { largest = len; }
     }
 
-    needed = (pre_total > largest) ? pre_total : largest;
+    window = (rest_total > largest) ? rest_total : largest;
+    needed = pinned_total + window;
     return (needed != 0) ? needed : HUNK_ALIGN;
 }
 
@@ -310,24 +317,18 @@ static long compute_brush_hunk_size(const bsp_header_t * hdr, const unsigned cha
     const d_edge_t    * edges      = (const d_edge_t *)   (data + hdr->lumps[11].fileofs);
     const d_vertex_t  * vertexes   = (const d_vertex_t *) (data + hdr->lumps[2].fileofs);
 
-    const int num_vertexes = hdr->lumps[2].filelen  / (int)sizeof(d_vertex_t);
-    const int num_edges    = hdr->lumps[11].filelen / (int)sizeof(d_edge_t);
-    const int num_surfedge = hdr->lumps[12].filelen / (int)sizeof(int);
+    /* vertexes/edges/surfedges are still read - the warp subdivision walks them -
+       but they reserve no hunk of their own; see the SZ_ block above. */
     const int num_planes   = hdr->lumps[1].filelen  / 20;
     const int num_texinfo  = hdr->lumps[5].filelen  / (int)sizeof(d_texinfo_t);
     const int num_faces    = hdr->lumps[6].filelen  / (int)sizeof(d_face_t);
     const int num_marksurf = hdr->lumps[9].filelen  / 2;
     const int num_leafs    = hdr->lumps[8].filelen  / 28;
     const int num_nodes    = hdr->lumps[4].filelen  / 28;
-    const int num_models   = hdr->lumps[13].filelen / 48;
     const int lighting_len = hdr->lumps[7].filelen;
 
     long total = 0;
     int f, i;
-
-    total += align_up((long)num_vertexes * SZ_MODEL_VERTEX, HUNK_ALIGN);
-    total += align_up((long)(num_edges + 1) * SZ_MODEL_EDGE, HUNK_ALIGN);
-    total += align_up((long)num_surfedge * SZ_SURF_EDGE, HUNK_ALIGN);
 
     if (lighting_len > 0)
     {
@@ -384,7 +385,6 @@ static long compute_brush_hunk_size(const bsp_header_t * hdr, const unsigned cha
     /* No VISIBILITY term: cmodel.c owns that lump, the view walk reads it via CM_ClusterPVS. */
     total += align_up((long)num_leafs * SZ_MODEL_LEAF, HUNK_ALIGN);
     total += align_up((long)num_nodes * SZ_MODEL_NODE, HUNK_ALIGN);
-    total += align_up((long)num_models * SZ_SUBMODEL_INFO, HUNK_ALIGN);
 
     return total;
 }

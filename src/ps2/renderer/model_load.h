@@ -24,6 +24,18 @@ void ReserveWorldArena();
 // passed to ps2::heap::Free. ModelCache::Unload checks this before releasing a hunk.
 bool IsWorldArenaBlock(const void * ptr);
 
+// The map's submodel table, handed back rather than parked in the hunk.
+//
+// It points at the raw dmodel_t array in the lump scratch: ModelCache's inline
+// model setup is its only reader and runs immediately after this returns, so a
+// converted copy would hold up to 9 KB of world hunk for the life of the map to
+// be read exactly once. Valid until the next brush model load.
+struct SubModelTable
+{
+    const void * models; // dmodel_t[count]; the EE reads the file layout directly
+    int count;
+};
+
 // All three take an open file positioned at the model's first byte, and none of
 // them closes it - the caller opened it to read the format tag and owns it.
 //
@@ -34,7 +46,7 @@ bool IsWorldArenaBlock(const void * ptr);
 // holds a whole model file and a copy of it at once, which for the biggest MD2
 // in pak0 would be ~2 MB. The MD2 conversion's one scratch buffer is its glcmds
 // block, 32 KB at worst and freed before the keyframes are read.
-bool LoadBrushModel(ModelInstance & outModel, FILE * file, const char * fileName);
+bool LoadBrushModel(ModelInstance & outModel, FILE * file, const char * fileName, SubModelTable & outSubModels);
 bool LoadSpriteModel(ModelInstance & outModel, FILE * file, int fileLen);
 bool LoadAliasMD2Model(ModelInstance & outModel, FILE * file, int fileLen);
 

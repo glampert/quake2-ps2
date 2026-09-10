@@ -59,7 +59,7 @@ private:
     void LoadWorldModel(const char * mapName);
 
     const ModelInstance * FindInlineModel(const char * name);
-    void SetUpInlineModels(ModelInstance & world);
+    void SetUpInlineModels(ModelInstance & world, const SubModelTable & subModels);
 
     void ReferenceAllTextures(ModelInstance & mdl);
     void Unload(u16 slot);
@@ -231,8 +231,9 @@ const ModelInstance * ModelCache::LoadModel(const char * const name)
                       "Loading a brush model while another still holds the world arena!");
 
         // Streams the file lump by lump - never holds the whole .bsp.
-        ok = LoadBrushModel(mdl, file, name);
-        if (ok) { SetUpInlineModels(mdl); }
+        SubModelTable subModels{};
+        ok = LoadBrushModel(mdl, file, name, subModels);
+        if (ok) { SetUpInlineModels(mdl, subModels); }
     }
     else
     {
@@ -273,9 +274,17 @@ const ModelInstance * ModelCache::FindInlineModel(const char * const name)
     return &m_inlineModels[idx];
 }
 
-void ModelCache::SetUpInlineModels(ModelInstance & world)
+// Builds the inline (*N) submodels from the map's dmodel_t table.
+//
+// Reads the BSP lump directly rather than a converted copy: this runs once, on
+// the line after the load returns, and the table lives in the loader's scratch
+// (see SubModelTable). The conversion is the one ref_gl does - spread the bounds
+// by a unit, then take the sphere that covers them.
+void ModelCache::SetUpInlineModels(ModelInstance & world, const SubModelTable & subModels)
 {
     ModelInstance::BrushData & worldBrush = world.Brush();
+    const auto * const sm = static_cast<const dmodel_t *>(subModels.models);
+    PS2_Assert(sm != nullptr || subModels.count == 0);
 
     if (worldBrush.numSubModels > static_cast<int>(kMaxInlineModels)) [[unlikely]]
     {
@@ -285,8 +294,11 @@ void ModelCache::SetUpInlineModels(ModelInstance & world)
 
     for (int i = 0; i < worldBrush.numSubModels; ++i)
     {
-        const SubModelInfo & sm = worldBrush.subModels[i];
         ModelInstance & inl = m_inlineModels[i];
+
+        // Spread the bounds by a unit, matching ref_gl.
+        const Vec3 mins = { sm[i].mins[0] - 1.0f, sm[i].mins[1] - 1.0f, sm[i].mins[2] - 1.0f };
+        const Vec3 maxs = { sm[i].maxs[0] + 1.0f, sm[i].maxs[1] + 1.0f, sm[i].maxs[2] + 1.0f };
 
         // Alias the world's geometry, then override the per-submodel bounds and
         // surface/node range. Inline models never own the hunk (the world does),
@@ -298,12 +310,12 @@ void ModelCache::SetUpInlineModels(ModelInstance & world)
         ModelInstance::BrushData & inlBrush = inl.Brush();
         inlBrush.isInline = true;
 
-        inlBrush.firstModelSurface = sm.firstFace;
-        inlBrush.numModelSurfaces  = sm.numFaces;
-        inlBrush.firstNode         = sm.headNode;
-        inlBrush.mins              = sm.mins;
-        inlBrush.maxs              = sm.maxs;
-        inlBrush.radius            = sm.radius;
+        inlBrush.firstModelSurface = ToU16(sm[i].firstface);
+        inlBrush.numModelSurfaces  = ToU16(sm[i].numfaces);
+        inlBrush.firstNode         = ToS16(sm[i].headnode);
+        inlBrush.mins              = mins;
+        inlBrush.maxs              = maxs;
+        inlBrush.radius            = RadiusFromBounds(mins, maxs);
 
         // Quake 2's on-disk dmodel_t carries no leaf count, and inline models
         // never walk the leaf array; only the world's LoadLeafs count matters.
@@ -319,12 +331,12 @@ void ModelCache::SetUpInlineModels(ModelInstance & world)
         // LoadLeafs, or MarkLeaves would have no leafs to stamp visible.
         if (i == 0)
         {
-            worldBrush.firstModelSurface = sm.firstFace;
-            worldBrush.numModelSurfaces  = sm.numFaces;
-            worldBrush.firstNode         = sm.headNode;
-            worldBrush.mins              = sm.mins;
-            worldBrush.maxs              = sm.maxs;
-            worldBrush.radius            = sm.radius;
+            worldBrush.firstModelSurface = ToU16(sm[i].firstface);
+            worldBrush.numModelSurfaces  = ToU16(sm[i].numfaces);
+            worldBrush.firstNode         = ToS16(sm[i].headnode);
+            worldBrush.mins              = mins;
+            worldBrush.maxs              = maxs;
+            worldBrush.radius            = RadiusFromBounds(mins, maxs);
         }
     }
 }

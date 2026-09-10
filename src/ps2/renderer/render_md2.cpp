@@ -565,12 +565,13 @@ Q_ALWAYS_INLINE math::Vec4 UnpackClipColor(u32 rgba)
              static_cast<float>((rgba >> 24) & 0xFF) };
 }
 
-Q_ALWAYS_INLINE u32 PackClipColor(const math::Vec4 & c)
+Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
 {
     const auto channel = [](float f) -> u32
     {
         return (f <= 0.0f) ? 0u : (f >= 255.0f) ? 255u : static_cast<u32>(f + 0.5f);
     };
+    const math::Vec4 & c = v.color;
     return channel(c.x) | (channel(c.y) << 8) | (channel(c.z) << 16) | (channel(c.w) << 24);
 }
 
@@ -580,8 +581,7 @@ Q_ALWAYS_INLINE u32 PackClipColor(const math::Vec4 & c)
 Q_ALWAYS_INLINE void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & mvp,
                                            const tex::Texture & texture, const vu1::DrawFlags flags)
 {
-    s_batch.GatherTriangle(corners, mvp, texture, flags,
-                           [](const clip::ClipVertex & v) { return PackClipColor(v.color); });
+    s_batch.GatherTriangle(corners, mvp, texture, flags, PackClipColor);
 }
 
 // ------------------------------------------------------------------------------------------------

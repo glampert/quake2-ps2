@@ -141,7 +141,7 @@ struct alignas(16) DrawVertex
     u32   rgba;       // packed color, use PackColorRGBA()
     float s, t, q;    // texture coords; q must be 1.0f
 };
-static_assert(sizeof(DrawVertex) == 32, "DrawVertex must be exactly 2 qwords");
+static_assert(sizeof(DrawVertex)  == 32, "DrawVertex must be exactly 2 qwords");
 static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword alignment");
 
 // Copies one gathered vertex whole, in two of the R5900's 128-bit moves.
@@ -157,7 +157,7 @@ static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword a
 //
 // Constrained rather than clobbering "memory", so a caller copying several
 // vertices in a row keeps its own state in registers across them.
-inline void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
+Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 {
     asm volatile (
         "lq $8, 0x00(%1) \n\t"
@@ -222,7 +222,7 @@ static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qw
 // entity gather. Templated on the source only to avoid a dependency on the model
 // headers here; the layout is asserted rather than assumed.
 template<typename SrcT>
-inline void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
+Q_ALWAYS_INLINE void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
 {
     static_assert(sizeof(SrcT) == sizeof(LerpDrawAttrib) && alignof(SrcT) == 16,
                   "CopyLerpAttrib's lq/sq need one qword-aligned qword");

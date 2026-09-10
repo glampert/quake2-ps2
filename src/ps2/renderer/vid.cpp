@@ -88,7 +88,8 @@ void VID_Shutdown()
 // so there is nothing to reload here.
 void VID_CheckChanges() {}
 
-// Video menu is not implemented yet.
+// TODO: Implement a video menu with some render options to tweak (via our PS2 cvars).
+// E.g.: options to select the dlights mode, lightmap settings, dither, etc.
 void VID_MenuInit() {}
 void VID_MenuDraw() {}
 const char * VID_MenuKey(int key) { (void)key; return nullptr; }

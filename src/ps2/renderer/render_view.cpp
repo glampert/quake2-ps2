@@ -1046,7 +1046,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
     // TriangulatePolygon refuses a polygon wider than the cache and leaves its
     // triangle list degenerate, so one draws nothing by either route; bailing
     // here keeps the cache fill in bounds without a second bound to check.
-    if (poly.numVerts > mod::kTriangulationMaxVerts)
+    if (poly.numVerts > mod::kTriangulationMaxVerts) [[unlikely]]
     {
         return;
     }
@@ -1078,7 +1078,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
     for (int t = 0; t < numTriangles; ++t)
     {
         const mod::ModelTriangle & tri = tris[t];
-        if (tri.vertexes[0] == tri.vertexes[1])
+        if (tri.vertexes[0] == tri.vertexes[1]) [[unlikely]]
         {
             continue; // Degenerate leftover from the triangulation.
         }
@@ -1130,7 +1130,7 @@ void GatherPolyTriangles(const mod::ModelPoly & poly,
 
         // Polygons the triangulation couldn't complete leave zeroed
         // (degenerate) triangles behind; skip them.
-        if (tri.vertexes[0] == tri.vertexes[1])
+        if (tri.vertexes[0] == tri.vertexes[1]) [[unlikely]]
         {
             continue;
         }
@@ -1363,10 +1363,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
-                if (poly->numVerts >= 3) // Need at least one triangle.
-                {
-                    GatherPolyTriangles(*poly, *texture, state);
-                }
+                GatherPolyTriangles(*poly, *texture, state);
             }
         }
         FlushScratch(*texture, state);
@@ -1401,8 +1398,8 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     }
 
     SurfaceDrawState state = base;
-    state.rgba           = kFullBright; // alpha 0x80 keeps the luxel's own alpha
-    state.flags          = vu1::DrawFlags::Modulate;
+    state.rgba = kFullBright; // alpha 0x80 keeps the luxel's own alpha
+    state.flags = vu1::DrawFlags::Modulate;
 
     // Dynamic lights ride this pass rather than a third one: the Modulate blend
     // leaves its source-colour term at zero, so the vertex colour was going
@@ -1446,10 +1443,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
-                if (poly->numVerts >= 3) // Need at least one triangle.
-                {
-                    GatherPolyTriangles(*poly, atlas, state);
-                }
+                GatherPolyTriangles(*poly, atlas, state);
             }
         }
         FlushScratch(atlas, state);
@@ -1635,10 +1629,7 @@ void RenderAlphaSurfaces()
 
         for (const mod::ModelPoly * poly = entry.surf->polys; poly != nullptr; poly = poly->next)
         {
-            if (poly->numVerts >= 3) // Need at least one triangle.
-            {
-                GatherPolyTriangles(*poly, *entry.texture, state);
-            }
+            GatherPolyTriangles(*poly, *entry.texture, state);
         }
     }
 
@@ -2199,10 +2190,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         ++s_drawStats.surfaces;
         for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
         {
-            if (poly->numVerts >= 3)
-            {
-                GatherPolyTriangles(*poly, *texture, state);
-            }
+            GatherPolyTriangles(*poly, *texture, state);
         }
     }
 

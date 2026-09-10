@@ -16,31 +16,32 @@
 
 namespace ps2::prof_evt {
 
-PS2_PROFILE_DEFINE_EVENT(Frame,      "Frame",      kScreenOverlay, 0);
-PS2_PROFILE_DEFINE_EVENT(VSync,      "VSync",      kScreenOverlay, 1);
-PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",     kScreenOverlay, 2);
-PS2_PROFILE_DEFINE_EVENT(DmaSend,    "DmaSend",    kScreenOverlay, 3);
-PS2_PROFILE_DEFINE_EVENT(View,       "View",       kScreenOverlay, 4);
-PS2_PROFILE_DEFINE_EVENT(World,      "World",      kScreenOverlay, 5);
-PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",        kScreenOverlay, 6);
-PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",    kScreenOverlay, 7);
-PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",   kScreenOverlay, 8);
-PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",  kScreenOverlay, 9);
-PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",  kScreenOverlay, 10);
-PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",   kScreenOverlay, 11);
-PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",   kScreenOverlay, 12);
-PS2_PROFILE_DEFINE_EVENT(EntCull,    " Cull",      kScreenOverlay, 13);
-PS2_PROFILE_DEFINE_EVENT(EntShade,   " Shade",     kScreenOverlay, 14);
-PS2_PROFILE_DEFINE_EVENT(EntColorLUT," ColorLUT",  kScreenOverlay, 15);
-PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",      kScreenOverlay, 16);
-PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",    kScreenOverlay, 17);
-PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",     kScreenOverlay, 18);
-PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",  kScreenOverlay, 19);
-PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs", kScreenOverlay, 20);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",        kScreenOverlay, 21);
-PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",         kScreenOverlay, 22);
-PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",    kScreenOverlay, 23);
-PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",      kScreenOverlay, 24);
+PS2_PROFILE_DEFINE_EVENT(Frame,      "Frame",       kScreenOverlay, 0);
+PS2_PROFILE_DEFINE_EVENT(VSync,      "VSync",       kScreenOverlay, 1);
+PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",      kScreenOverlay, 2);
+PS2_PROFILE_DEFINE_EVENT(DmaSend,    "DmaSend",     kScreenOverlay, 3);
+PS2_PROFILE_DEFINE_EVENT(DmaFlush,   " CacheFlush", kScreenOverlay, 4);
+PS2_PROFILE_DEFINE_EVENT(View,       "View",        kScreenOverlay, 5);
+PS2_PROFILE_DEFINE_EVENT(World,      "World",       kScreenOverlay, 6);
+PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",         kScreenOverlay, 7);
+PS2_PROFILE_DEFINE_EVENT(MarkLeaves, " Leaves",     kScreenOverlay, 8);
+PS2_PROFILE_DEFINE_EVENT(BspWalk,    " BspWalk",    kScreenOverlay, 9);
+PS2_PROFILE_DEFINE_EVENT(LmChain,    "  LmChain",   kScreenOverlay, 10);
+PS2_PROFILE_DEFINE_EVENT(TexChains,  "TexChains",   kScreenOverlay, 11);
+PS2_PROFILE_DEFINE_EVENT(LmChains,   "LmChains",    kScreenOverlay, 12);
+PS2_PROFILE_DEFINE_EVENT(Entities,   "Entities",    kScreenOverlay, 13);
+PS2_PROFILE_DEFINE_EVENT(EntCull,    " Cull",       kScreenOverlay, 14);
+PS2_PROFILE_DEFINE_EVENT(EntShade,   " Shade",      kScreenOverlay, 15);
+PS2_PROFILE_DEFINE_EVENT(EntColorLUT," ColorLUT",   kScreenOverlay, 16);
+PS2_PROFILE_DEFINE_EVENT(EntGeom,    " Geom",       kScreenOverlay, 17);
+PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",     kScreenOverlay, 18);
+PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",      kScreenOverlay, 19);
+PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",   kScreenOverlay, 20);
+PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs",  kScreenOverlay, 21);
+PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",         kScreenOverlay, 22);
+PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",          kScreenOverlay, 23);
+PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",     kScreenOverlay, 24);
+PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",       kScreenOverlay, 25);
 
 } // namespace ps2::prof_evt
 
@@ -59,7 +60,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 25;
+constexpr int kNumEvents = 26;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -122,7 +123,7 @@ void WriteBatch()
     {
         s_headerDone = true;
         std::printf("FLOG#hdr,frame,"
-                    "Frame,VSync,GsWait,DmaSend,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
+                    "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,Sky,Ui,Overlay,Sound,"
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
@@ -196,13 +197,13 @@ void FrameLogCapture()
     s.frameIndex = s_frameIndex;
 
     static const ps2::debug::ProfileEvent * const s_events[kNumEvents] = {
-        &prof_evt::Frame,     &prof_evt::VSync,    &prof_evt::GsWait,    &prof_evt::DmaSend,
-        &prof_evt::View,      &prof_evt::World,    &prof_evt::Vis,       &prof_evt::MarkLeaves,
-        &prof_evt::BspWalk,   &prof_evt::LmChain,  &prof_evt::TexChains, &prof_evt::LmChains,
-        &prof_evt::Entities,  &prof_evt::EntCull,  &prof_evt::EntShade,  &prof_evt::EntColorLUT,
-        &prof_evt::EntGeom,   &prof_evt::EntShadow, &prof_evt::EntBrush,  &prof_evt::Particles,
-        &prof_evt::AlphaSurfs, &prof_evt::Sky,      &prof_evt::Ui,        &prof_evt::Overlay,
-        &prof_evt::Sound,
+        &prof_evt::Frame,       &prof_evt::VSync,      &prof_evt::GsWait,    &prof_evt::DmaSend,
+        &prof_evt::DmaFlush,    &prof_evt::View,       &prof_evt::World,     &prof_evt::Vis,
+        &prof_evt::MarkLeaves,  &prof_evt::BspWalk,    &prof_evt::LmChain,   &prof_evt::TexChains,
+        &prof_evt::LmChains,    &prof_evt::Entities,   &prof_evt::EntCull,   &prof_evt::EntShade,
+        &prof_evt::EntColorLUT, &prof_evt::EntGeom,    &prof_evt::EntShadow, &prof_evt::EntBrush,
+        &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::Sky,       &prof_evt::Ui,
+        &prof_evt::Overlay,     &prof_evt::Sound,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {

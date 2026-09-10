@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <dma.h>
+#include <kernel.h> // FlushCache
 #include <packet2.h>
 #include <packet2_chain.h>
 #include <packet2_utils.h>
@@ -186,10 +187,29 @@ public:
     // DMA kick-off over the VIF1 channel.
     // --------------------------------------------------------------------------------------------
 
+    // Writes the chain - and everything it REFs - back to memory so the DMAC
+    // reads what the EE just built. This is FlushCache(0), a kernel syscall
+    // that writes back the *whole* data cache, so besides its own cost it
+    // also evicts the working set the next batch is about to gather from.
+    // Split out from the kick so the two can be measured apart; ps2sdk's
+    // flush_cache=1 does exactly this, in this order.
+    static void FlushDataCache()
+    {
+        FlushCache(0);
+    }
+
+    // Kicks the chain without touching the cache. Only safe once the data is
+    // already coherent - pair with FlushDataCache() or a targeted SyncDCache.
+    void Kick()
+    {
+        dma_channel_send_packet2(m_packet, DMA_CHANNEL_VIF1, /*flush_cache=*/0);
+    }
+
     // Fire and forget (flushes the data cache first); pair with Wait().
     void Send()
     {
-        dma_channel_send_packet2(m_packet, DMA_CHANNEL_VIF1, /*flush_cache=*/1);
+        FlushDataCache();
+        Kick();
     }
 
     // Blocks until the chain (including any trailing FLUSH) has been consumed.

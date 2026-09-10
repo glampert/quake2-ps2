@@ -420,10 +420,16 @@ void SendChainAndWait(VifPacket & pkt)
     pkt.AddEndTag();
 
     // Send is FlushCache(0) plus a DMA kick, and the flush is a kernel syscall
-    // that writes back the whole data cache - paid once per batch.
+    // that writes back the whole data cache - paid once per batch. DmaFlush
+    // nests inside DmaSend so the outer total stays comparable with earlier
+    // captures while the split says how much of it is the cache writeback.
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaSend);
-        pkt.Send();
+        {
+            PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaFlush);
+            VifPacket::FlushDataCache();
+        }
+        pkt.Kick();
     }
 
     // The stall this whole batch exists to pay for: one per drawBatches, and the

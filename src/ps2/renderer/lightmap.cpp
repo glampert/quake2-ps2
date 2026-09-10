@@ -532,7 +532,24 @@ void LightmapManager::CacheSurfaceVertexColors(mod::ModelSurface & surf)
     const int atlas = surf.lightmapTextureNum;
     if (atlas == mod::kNotLightmapped)
     {
-        return; // Sky, turbulent and translucent faces carry no luxels.
+        // Sky, turbulent and translucent faces carry no luxels, so their colour
+        // is whatever the pass that draws them wants flat across the surface.
+        // Written rather than left alone: the draw paths take PolyVertex::rgba
+        // verbatim now, and the hunk's zero fill would draw them black.
+        const int flags = surf.texInfo->flags;
+        const u32 alpha = (flags & SURF_TRANS33) ? mod::kTrans33Alpha
+                        : (flags & SURF_TRANS66) ? mod::kTrans66Alpha
+                                                 : 0x80u;
+        const u32 rgba = vu1::PackColorRGBA(128, 128, 128, alpha);
+
+        for (mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
+        {
+            for (int i = 0; i < poly->numVerts; ++i)
+            {
+                poly->vertexes[i].rgba = rgba;
+            }
+        }
+        return;
     }
     PS2_Assert(atlas >= 0 && atlas < m_atlasCount);
 
@@ -541,7 +558,7 @@ void LightmapManager::CacheSurfaceVertexColors(mod::ModelSurface & surf)
         for (int i = 0; i < poly->numVerts; ++i)
         {
             mod::PolyVertex & v = poly->vertexes[i];
-            v.lightmapColor = SampleVertexColor(atlas, v.lightmap_s, v.lightmap_t);
+            v.rgba = SampleVertexColor(atlas, v.lightmap_s, v.lightmap_t);
         }
     }
 }

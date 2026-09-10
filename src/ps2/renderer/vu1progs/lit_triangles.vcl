@@ -161,7 +161,11 @@
     mul  acc,  fMVP0, fPos[x]
     madd acc,  fMVP1, fPos[y]
     madd acc,  fMVP2, fPos[z]
-    madd fPos, fMVP3, fPos[w]
+    ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
+    ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
+    ; producer writes a 1.0 that this no longer needs. Same reason
+    ; lerped_triangles.vcl does it - see the note on mod::PolyVertex.
+    madd fPos, fMVP3, vf00[w]
 
     ; Guard-band clip judgement against |w|: scaled x/y, exact z.
     mul.xyz   fJudge, fPos, fClipScale
@@ -179,6 +183,12 @@
 
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
+
+    ; Q for the PACKED RGBAQ that follows: the GS latches it out of word 2 of the
+    ; ST write, so unlike the A+D programs this one cannot let it ride in from the
+    ; vertex - PolyVertex keeps its lightmap T in that lane. vf00.z is 0, so this
+    ; lands the reciprocal exactly.
+    addq.z fST, vf00, q
 
     sq     fST,   offST(iOutPtr)
     sq     fRGBA, offRGBA(iOutPtr)

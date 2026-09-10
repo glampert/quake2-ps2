@@ -87,7 +87,11 @@
     mul  acc,  fMVP0, fPos[x]
     madd acc,  fMVP1, fPos[y]
     madd acc,  fMVP2, fPos[z]
-    madd fPos, fMVP3, fPos[w]
+    ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
+    ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
+    ; producer writes a 1.0 that this no longer needs. Same reason
+    ; lerped_triangles.vcl does it - see the note on mod::PolyVertex.
+    madd fPos, fMVP3, vf00[w]
 
     ; Guard-band clip judgement against |w|: scaled x/y, exact z.
     mul.xyz   fJudge, fPos, fClipScale

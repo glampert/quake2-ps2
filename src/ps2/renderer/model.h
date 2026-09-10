@@ -10,6 +10,7 @@
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/vu1.h"
 
 #include <tamtypes.h>
 
@@ -69,6 +70,17 @@ constexpr int kNumVertexNormals = 162;
 // working sets by this.
 constexpr int kTriangulationMaxVerts = 128;
 
+// The vertex colour a surface bakes into its PolyVertex::rgba, and the one the
+// world passes draw an untinted surface with. 128 is the GS's modulate identity
+// and 0x80 its 1.0 alpha, so this leaves a texel exactly as it is.
+constexpr u32 kFullBrightColor = vu1::PackColorRGBA(128, 128, 128, 0x80);
+
+// Blend alpha for the two translucent surface flags, in GS units (0x80 = 1.0).
+// The loader bakes these into the vertices of a SURF_TRANS33/66 surface so the
+// deferred alpha pass draws them without a per-batch colour of its own.
+constexpr u32 kTrans33Alpha = 42; // 0.33
+constexpr u32 kTrans66Alpha = 84; // 0.66
+
 // ModelSurface::lightmapTextureNum when the surface has no lightmap at all -
 // sky, turbulent and translucent surfaces, which the lightmap builder skips.
 constexpr int kNotLightmapped = -1;
@@ -97,26 +109,33 @@ struct alignas(16) AliasVertex
 static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
 
 //
-// Vertex format used by ModelPoly.
-// Has two sets of texture coordinates for lightmapping.
+// Vertex format used by ModelPoly - laid out as a vu1::DrawVertex so the world
+// passes copy it into a batch rather than building one out of it.
 //
-struct PolyVertex
+// The two sets of texture coordinates are what makes that a tight fit. A world
+// vertex needs position (12), diffuse ST (8), colour (4) and lightmap ST (8) -
+// exactly 32 bytes, exactly what DrawVertex is. The lightmap pair goes in the two
+// lanes DrawVertex holds constants in: the microprograms synthesise both (the MVP
+// row is scaled by vf00's hardwired 1.0, and Q comes from the reciprocal, not from
+// the vertex), so nothing reads them off the wire.
+//
+struct alignas(16) PolyVertex
 {
-    // model vertex position:
-    Vec3 position;
-
-    // main tex coords:
-    float texture_s;
-    float texture_t;
-
-    // lightmap tex coords:
+    // Model position - the same three floats DrawVertex opens with. Where that
+    // struct keeps w, this keeps half of the lightmap coordinate pair.
+    Vec3  position;
     float lightmap_s;
-    float lightmap_t;
 
-    // The luxel chroma under this vertex, already sampled from the atlas mirror
-    // and packed as the vertex colour a fullbright batch wants. Only changes when
-    // the surface's luxels are rebaked, which for static lighting is never.
-    u32 lightmapColor;
+    // Baked at load: the luxel chroma this vertex sits on for a lit surface, the
+    // surface's flat blend colour for a translucent or turbulent one, and the
+    // modulate identity for everything else. Only changes when the surface's
+    // luxels are rebaked, which for static lighting is never.
+    u32 rgba;
+
+    // Diffuse texture coordinates, and - where DrawVertex keeps q - the other half
+    // of the lightmap pair.
+    float s, t;
+    float lightmap_t;
 };
 
 // See comment below on ModelSurface about why we need this.
@@ -185,6 +204,14 @@ struct ModelSurface
     SurfaceFlags flags; // u8-backed; see the enum.
     u8 styles[kMaxLightmaps];
 
+    // Memo of the clip-volume test below, because the two world passes walk
+    // different chains (textureChain and lightmapChain) and so cannot see each
+    // other's answer - without it every visible surface is judged against six
+    // planes twice a frame. Mutable for the same reason ModelNode::visFrame is:
+    // the draw passes hold the surface by const pointer. The bool sits here to
+    // land in the byte of padding that followed styles[].
+    mutable bool clipVolumeInside;
+
     ModelPoly * polys; // multiple if warped.
     const ModelSurface * textureChain;
     const ModelSurface * lightmapChain; // next surface sharing this one's lightmap atlas.
@@ -206,6 +233,9 @@ struct ModelSurface
     float cachedLight[kMaxLightmaps]; // values currently used in lightmap.
     u8 * samples; // [numstyles * surfsize]
 
+    // s_frameCount when clipVolumeInside above was last computed.
+    mutable int clipVolumeFrame;
+
     // Frame whose dynamic-light contribution is currently baked into this
     // surface's block of the atlas. Non-zero means the atlas holds dlit luxels
     // that must be rebuilt from 'samples' once the light stops touching it.
@@ -216,7 +246,7 @@ struct ModelSurface
 // include this header (it is a host build, 64-bit pointers). Asserted here so a
 // layout change breaks the build rather than silently invalidating the world
 // arena reservation.
-static_assert(sizeof(ModelSurface) == 92, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
+static_assert(sizeof(ModelSurface) == 96, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
 
 //
 // BSP world node.

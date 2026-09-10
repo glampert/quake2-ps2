@@ -51,7 +51,7 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // ------------------------------------------------------------------------------------------------
 // World arena
 //
-// The world hunk is the largest single allocation the program makes - 6.57 MB on
+// The world hunk is the largest single allocation the program makes - 6.61 MB on
 // power2 - and it is allocated and freed on every map change. dlmalloc cannot move
 // live blocks, so once a few hundred longer-lived allocations have settled into the
 // holes left behind, no contiguous run that big survives.
@@ -64,7 +64,7 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // Both capacities come from build/tools/bspinfo, which mirrors the sizers here and
 // reports the worst case over a map set:
 //
-//     WORST HUNK   : power2.bsp needs 6886368 bytes (6.57 MB)
+//     WORST HUNK   : power2.bsp needs 6932288 bytes (6.61 MB)
 //     WORST SCRATCH: lab.bsp    needs  954048 bytes (0.91 MB)
 //
 // with ~4% on top for maps that are not in pak0. Re-run bspinfo after adding a
@@ -83,7 +83,7 @@ constexpr u32 kHunkAlign = 16;
 // out to be the tighter of the two - an earlier 10% margin cost 384 KB and moved the
 // failure from the world hunk to a 1 MB model load. A map that overruns either
 // capacity says so and names the constant to raise, so being wrong is loud.
-constexpr u32 kWorldHunkCapacity    = 7000u * 1024u; // 6.84 MB, power2.bsp + 4.1%
+constexpr u32 kWorldHunkCapacity    = 7040u * 1024u; // 6.88 MB, power2.bsp + 4.0%
 constexpr u32 kWorldScratchCapacity = 972u  * 1024u; // 0.95 MB, lab.bsp + 4.3%
 constexpr u32 kWorldArenaBytes      = kWorldHunkCapacity + kWorldScratchCapacity;
 
@@ -1076,8 +1076,8 @@ void BuildPolygonFromSurface(const BspGeometry & geom, const SurfaceEdges & edge
         poly->vertexes[i].position = pos;
 
         // Colour texture coordinates.
-        poly->vertexes[i].texture_s = TexProject(pos, tex->vecs[0]) / texW;
-        poly->vertexes[i].texture_t = TexProject(pos, tex->vecs[1]) / texH;
+        poly->vertexes[i].s = TexProject(pos, tex->vecs[0]) / texW;
+        poly->vertexes[i].t = TexProject(pos, tex->vecs[1]) / texH;
 
         // Lightmap texture coordinates. The vertex projects into texture space
         // the same way, then shifts to where CreateSurfaceLightmap packed this
@@ -1245,14 +1245,14 @@ void SubdivideSurface(const BspGeometry & geom, const SurfaceEdges & edges,
             total   = total + leafVerts[i];
 
             poly->vertexes[i + 1].position  = leafVerts[i];
-            poly->vertexes[i + 1].texture_s = s;
-            poly->vertexes[i + 1].texture_t = t;
+            poly->vertexes[i + 1].s = s;
+            poly->vertexes[i + 1].t = t;
         }
 
         // Center vertex, then close the fan by duplicating the first.
         poly->vertexes[0].position  = total * invCount;
-        poly->vertexes[0].texture_s = totalS * invCount;
-        poly->vertexes[0].texture_t = totalT * invCount;
+        poly->vertexes[0].s = totalS * invCount;
+        poly->vertexes[0].t = totalT * invCount;
         poly->vertexes[numLeafVerts + 1] = poly->vertexes[1];
     });
 }

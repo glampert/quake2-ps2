@@ -136,7 +136,7 @@ static const lump_info_t lump_info[BSP_NUM_LUMPS] = {
    model_load.cpp. Same for the submodel table; see SubModelTable. */
 #define SZ_CPLANE           20
 #define SZ_MODEL_TEXINFO    44
-#define SZ_MODEL_SURFACE    92
+#define SZ_MODEL_SURFACE    96
 #define SZ_MODEL_POLY       16
 #define SZ_POLY_VERTEX      32
 #define SZ_MODEL_TRIANGLE    3

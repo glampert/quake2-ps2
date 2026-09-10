@@ -60,7 +60,9 @@ constexpr float kZFar  = 4096.0f;
 constexpr float kZNearWeapon = 0.25f;
 
 // Vertex colour for the not-yet-lit world: GS modulate 128 = texels unchanged.
-constexpr u32 kFullBright = vu1::PackColorRGBA(128, 128, 128, 0x80);
+// The loader bakes this same value into the vertices of every surface it cannot
+// give a luxel chroma to, so the two must not drift apart.
+constexpr u32 kFullBright = mod::kFullBrightColor;
 
 // Render view cvars:
 static const cvar_t * s_backFaceCull      = nullptr;
@@ -406,6 +408,20 @@ Q_ALWAYS_INLINE bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
         }
     }
     return true;
+}
+
+// Memoised for the frame: the diffuse and lightmap passes ask the same question
+// about the same surface, and walk separate chains, so without this every visible
+// surface pays for six planes twice. Only valid for the world's own matrix - see
+// the worldTransform guards at the call sites.
+Q_ALWAYS_INLINE bool SurfaceInsideClipVolumeCached(const mod::ModelSurface & surf)
+{
+    if (surf.clipVolumeFrame != s_frameCount)
+    {
+        surf.clipVolumeFrame  = s_frameCount;
+        surf.clipVolumeInside = SurfaceInsideClipVolume(surf);
+    }
+    return surf.clipVolumeInside;
 }
 
 // True when the box is completely outside the frustum and must not draw.
@@ -793,12 +809,21 @@ struct SurfaceDrawState
     bool               lightmapUVs = false;
 
     // Tint the surface being gathered by the luxel chroma its vertices carry
-    // (PolyVertex::lightmapColor), rather than leaving the vertex colour flat.
+    // (PolyVertex::rgba), rather than leaving the vertex colour flat.
     // Set per surface by the diffuse passes: the lightmap pass can only deliver
     // a luxel's intensity, so its colour rides the vertex colour the GS
     // modulates the wall texture by instead. Mutually exclusive with
     // vertexAlpha, which owns that colour's alpha byte.
     bool               lightmapTint = false;
+
+    // The loader's PolyVertex is exactly what this pass wants in the batch, so
+    // GatherPolyTriangles can hand the model's own memory to the DMA instead of
+    // rebuilding a vertex per corner. True whenever the pass draws with the colour
+    // the bake put there - which is every shipping path; the debug views that
+    // override it (ps2_lightmap_only, ps2_lightmap_color 0) and translucent brush
+    // models, which carry the entity's alpha rather than the surface's, fall back
+    // to BuildPolyVertexCache.
+    bool               bakedVertices = false;
 
     // The surface being gathered was proven wholly inside the VU clip volume, so
     // GatherPolyTriangles may emit its triangles verbatim and skip the clipper
@@ -947,6 +972,28 @@ static vu1::DrawVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
 // arrives by reference, and the renderer builds with -fno-strict-aliasing - so
 // left in place the compiler must assume each store could have changed them and
 // reload all four every single time round.
+// The polygon's vertices as the batch wants them.
+//
+// mod::PolyVertex is deliberately laid out as a vu1::DrawVertex (see model.h), so
+// a pass that wants them exactly as the loader baked them hands the batch the
+// model's own memory instead of rebuilding it. This is the only place that leans
+// on that, and these asserts are what keep it true.
+Q_ALWAYS_INLINE const vu1::DrawVertex * AsDrawVertices(const mod::PolyVertex * const verts)
+{
+    static_assert(sizeof(mod::PolyVertex) == sizeof(vu1::DrawVertex),
+                  "PolyVertex must be a DrawVertex!");
+    static_assert(alignof(mod::PolyVertex) == alignof(vu1::DrawVertex),
+                  "PolyVertex must be a DrawVertex!");
+    static_assert(offsetof(mod::PolyVertex, rgba) == offsetof(vu1::DrawVertex, rgba),
+                  "PolyVertex must be a DrawVertex!");
+    static_assert(offsetof(mod::PolyVertex, s) == offsetof(vu1::DrawVertex, s),
+                  "PolyVertex must be a DrawVertex!");
+    static_assert(offsetof(mod::PolyVertex, t) == offsetof(vu1::DrawVertex, t),
+                  "PolyVertex must be a DrawVertex!");
+
+    return static_cast<const vu1::DrawVertex *>(static_cast<const void *>(verts));
+}
+
 Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     const mod::PolyVertex * const verts = poly.vertexes;
@@ -971,10 +1018,10 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
         dst.z    = src.position.z;
         dst.w    = 1.0f;
         // The chroma comes off the vertex rather than out of the atlas: it was
-        // sampled once when the luxels were baked. See PolyVertex::lightmapColor.
-        dst.rgba = tinted ? ApplyCachedLightmapColor(baseRgba, src.lightmapColor) : flatRgba;
-        dst.s    = lightmapUVs ? src.lightmap_s : src.texture_s;
-        dst.t    = lightmapUVs ? src.lightmap_t : src.texture_t;
+        // sampled once when the luxels were baked. See PolyVertex::rgba.
+        dst.rgba = tinted ? ApplyCachedLightmapColor(baseRgba, src.rgba) : flatRgba;
+        dst.s    = lightmapUVs ? src.lightmap_s : src.s;
+        dst.t    = lightmapUVs ? src.lightmap_t : src.t;
         dst.q    = 1.0f;
     }
 }
@@ -1004,9 +1051,28 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
         return;
     }
 
-    BuildPolyVertexCache(poly, state);
+    // Where the batch's vertices come from. Cheapest first: the loader's own,
+    // handed over untouched; or a rebuilt cache, for the debug views whose colour
+    // the bake does not match.
+    const vu1::DrawVertex * src;
+    if (state.bakedVertices)
+    {
+        src = AsDrawVertices(poly.vertexes);
+    }
+    else
+    {
+        BuildPolyVertexCache(poly, state);
+        src = s_polyVertexCache;
+    }
+
+    // The lightmap pass draws the same geometry through the other UV set. Its
+    // colour is flat: the Modulate blend takes the luxel's intensity from the
+    // texture and leaves its source-colour term at zero, so the chroma the bake
+    // left in the vertex belongs to the diffuse pass, not this one.
+    const bool patchLightmapUVs = state.bakedVertices && state.lightmapUVs;
 
     const mod::ModelTriangle * const tris = poly.triangles;
+    const mod::PolyVertex * const polyVerts = poly.vertexes;
     const int numTriangles = poly.numVerts - 2;
 
     for (int t = 0; t < numTriangles; ++t)
@@ -1025,9 +1091,23 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
         }
 
         vu1::DrawVertex * const dst = s_batch.PushTriangle();
-        vu1::CopyDrawVertex(dst[0], s_polyVertexCache[tri.vertexes[0]]);
-        vu1::CopyDrawVertex(dst[1], s_polyVertexCache[tri.vertexes[1]]);
-        vu1::CopyDrawVertex(dst[2], s_polyVertexCache[tri.vertexes[2]]);
+        if (patchLightmapUVs)
+        {
+            for (int i = 0; i < 3; ++i)
+            {
+                const int v = tri.vertexes[i];
+                vu1::CopyDrawVertex(dst[i], src[v]);
+                dst[i].rgba = kFullBright;
+                dst[i].s    = polyVerts[v].lightmap_s;
+                dst[i].t    = polyVerts[v].lightmap_t;
+            }
+        }
+        else
+        {
+            vu1::CopyDrawVertex(dst[0], src[tri.vertexes[0]]);
+            vu1::CopyDrawVertex(dst[1], src[tri.vertexes[1]]);
+            vu1::CopyDrawVertex(dst[2], src[tri.vertexes[2]]);
+        }
 
         ++s_drawStats.trisDrawn;
     }
@@ -1059,15 +1139,15 @@ void GatherPolyTriangles(const mod::ModelPoly & poly,
         for (int v = 0; v < 3; ++v)
         {
             const mod::PolyVertex & src = poly.vertexes[tri.vertexes[v]];
-            const float uvS = state.lightmapUVs ? src.lightmap_s : src.texture_s;
-            const float uvT = state.lightmapUVs ? src.lightmap_t : src.texture_t;
+            const float uvS = state.lightmapUVs ? src.lightmap_s : src.s;
+            const float uvT = state.lightmapUVs ? src.lightmap_t : src.t;
 
             corners[v].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
             corners[v].st  = { uvS, uvT, 0.0f, 0.0f };
 
             if (state.lightmapTint)
             {
-                corners[v].color = UnpackCachedLightmapColor(src.lightmapColor);
+                corners[v].color = UnpackCachedLightmapColor(src.rgba);
             }
         }
 
@@ -1159,8 +1239,8 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
         for (int i = 0; i < numVerts; ++i)
         {
             const mod::PolyVertex & src = poly->vertexes[i];
-            const float os = src.texture_s;
-            const float ot = src.texture_t;
+            const float os = src.s;
+            const float ot = src.t;
 
             vu1::DrawVertex & dst = s_polyVertexCache[i];
             dst.x    = src.position.x;
@@ -1259,6 +1339,11 @@ void DrawTextureChains(const SurfaceDrawState & base)
 
     const bool tinted = LightmapColorEnabled();
 
+    // The bake put the luxel chroma in the vertex, which is what a tinted pass
+    // over a fullbright batch draws. Anything else - the lightmap-only view above,
+    // or the chroma switched off - wants a colour the vertex does not hold.
+    state.bakedVertices = tinted && (state.rgba == kFullBright);
+
     // s_clipVolume is built from the world's view-projection, so the surface
     // test only speaks for surfaces drawn through it. A brush model entity
     // carries its own transform and keeps clipping per triangle.
@@ -1273,7 +1358,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
             // Unlightmapped here means sky: RecursiveWorldNode sends turbulent
             // and translucent faces down the alpha pass instead.
             state.lightmapTint = tinted && (surf->lightmapTextureNum != mod::kNotLightmapped);
-            state.skipClipping = worldTransform && SurfaceInsideClipVolume(*surf);
+            state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*surf);
             s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -1335,6 +1420,10 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     state.lightmapUVs  = true;
     state.lightmapTint = false; // The chroma is the diffuse pass's half; this one carries the intensity.
 
+    // Same vertices as the diffuse pass; the emit swaps in the second UV set and
+    // flattens the colour as it copies.
+    state.bakedVertices = true;
+
     // As in DrawTextureChains: only the world's own transform is the one
     // s_clipVolume was built for.
     const bool worldTransform = (state.mvp == &s_viewProjMatrix);
@@ -1352,7 +1441,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
         {
-            state.skipClipping = worldTransform && SurfaceInsideClipVolume(*surf);
+            state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*surf);
             s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -1455,17 +1544,14 @@ void RenderBlendedOverlay(const refdef_t & viewDef)
 // the GS's 0x80 = 1.0 scale. Surfaces that are turbulent but not explicitly
 // translucent (lava, slime) still go through the blend at full opacity, as
 // they do there.
+// The colour a translucent surface draws with. The loader bakes this same value
+// into the surface's vertices (see CacheSurfaceVertexColors), so this is now only
+// what the deferred pass breaks its batches on - the vertices carry it themselves.
 Q_ALWAYS_INLINE u32 AlphaSurfaceColor(const int texFlags)
 {
-    u32 alpha = 0x80; // 1.0
-    if (texFlags & SURF_TRANS33)
-    {
-        alpha = 42; // 0.33
-    }
-    else if (texFlags & SURF_TRANS66)
-    {
-        alpha = 84; // 0.66
-    }
+    const u32 alpha = (texFlags & SURF_TRANS33) ? mod::kTrans33Alpha
+                    : (texFlags & SURF_TRANS66) ? mod::kTrans66Alpha
+                                                : 0x80u;
     return vu1::PackColorRGBA(128, 128, 128, alpha);
 }
 
@@ -1508,6 +1594,11 @@ void RenderAlphaSurfaces()
         .vertexAlpha   = false
     };
 
+    // The loader baked each translucent surface's own blend colour into its
+    // vertices, which is exactly what this pass draws them with - so the
+    // per-entry 'rgba' below only decides where the batches break.
+    state.bakedVertices = true;
+
     const tex::Texture * batchTexture = nullptr;
 
     for (int i = s_alphaSurfaceCount - 1; i >= 0; --i)
@@ -1532,7 +1623,7 @@ void RenderAlphaSurfaces()
         // test only speaks for entries drawn through it. A brush model entity
         // carries its own transform and keeps clipping per triangle.
         const bool worldTransform = (entry.mvp == &s_viewProjMatrix);
-        state.skipClipping = worldTransform && SurfaceInsideClipVolume(*entry.surf);
+        state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*entry.surf);
         s_drawStats.surfsUnclipped += state.skipClipping;
 
         if (texFlags & SURF_WARP)
@@ -2033,6 +2124,10 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         .cullBackFaces = WorldBackFaceCullEnabled(),
         .vertexAlpha   = false
     };
+
+    // A translucent submodel draws every surface at the entity's alpha rather
+    // than the one the loader baked in, so it rebuilds its vertices.
+    state.bakedVertices = LightmapColorEnabled() && !translucent;
 
     const bool tinted = LightmapColorEnabled();
 

@@ -139,7 +139,7 @@ void BeginFrame();
 void ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, int frameCount);
 
 // Re-samples the luxel chroma under every vertex of the surface's polygons and
-// caches it in PolyVertex::lightmapColor.
+// caches it in PolyVertex::rgba.
 //
 // Must run after the surface's polygons exist and after every rebake of its
 // luxels - the load path calls it once the polygons are built, and ChainSurface

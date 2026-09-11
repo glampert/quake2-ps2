@@ -20,7 +20,7 @@ PS2_PROFILE_DEFINE_EVENT(Frame,      "Frame",       kScreenOverlay, 0);
 PS2_PROFILE_DEFINE_EVENT(VSync,      "VSync",       kScreenOverlay, 1);
 PS2_PROFILE_DEFINE_EVENT(GsWait,     "GsWait",      kScreenOverlay, 2);
 PS2_PROFILE_DEFINE_EVENT(DmaSend,    "DmaSend",     kScreenOverlay, 3);
-PS2_PROFILE_DEFINE_EVENT(DmaFlush,   " CacheFlush", kScreenOverlay, 4);
+PS2_PROFILE_DEFINE_EVENT(DmaFlush,   " CacheFlsh",  kScreenOverlay, 4);
 PS2_PROFILE_DEFINE_EVENT(View,       "View",        kScreenOverlay, 5);
 PS2_PROFILE_DEFINE_EVENT(World,      "World",       kScreenOverlay, 6);
 PS2_PROFILE_DEFINE_EVENT(Vis,        "Vis",         kScreenOverlay, 7);

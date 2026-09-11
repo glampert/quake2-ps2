@@ -14,6 +14,7 @@
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/lightmap.h"
@@ -422,6 +423,15 @@ void DrawDrawStatsOverlay()
         // oversized and can be cut.
         { "DmaPeak", ps2::gs::FramePacketPeakQwords()     },
         { "DmaCap",  ps2::gs::FramePacketCapacityQwords() },
+        // The frame DMA chain: high-water in KB against its capacity, how many
+        // times it was kicked last frame, and how many of those kicks were the
+        // overflow emergency rather than the end of the frame. One kick and zero
+        // emergency drains is the target; a drain firing every frame means
+        // chain::kFrameChainBytes is too small for the level.
+        { "ChainKB",  static_cast<int>(ps2::chain::PeakBytes() / 1024u)      },
+        { "ChainCap", static_cast<int>(ps2::chain::kFrameChainBytes / 1024u) },
+        { "ChainKck", ps2::chain::KicksLastFrame()                           },
+        { "ChainDrn", ps2::chain::EmergencyDrainsLastFrame()                 },
     };
 
     constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.
@@ -467,6 +477,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::vu1::Init();
     ps2::lm::Init();
     ps2::mod::Init();
+    ps2::chain::Init(); // after mod::Init: the chain halves live in the arena it reserves
     ps2::view::Init();
 
     s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);

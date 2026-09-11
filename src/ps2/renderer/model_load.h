@@ -24,6 +24,20 @@ void ReserveWorldArena();
 // passed to ps2::heap::Free. ModelCache::Unload checks this before releasing a hunk.
 bool IsWorldArenaBlock(const void * ptr);
 
+// The lump scratch half of the reserved arena, handed out so the renderer can keep its
+// frame DMA chain there (see frame_chain.h).
+//
+// The two owners never overlap in time: the loader claims this only while it is parsing
+// a .bsp, and no frame is being built then. LoadBrushModel drains the chain before it
+// takes the memory back, so the handover is one-directional and explicit. Null base
+// before ReserveWorldArena has run.
+struct ScratchBlock
+{
+    void * base;
+    unsigned int sizeBytes;
+};
+ScratchBlock WorldScratchBlock();
+
 // The map's submodel table, handed back rather than parked in the hunk.
 //
 // It points at the raw dmodel_t array in the lump scratch: ModelCache's inline

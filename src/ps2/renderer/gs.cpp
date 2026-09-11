@@ -39,6 +39,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
@@ -451,6 +452,7 @@ void BeginFrame()
     s_vramReuseHazard = false;
     vram::BeginFrame();
     vu1::BeginFrame();
+    chain::BeginFrame();
 }
 
 // Opens the pending 2D batch on demand: the first 2D primitive after a flush
@@ -887,6 +889,12 @@ void EndFrame()
     // Send whatever 2D accumulated since the last flush (the HUD/console overlay
     // in the common case) so it lands on top before the buffer is displayed.
     FlushPending2D();
+
+    // Rolls the frame chain's high-water and latches its counters for the overlay. Nothing
+    // builds into it yet, so this is bookkeeping over an empty buffer - it is wired up now
+    // so the lifecycle and the half swap are exercised from the first stage rather than
+    // arriving untested alongside the code that depends on them.
+    chain::EndFrame();
 
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);

@@ -16,6 +16,10 @@
 #define bits_to_u32(x) __builtin_bit_cast(u32,   (x))
 #define bits_to_f32(x) __builtin_bit_cast(float, (x))
 
+// TODO:
+// - Give Vec3/Vec4 operator[], so we can replace most uses of Quake's vec3_t with Vec3.
+// - Consider giving custom copy assignment/ctor to Vec4/Mat4 that use lq/sq vector instructions.
+
 namespace ps2::math {
 
 // ------------------------------------------------------------------------------------------------

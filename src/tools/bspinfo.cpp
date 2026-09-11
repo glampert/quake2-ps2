@@ -742,8 +742,12 @@ static void print_hunk_report(void)
     printf("WORST SCRATCH: %s needs %ld bytes (%.2f MB).\n",
            worst_scratch_map, worst_scratch, (double)worst_scratch / (1024.0 * 1024.0));
     printf("\n");
-    printf("Those are the figures the up-front reservations have to be sized to. Round them up\n");
-    printf("for headroom - custom maps and the mission packs are not in this set:\n");
+    printf("The hunk figure is what kWorldHunkCapacity has to be sized to. The scratch figure is\n");
+    printf("only a FLOOR on kWorldScratchCapacity: the renderer keeps both halves of its frame\n");
+    printf("DMA chain in that same buffer during gameplay, so the constant is\n");
+    printf("  max(scratch below + headroom, 2 * chain::kFrameChainBytes)\n");
+    printf("and the second term currently wins. Do not shrink it to what is printed here.\n");
+    printf("Round both up for headroom - custom maps and the mission packs are not in this set:\n");
     printf("  hunk    +5%%  = %8ld bytes (%.2f MB)   +10%% = %8ld bytes (%.2f MB)\n",
            (long)(worst * 1.05), (double)worst * 1.05 / (1024.0 * 1024.0),
            (long)(worst * 1.10), (double)worst * 1.10 / (1024.0 * 1024.0));

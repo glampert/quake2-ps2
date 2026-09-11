@@ -96,7 +96,7 @@ public:
 
     // Halt visibly if the next emission would overrun the buffer.
     // 'qwords' is a safe upper bound for what comes next (DEBUG ONLY).
-    void EnsureSpace(const int qwords) const
+    void EnsureSpace([[maybe_unused]] const int qwords) const
     {
 #if PS2_QUAKE_ASSERTS
         if (QwordCount() + qwords > m_maxQwords) [[unlikely]]

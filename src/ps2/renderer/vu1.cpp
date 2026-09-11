@@ -68,20 +68,6 @@ constexpr int kDoubleBufferOffset = 496;
 constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
 
-// Chain footprint of one chunk segment, declared with room to spare: the
-// header/GIF-tag inline unpack is 1 tag qword plus 8 of payload, the vertex REF
-// unpack is 1 (its VIFcodes ride in the tag's upper half) and the FLUSH + MSCAL
-// is 1 - 11 in practice. Over-declaring only reserves slightly more of the chain
-// than a chunk needs; under-declaring overruns the half, which
-// VifPacket::EnsureSpace turns into a Sys_Error rather than a silent corruption.
-constexpr int kChunkChainQwords = 16;
-
-// What re-opening a draw's chain costs: the two REF unpacks BeginDrawChain
-// emits, one qword each. Reserved alongside every chunk rather than once,
-// because a reservation that has to drain the chain rewinds the constants with
-// everything else - see ReserveChunk.
-constexpr int kDrawSetupQwords = 2;
-
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
 constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
@@ -115,8 +101,10 @@ constexpr math::Vec4 kClipScale = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f
 // Value FrameConstants::colorClamp is always set to.
 constexpr math::Vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
 
-// Unpacked to kFrameConstantsAddr before every batch. Static so the DMA REF
-// source stays valid; rebuilt per draw.
+// Unpacked to kFrameConstantsAddr when a draw opens its chain. Built in a span of the
+// chain itself rather than in a static the REF tag points at: once submission is one kick
+// per frame, a static would be rewritten by the next draw long before the DMAC had read it
+// for this one. It is the same bytes on the wire either way - the block was always REF'd.
 struct alignas(16) FrameConstants
 {
     math::Mat4 mvp;
@@ -133,7 +121,6 @@ struct alignas(16) FrameConstants
 // without moving the buffers.
 static_assert(sizeof(FrameConstants) == 8 * 16, "Must match the VU memory layout");
 
-static FrameConstants s_constants;
 static bool s_initialized = false;
 
 // Micro memory entry point of the VU1 programs (64-bit
@@ -382,8 +369,10 @@ void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
                  packedRgba ? kLitVertexRegList : kVertexRegList);
 }
 
-// Rebuilds s_constants for a draw and opens the chain with its unpack to the
-// fixed low VU addresses (shared by both draw paths).
+// Builds the draw's transform and light blocks into the chain and unpacks them to the
+// fixed low VU addresses. Both are chain payload rather than statics - see FrameConstants.
+//
+// kDrawSetupQwords is exactly what this appends, and ReserveChunk has already reserved it.
 void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 {
     // Every chunk of a draw shares one flags value, so the batch's depth range
@@ -391,16 +380,32 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     float depthScale, depthOffset;
     DepthRangeFor(flags, &depthScale, &depthOffset);
 
-    s_constants.mvp        = mvp;
-    s_constants.gsScale    = { 2048.0f, 2048.0f, depthScale, 0.0f };
-    s_constants.gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
-                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
-                               depthOffset, 0.0f };
-    s_constants.clipScale  = kClipScale;
-    s_constants.colorClamp = kColorClamp;
+    constexpr int kFrameConstantsQwords = sizeof(FrameConstants) / 16;
+    constexpr int kLightConstantsQwords = sizeof(LightConstants) / 16;
+    // Each block costs what chain::CalcAllocCost says - its payload plus the skip tag - and the
+    // REF tag that sends it.
+    static_assert(kDrawSetupQwords == chain::CalcAllocCost<FrameConstants>(1)
+                                    + chain::CalcAllocCost<LightConstants>(1) + 2,
+                  "kDrawSetupQwords must match what BeginDrawChain appends");
 
-    pkt.AddUnpackData(kFrameConstantsAddr, &s_constants,  sizeof(FrameConstants) / 16, false);
-    pkt.AddUnpackData(kLightBlockAddr, &s_lightConstants, sizeof(LightConstants) / 16, false);
+    FrameConstants * const constants = chain::Alloc<FrameConstants>(1);
+
+    constants->mvp        = mvp;
+    constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 0.0f };
+    constants->gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
+                              2048.0f + static_cast<float>(gs::Height()) * 0.5f,
+                              depthOffset, 0.0f };
+    constants->clipScale  = kClipScale;
+    constants->colorClamp = kColorClamp;
+
+    pkt.AddUnpackData(kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
+
+    // s_lightConstants stays the source of truth - SetDynamicLights builds it once a frame -
+    // and the chain gets a copy, for the same lifetime reason as the transform block.
+    LightConstants * const lights = chain::Alloc<LightConstants>(1);
+    *lights = s_lightConstants;
+
+    pkt.AddUnpackData(kLightBlockAddr, lights, kLightConstantsQwords, false);
 }
 
 // Makes room in the chain for one chunk and (re)opens the draw's chain when it
@@ -467,11 +472,9 @@ void Init()
 // Generic VU1 triangles
 // ------------------------------------------------------------------------------------------------
 
-// Vertices per VU run: DrawTriangles splits larger draws into chunks of this
-// size. Bounded by the VU double buffer: input (8 + 2n) plus output (7 + 3n)
-// qwords must fit in one 496-qword buffer half, so n <= 96 - and chunks are
-// whole triangles, hence 96.
-constexpr int kMaxVertsPerBatch = 96;
+// kMaxVertsPerBatch (vu1.h) is the vertices per VU run, bounded by the VU double
+// buffer: input (8 + 2n) plus output (7 + 3n) qwords must fit in one 496-qword
+// buffer half, so n <= 96 - and chunks are whole triangles, hence 96.
 
 // Batch layout, relative to the current double buffer (XTOP).
 constexpr int kBatchHeaderAddr = 0; // vertex count in .w
@@ -690,18 +693,16 @@ constexpr int kPrtUV1Addr         = 3;  // opposite corner UV
 constexpr int kPrtGifTagsAddr     = 4;  // the same 7-qword block as the world path
 constexpr int kPrtDataAddr        = kPrtGifTagsAddr + kNumGifTagQwords; // 1 qword per particle
 
-// Particles per VU run. Input is 1 qword each and the sprite output 5, so a
-// chunk occupies kPrtDataAddr + 6n qwords of a double-buffer half; 78 leaves a
-// little room under the 496 the halves have.
-constexpr int kMaxParticlesPerBatch = 78;
+// kMaxParticlesPerBatch (vu1.h) is the particles per VU run. Input is 1 qword
+// each and the sprite output 5, so a chunk occupies kPrtDataAddr + 6n qwords of
+// a double-buffer half; 78 leaves a little room under the 496 the halves have.
 
 static_assert(kPrtQuadOffsetAddr == 1 && kPrtUV0Addr == 2 && kPrtUV1Addr == 3 && kPrtGifTagsAddr == 4 && kPrtDataAddr == 11, "Batch layout must match the #defines in particles.vcl");
 static_assert(kPrtDataAddr + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
 
-// Chain footprint of one particle chunk: the header/constants/tags inline
-// unpack (1 tag + 11 payload), one REF unpack and the FLUSH + MSCAL - 14 in
-// practice, declared with the same margin as kChunkChainQwords.
-constexpr int kPrtChunkChainQwords = 22;
+// kParticleChunkQwords (vu1.h) covers one particle chunk: the header/constants/
+// tags inline unpack (1 tag + 11 payload), one REF unpack and the FLUSH + MSCAL
+// - 14 in practice, declared with the same margin as kChunkChainQwords.
 
 // ref_gl's "hack a scale up to keep particles from disappearing": past 20 units
 // the billboard grows with distance so it stays wide enough to cover a pixel.
@@ -729,7 +730,7 @@ static void AddParticleChunk(VifPacket & pkt, const tex::Texture & texture, int 
                              const ParticleVertex * particles, int count, DrawFlags flags)
 {
     PS2_Assert(count > 0 && count <= kMaxParticlesPerBatch);
-    pkt.EnsureSpace(kPrtChunkChainQwords);
+    pkt.EnsureSpace(kParticleChunkQwords);
 
     pkt.OpenInlineUnpack(kPrtBatchHeaderAddr, true);
     {
@@ -803,7 +804,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {
-        ReserveChunk(pkt, kPrtChunkChainQwords, mvp, flags, /*firstChunk=*/first == 0);
+        ReserveChunk(pkt, kParticleChunkQwords, mvp, flags, /*firstChunk=*/first == 0);
 
         const int remaining  = count - first;
         const int chunkCount = (remaining < kMaxParticlesPerBatch) ? remaining : kMaxParticlesPerBatch;

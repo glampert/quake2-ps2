@@ -134,7 +134,7 @@ Q_ALWAYS_INLINE const u32 * KeyframeVertWords(const daliasframe_t * const frame)
 // into the byte-position and attribute streams of s_lerpBatch. Only one of them
 // is ever active for a given model at a time.
 constexpr int kBatchMaxVerts = 3 * 512;
-static batch::TriangleBatch<kBatchMaxVerts> s_batch;
+using AliasBatch = batch::TriangleBatch<kBatchMaxVerts>;
 
 // The VU path's capacity decides whether a model's shadow costs anything: a
 // model that fits in one batch leaves its whole position stream behind for the
@@ -578,10 +578,11 @@ Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
 // Clips one model triangle against the volume the VU judges and appends the
 // survivors to the gather buffer, flushing it when full. The vertex colour is
 // the shade the clipper interpolated, packed back down on the way out.
-Q_ALWAYS_INLINE void GatherClippedTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & mvp,
-                                           const tex::Texture & texture, const vu1::DrawFlags flags)
+Q_ALWAYS_INLINE void GatherClippedTriangle(AliasBatch & batch, clip::ClipVertex (&corners)[3],
+                                           const math::Mat4 & mvp, const tex::Texture & texture,
+                                           const vu1::DrawFlags flags)
 {
-    s_batch.GatherTriangle(corners, mvp, texture, flags, PackClipColor);
+    batch.GatherTriangle(corners, mvp, texture, flags, PackClipColor);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -944,6 +945,10 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                              ? (batchFlags | vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured)
                              : batchFlags;
 
+            // Scoped to the EE lerp path, which is the only one that gathers
+            // DrawVertex; the VU path fills s_lerpBatch's streams instead.
+            AliasBatch batch;
+
             const math::Vec3 * const lerpedPositions =
                 LerpVertsEE(frame->verts, oldFrame->verts, mesh.numXyz, lc, powersuit);
 
@@ -985,19 +990,19 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                         corners[i].color = UnpackClipColor(colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
                     }
 
-                    GatherClippedTriangle(corners, mvp, skin, flags);
+                    GatherClippedTriangle(batch, corners, mvp, skin, flags);
                 }
             }
             else
             {
                 for (int t = 0; t < numTris; ++t, src += 3)
                 {
-                    if (s_batch.IsFull())
+                    if (batch.IsFull())
                     {
-                        s_batch.Flush(mvp, skin, flags); // Capacity is a triangle multiple,
-                    }                                    // so this only fires between them.
+                        batch.Flush(mvp, skin, flags); // Capacity is a triangle multiple,
+                    }                                  // so this only fires between them.
 
-                    vu1::DrawVertex * const dst = s_batch.PushTriangle();
+                    vu1::DrawVertex * const dst = batch.PushTriangle();
                     for (int i = 0; i < 3; ++i)
                     {
                         // All three read up front; see the note in the VU path.
@@ -1019,7 +1024,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     emittedVerts += 3;
                 }
             }
-            s_batch.Flush(mvp, skin, flags);
+            batch.Flush(mvp, skin, flags);
         }
 
     }

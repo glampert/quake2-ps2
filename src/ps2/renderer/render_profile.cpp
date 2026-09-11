@@ -71,8 +71,8 @@ struct FrameSample
 
     // view::DrawStats
     int nodes, surfs, surfsAlpha, skyFaces, surfsUnclipped;
-    int tris, trisClipped, trisCulled, trisBackFacing;
-    int boxesCulled, batches, entities, particles, dlights;
+    int tris, trisClipped, trisCulled, boxesCulled;
+    int batches, entities, particles, dlights;
 
     // lm::Stats
     int lmAtlases, lmStyle, lmDynamic, lmRestore;
@@ -123,7 +123,7 @@ void WriteBatch()
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,Sky,Ui,Overlay,Sound,"
-                    "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
+                    "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident\n");
@@ -150,11 +150,11 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
                           "%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsUnclipped, s.skyFaces,
-                          s.tris, s.trisClipped, s.trisCulled, s.trisBackFacing,
-                          s.boxesCulled, s.batches, s.entities, s.particles, s.dlights,
+                          s.tris, s.trisClipped, s.trisCulled, s.boxesCulled,
+                          s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
                           s.vramUploads, s.vramOomSyncs, s.vramResident);
         }
@@ -219,7 +219,6 @@ void FrameLogCapture()
     s.tris           = d.trisDrawn;
     s.trisClipped    = d.trisClipped;
     s.trisCulled     = d.trisCulled;
-    s.trisBackFacing = d.trisBackFacing;
     s.boxesCulled    = d.boxesCulled;
     s.batches        = d.drawBatches;
     s.entities       = d.entities;

@@ -24,7 +24,6 @@ struct DrawStats
     int trisDrawn;      // Triangles submitted to VU1 (after EE clipping).
     int trisClipped;    // Triangles re-cut against the VU clip volume.
     int trisCulled;     // Triangles dropped whole, entirely outside the view volume.
-    int trisBackFacing; // Triangles dropped by the world back-face test, before clipping.
     int surfsUnclipped; // World surface gathers that skipped the clipper, counted once per pass.
     int boxesCulled;    // Whole meshes culled via bounding box checks.
     int drawBatches;    // vu1::DrawTriangles calls (one or more per texture).

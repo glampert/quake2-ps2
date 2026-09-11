@@ -62,7 +62,7 @@ public:
     // this to catch is a chunk emitter writing more than the footprint constant
     // it declares - a code bug, but one whose symptom is DMA tags written over
     // the other chain half, which then fails somewhere unrelated.
-    void EnsureSpace(const int qwords) const
+    void EnsureSpace([[maybe_unused]] const int qwords) const
     {
 #if PS2_QUAKE_ASSERTS
         if (QwordCount() + qwords > m_maxQwords) [[unlikely]]

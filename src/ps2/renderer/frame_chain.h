@@ -34,6 +34,8 @@
 #include "ps2/common.h"
 #include "ps2/renderer/vif_packet.h"
 
+#include <cstdint>
+
 namespace ps2::chain {
 
 // Bytes in each of the two halves. Both live in the world loader's lump scratch, so this is
@@ -81,6 +83,110 @@ int QwordCapacity();
 // Callers that must not be interrupted mid-structure should reserve their whole worst case up
 // front rather than reserving piecemeal.
 bool Reserve(int qwords);
+
+// --------------------------------------------------------------------------------------------
+// Payload storage
+// --------------------------------------------------------------------------------------------
+
+// Storage inside the chain: payload a REF tag emitted later points at, not part of the tag
+// structure, so nothing reads it until something references it and every byte belongs to the
+// caller. This is what stopped the gather buffers being file-level statics - a batch claims
+// its worst case here, fills what it needs, gives the rest back, and the chunks its Flush
+// emits reference the span in place exactly as they used to reference the static.
+//
+// **Alloc never drains, and that is the whole reason it is separate from Reserve.** A drain
+// rewinds the chain, which invalidates every outstanding pointer and everything already built,
+// so it may only happen where the caller knows nothing is live. Reserve is that point, and it
+// covers the whole upcoming sequence - the payload *and* the tags that will reference it,
+// which are emitted through VifPacket and cannot drain either. That is why a caller reserves
+// more than it allocates (see CalcAllocCost and vu1.h's chain budget), and why the two cannot be
+// collapsed into one call: they answer different questions.
+//
+// Allocating outside a reservation that covers it asserts, and overrunning the half Sys_Errors
+// rather than corrupting the other one.
+
+// Qwords one allocation costs on top of its payload: the tag that carries the DMAC over the
+// storage rather than through it. A source chain is a tag stream - the qword after a tag's
+// payload is read as the next tag - so raw bytes cannot simply be left sitting in it.
+constexpr int kAllocOverheadQwords = 1;
+
+namespace detail {
+// Whole-qword primitives behind the typed forms below, which are what callers should use.
+// Public only because the templates are defined in this header. 'committable' is whether the
+// block may later be cut back by Commit, which is what tells the two allocation patterns apart.
+void * AllocQwords(int qwords, bool committable);
+void CommitQwords(void * base, int usedQwords);
+
+template<typename T>
+constexpr int QwordsFor(const int count)
+{
+    const size_t bytes = static_cast<size_t>(count) * sizeof(T);
+    return static_cast<int>((bytes + 15u) / 16u);
+}
+
+template<typename T>
+T * TypedAlloc(const int count, const bool committable)
+{
+    // The chain hands out qword-aligned blocks and nothing more: the base is 64-byte aligned
+    // and every allocation is a whole number of qwords, so a type wanting more alignment than
+    // a qword is one the chain cannot place. Caught here rather than as a DMA fault later.
+    static_assert(alignof(T) <= 16, "chain::Alloc cannot align this type");
+
+    PS2_Assert(count > 0);
+    void * const mem = AllocQwords(QwordsFor<T>(count), committable);
+
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(mem) & (alignof(T) - 1u)) == 0,
+                  "chain::Alloc handed back a block this type cannot use!");
+    return static_cast<T *>(mem);
+}
+} // namespace detail
+
+// Qwords an allocation of 'count' objects consumes: the payload rounded up to whole qwords,
+// plus its tag. This is the figure to hand Reserve, together with whatever the caller will
+// append after it.
+template<typename T>
+constexpr int CalcAllocCost(const int count)
+{
+    return detail::QwordsFor<T>(count) + kAllocOverheadQwords;
+}
+
+// Room for exactly 'count' objects of T, for a caller that knows the size before it writes
+// anything - the particle list, the per-draw constant blocks. There is nothing to give back,
+// so there is no Commit to forget, and Commit on one of these asserts.
+//
+// Rounds up to whole qwords, so a type smaller than a qword (the MD2 keyframe pairs) may leave
+// a pad element at the end - transferred, never read.
+template<typename T>
+T * Alloc(const int count)
+{
+    return detail::TypedAlloc<T>(count, /*committable=*/false);
+}
+
+// Room for up to 'count' objects, for a gather that only knows its real size when it finishes -
+// the triangle batches. **Must be followed by Commit**, which cuts the block back to what was
+// written and hands the rest of the chain back; until then the write cursor sits above the
+// whole worst case and nothing else may allocate.
+template<typename T>
+T * AllocMax(const int count)
+{
+    return detail::TypedAlloc<T>(count, /*committable=*/true);
+}
+
+// Cuts the most recent AllocMax back to 'usedCount', in the units it was made in.
+//
+// 'base' must still be the top of the chain - nothing may have been appended since, because the
+// point of this is to move the write cursor back down to where the data actually ends - and it
+// must have come from AllocMax rather than Alloc. Both are asserted.
+template<typename T>
+void Commit(T * const base, const int usedCount)
+{
+    PS2_Assert(usedCount >= 0);
+    detail::CommitQwords(base, detail::QwordsFor<T>(usedCount));
+}
+
+// --------------------------------------------------------------------------------------------
+// Submission
+// --------------------------------------------------------------------------------------------
 
 // Terminates the chain with a trailing FLUSH so a DMA wait covers the VU runs and their
 // XGKICKs, writes the data cache back, and kicks it at VIF1. Does nothing on an empty chain.

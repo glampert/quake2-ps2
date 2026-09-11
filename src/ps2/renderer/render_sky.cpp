@@ -144,11 +144,11 @@ static float s_skyMaxs[2][kNumSkyFaces];
 // second child starts.
 static vec3_t s_skyClipVerts[kSkyClipStages][2][kMaxSkyClipVerts];
 
-// Triangle gather buffer, flushed per face (referenced in place by DMA). Six
-// faces of two triangles, each of which can leave the clipper as a 9-gon, so
-// 7 triangles: 42 verts per face is the true ceiling.
+// Triangle gather buffer, flushed per face (a span of the frame chain, referenced
+// in place by DMA). Six faces of two triangles, each of which can leave the clipper
+// as a 9-gon, so 7 triangles: 42 verts per face is the true ceiling.
 constexpr int kBatchMaxVerts = 3 * 64;
-static batch::TriangleBatch<kBatchMaxVerts> s_batch;
+using SkyBatch = batch::TriangleBatch<kBatchMaxVerts>;
 
 // The sky draws at a finite distance so the world can occlude it, and must not
 // occlude anything drawn after it in return - hence the masked depth writes.
@@ -335,10 +335,11 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 //
 // The sky is flat-shaded: every vertex takes the same colour, whatever the
 // clipper left behind.
-Q_ALWAYS_INLINE void GatherSkyTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & viewProj, const tex::Texture & texture)
+Q_ALWAYS_INLINE void GatherSkyTriangle(SkyBatch & batch, clip::ClipVertex (&corners)[3],
+                                       const math::Mat4 & viewProj, const tex::Texture & texture)
 {
-    s_batch.GatherTriangle(corners, viewProj, texture, kSkyDrawFlags,
-                           [](const clip::ClipVertex &) { return kSkyColor; });
+    batch.GatherTriangle(corners, viewProj, texture, kSkyDrawFlags,
+                         [](const clip::ClipVertex &) { return kSkyColor; });
 }
 
 // One corner of a cube face: face-local ST in [-1, 1] to a world-space vertex
@@ -531,6 +532,10 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
     // skyrotate is degrees per second (ref_gl passes the same to glRotatef).
     const float rotateDegrees = viewDef.time * s_skyRotate;
 
+    // Claims its vertices from the frame chain as it goes, and is flushed inside
+    // the loop, so the pass owns it rather than the file.
+    SkyBatch batch;
+
     for (int i = 0; i < kNumSkyFaces; ++i)
     {
         if (s_skyRotate != 0.0f || fullBounds)
@@ -561,12 +566,12 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
         // own, and the sky has nothing to cull against.
         clip::ClipVertex tri0[3] = { quad[0], quad[1], quad[2] };
         clip::ClipVertex tri1[3] = { quad[0], quad[2], quad[3] };
-        GatherSkyTriangle(tri0, viewProj, face);
-        GatherSkyTriangle(tri1, viewProj, face);
+        GatherSkyTriangle(batch, tri0, viewProj, face);
+        GatherSkyTriangle(batch, tri1, viewProj, face);
 
         // One batch per face: each binds its own texture, so they could never
         // have shared one anyway.
-        s_batch.Flush(viewProj, face, kSkyDrawFlags);
+        batch.Flush(viewProj, face, kSkyDrawFlags);
         ++view::GetDrawStats().skyFaces;
     }
 }

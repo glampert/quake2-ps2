@@ -30,6 +30,7 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/batch.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
@@ -65,7 +66,6 @@ constexpr float kZNearWeapon = 0.25f;
 constexpr u32 kFullBright = mod::kFullBrightColor;
 
 // Render view cvars:
-static const cvar_t * s_backFaceCull      = nullptr;
 static const cvar_t * s_skipWorld         = nullptr;
 static const cvar_t * s_skipAlphaSurfaces = nullptr;
 static const cvar_t * s_skipBrushModels   = nullptr;
@@ -104,10 +104,6 @@ static int s_viewCluster      = kInvalidCluster;
 static int s_viewCluster2     = kInvalidCluster;
 static int s_oldViewCluster   = kInvalidCluster;
 static int s_oldViewCluster2  = kInvalidCluster;
-
-// World-space camera position for the frame, in the format the VU0 back-face
-// helper wants (16-byte aligned, w = 1).
-static math::Vec4 s_eyePosition = {};
 
 // Scene camera basis for the frame (Quake coordinates, from AngleVectors).
 static vec3_t s_forwardVec = {};
@@ -179,9 +175,12 @@ static math::Mat4 s_alphaEntityMatrices[MAX_ENTITIES];
 static int s_alphaEntityMatrixCount = 0;
 
 // Triangle gather buffer: texture chains append here and flush through
-// vu1::DrawTriangles when full (see batch.h).
+// vu1::DrawTriangles when full (see batch.h). The vertices live in the frame
+// chain, so an instance is 8 bytes and rides in the draw state rather than
+// sitting in .bss - which also means a pass cannot gather under one state and
+// flush under another by forgetting which static it shared.
 constexpr int kBatchMaxVerts = 3 * 768; // 768 whole triangles per batch
-static batch::TriangleBatch<kBatchMaxVerts> s_batch;
+using SurfaceBatch = batch::TriangleBatch<kBatchMaxVerts>;
 
 // Performance counters for the frame, reset by RenderFrame and read through
 // GetDrawStats() by the ps2_show_drawstats overlay.
@@ -438,15 +437,6 @@ Q_ALWAYS_INLINE bool ShouldCullBBox(float * mins, float * maxs)
     return false;
 }
 
-// Whether the per-triangle back-face test runs at all. Note the world and
-// brush model passes already reject whole surfaces on the same side test
-// (their triangles are coplanar with the surface), so enabling this test
-// actually doesn't gain us anything. Left as a reference, disabled by default.
-Q_ALWAYS_INLINE bool WorldBackFaceCullEnabled()
-{
-    return s_backFaceCull->value != 0.0f;
-}
-
 void SetupFrame(const refdef_t & viewDef)
 {
     PS2_Assert(viewDef.width > 0 && viewDef.height > 0);
@@ -458,8 +448,6 @@ void SetupFrame(const refdef_t & viewDef)
     s_alphaEntityMatrixCount = 0;
 
     ++s_frameCount;
-
-    s_eyePosition = { viewDef.vieworg[0], viewDef.vieworg[1], viewDef.vieworg[2], 1.0f };
 
     // Animated walls flip frames at 2 Hz of game time (as in ref_gl).
     s_frameTime        = viewDef.time;
@@ -797,24 +785,32 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
 // buffer serve both.
 struct SurfaceDrawState
 {
-    const math::Mat4 * mvp;   // Clips and draws with this; the world's is the plain view-projection.
-    math::Vec4         eye;   // Camera in the same space as the triangles, for the back-face test.
-    u32                rgba;  // Packed vertex colour (GS modulate: 128 = unchanged, alpha 0x80 = 1.0).
-    vu1::DrawFlags     flags; // Batch flags, i.e. whether the submission blends.
-    bool               cullBackFaces;
+    // What the gather appends to, and what Flush submits. Scoped to the pass that
+    // built this state: two batches holding claimed chain spans at once is not a
+    // thing the chain can represent (see batch.h).
+    SurfaceBatch * batch = nullptr;
+
+    // Clips and draws with this; the world's is the plain view-projection.
+    const math::Mat4 * mvp = nullptr;
+
+    // Packed vertex colour (GS modulate: 128 = unchanged, alpha 0x80 = 1.0).
+    u32 rgba = 0;
+
+    // Batch flags, i.e. whether the submission blends.
+    vu1::DrawFlags flags = vu1::DrawFlags::None;
 
     // Gouraud alpha: take each vertex's alpha from its own ClipVertex::st.z
     // (0..1) instead of from 'rgba', whose RGB is still used for all three
     // corners. The gather path is otherwise flat-shaded - one colour per
     // batch - and this is the cheapest way out of that, since st is already
     // a whole quadword the clipper interpolates and .z was spare.
-    bool               vertexAlpha;
+    bool vertexAlpha = false;
 
     // Feed the gather the vertices' lightmap UVs instead of their diffuse
     // ones - the second pass over the same geometry that modulates in the
     // lightmap. Defaulted because only that one pass wants it; every other
     // draw leaves it alone.
-    bool               lightmapUVs = false;
+    bool lightmapUVs = false;
 
     // Tint the surface being gathered by the luxel chroma its vertices carry
     // (PolyVertex::rgba), rather than leaving the vertex colour flat.
@@ -822,7 +818,7 @@ struct SurfaceDrawState
     // a luxel's intensity, so its colour rides the vertex colour the GS
     // modulates the wall texture by instead. Mutually exclusive with
     // vertexAlpha, which owns that colour's alpha byte.
-    bool               lightmapTint = false;
+    bool lightmapTint = false;
 
     // The loader's PolyVertex is exactly what this pass wants in the batch, so
     // GatherPolyTriangles can hand the model's own memory to the DMA instead of
@@ -831,14 +827,14 @@ struct SurfaceDrawState
     // override it (ps2_lightmap_only, ps2_lightmap_color 0) and translucent brush
     // models, which carry the entity's alpha rather than the surface's, fall back
     // to BuildPolyVertexCache.
-    bool               bakedVertices = false;
+    bool bakedVertices = false;
 
     // The surface being gathered was proven wholly inside the VU clip volume, so
     // GatherPolyTriangles may emit its triangles verbatim and skip the clipper
     // entirely. Set per surface by the world passes, which are the only ones
     // that can prove it (SurfaceInsideClipVolume judges against the world's
     // view-projection); everything else leaves it false and clips as before.
-    bool               skipClipping = false;
+    bool skipClipping = false;
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -945,24 +941,8 @@ Q_ALWAYS_INLINE u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & s
 // position and UVs set; their clip distances are computed by the clipper.
 Q_ALWAYS_INLINE void GatherTriangle(ClipVertex (&corners)[3], const tex::Texture & texture, const SurfaceDrawState & state)
 {
-    // Reject a triangle facing away from the camera before any clipping work.
-    // The test is cheaper than the six plane distances the clipper takes, and a
-    // rejected triangle costs the clipper, the gather buffer and the VU nothing.
-    if (state.cullBackFaces &&
-        math::CullBackFacingTriangle(state.eye, corners[0].pos, corners[1].pos, corners[2].pos))
-    {
-        ++s_drawStats.trisBackFacing;
-        return;
-    }
-
-    s_batch.GatherTriangle(corners, *state.mvp, texture, state.flags,
-                           [&state](const ClipVertex & v) { return VertexColor(v, state); });
-}
-
-// Sends the gathered triangles as one batch and empties the buffer.
-Q_ALWAYS_INLINE void FlushScratch(const tex::Texture & texture, const SurfaceDrawState & state)
-{
-    s_batch.Flush(*state.mvp, texture, state.flags);
+    state.batch->GatherTriangle(corners, *state.mvp, texture, state.flags,
+                                [&state](const ClipVertex & v) { return VertexColor(v, state); });
 }
 
 // Every vertex the polygon being gathered can emit, already in the form the
@@ -1093,12 +1073,12 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
 
         // Capacity is a whole number of triangles and this pushes three at a
         // time, so the buffer can only ever fill on a triangle boundary.
-        if (s_batch.IsFull())
+        if (state.batch->IsFull())
         {
-            s_batch.Flush(*state.mvp, texture, state.flags);
+            state.batch->Flush(*state.mvp, texture, state.flags);
         }
 
-        vu1::DrawVertex * const dst = s_batch.PushTriangle();
+        vu1::DrawVertex * const dst = state.batch->PushTriangle();
         if (patchLightmapUVs)
         {
             for (int i = 0; i < 3; ++i)
@@ -1270,12 +1250,12 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
             {
                 // Capacity is a whole number of triangles and this pushes three
                 // at a time, so the buffer can only fill on a triangle boundary.
-                if (s_batch.IsFull())
+                if (state.batch->IsFull())
                 {
-                    s_batch.Flush(*state.mvp, texture, state.flags);
+                    state.batch->Flush(*state.mvp, texture, state.flags);
                 }
 
-                vu1::DrawVertex * const dst = s_batch.PushTriangle();
+                vu1::DrawVertex * const dst = state.batch->PushTriangle();
                 vu1::CopyDrawVertex(dst[0], s_polyVertexCache[0]);
                 vu1::CopyDrawVertex(dst[1], s_polyVertexCache[t + 1]);
                 vu1::CopyDrawVertex(dst[2], s_polyVertexCache[t + 2]);
@@ -1311,15 +1291,12 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
 // and the back-face test takes the world camera. Shared by the diffuse and
 // lightmap passes, which must agree on all of it or their triangles would not
 // land on the same pixels.
-Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState()
+Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState(SurfaceBatch & batch)
 {
     return SurfaceDrawState {
+        .batch = &batch,
         .mvp   = &s_viewProjMatrix,
-        .eye   = s_eyePosition,
         .rgba  = kFullBright,
-        .flags = vu1::DrawFlags::None,
-        .cullBackFaces = WorldBackFaceCullEnabled(),
-        .vertexAlpha   = false
     };
 }
 
@@ -1374,10 +1351,11 @@ void DrawTextureChains(const SurfaceDrawState & base)
                 GatherPolyTriangles(*poly, *texture, state);
             }
         }
-        FlushScratch(*texture, state);
 
+        state.batch->Flush(*state.mvp, *texture, state.flags);
         texture->textureChain = nullptr; // Reset for the next frame.
     }
+
     s_chainTextureCount = 0;
 }
 
@@ -1454,7 +1432,8 @@ void DrawLightmapChains(const SurfaceDrawState & base)
                 GatherPolyTriangles(*poly, atlas, state);
             }
         }
-        FlushScratch(atlas, state);
+
+        state.batch->Flush(*state.mvp, atlas, state.flags);
     }
 
     lm::ClearChains();
@@ -1584,16 +1563,12 @@ void RenderAlphaSurfaces()
         return;
     }
 
+    SurfaceBatch batch;
     SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = nullptr, // Per entry, below; no entry ever carries null, so the first always switches.
-        .eye   = s_eyePosition,
-        .rgba  = 0,
         .flags = vu1::DrawFlags::Blended,
-        // Both collectors already dropped the surfaces facing away from the
-        // camera - the world walk by plane side, brush models by the same
-        // test in model space - so the triangle test has nothing left to find here.
-        .cullBackFaces = false,
-        .vertexAlpha   = false
+        .vertexAlpha = false
     };
 
     // The loader baked each translucent surface's own blend colour into its
@@ -1614,7 +1589,7 @@ void RenderAlphaSurfaces()
         {
             if (batchTexture != nullptr)
             {
-                FlushScratch(*batchTexture, state); // Still the outgoing state: flush before switching.
+                state.batch->Flush(*state.mvp, *batchTexture, state.flags); // Still the outgoing state: flush before switching.
             }
             batchTexture = entry.texture;
             state.mvp    = entry.mvp;
@@ -1643,7 +1618,7 @@ void RenderAlphaSurfaces()
 
     if (batchTexture != nullptr)
     {
-        FlushScratch(*batchTexture, state);
+        state.batch->Flush(*state.mvp, *batchTexture, state.flags);
     }
 
     s_alphaSurfaceCount      = 0;
@@ -1711,18 +1686,13 @@ void RenderDLights(const refdef_t & viewDef)
     // Untextured, but a batch still binds one.
     const tex::Texture & texture = tex::DebugTexture();
 
+    SurfaceBatch batch;
     SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = &s_viewProjMatrix, // Billboards are built in world space.
-        .eye   = s_eyePosition,
         .rgba  = 0, // Per light; filled in below.
         .flags = vu1::DrawFlags::Additive | vu1::DrawFlags::Untextured,
-        // Camera-facing, and the wedges of one flare never overlap, so there
-        // is nothing to cull. Culling them would actively hurt: the apex sits
-        // a full radius off the rim plane, tilting each wedge ~45 degrees off
-        // the view axis, so a light near the camera and off to one side would
-        // lose whole wedges and show a pie-slice notch.
-        .cullBackFaces = false,
-        .vertexAlpha   = true // The centre-to-rim fade rides in st.z.
+        .vertexAlpha = true // The centre-to-rim fade rides in st.z.
     };
 
     const dlight_t * light = viewDef.dlights;
@@ -1767,7 +1737,7 @@ void RenderDLights(const refdef_t & viewDef)
         ++s_drawStats.dlights;
     }
 
-    FlushScratch(texture, state);
+    state.batch->Flush(*state.mvp, texture, state.flags);
 }
 
 void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance & world, const mod::ModelNode * node)
@@ -1868,7 +1838,9 @@ void RenderWorldModel(const refdef_t & viewDef)
         }
     }
 
-    const SurfaceDrawState state = WorldSurfaceDrawState();
+    // One batch for both world passes below; each flushes before the next starts.
+    SurfaceBatch batch;
+    const SurfaceDrawState state = WorldSurfaceDrawState(batch);
 
     // Diffuse first, then the lightmap over it - ref_gl's DrawTextureChains()
     // followed by R_BlendLightmaps(). Both passes draw the same triangles with
@@ -2113,15 +2085,14 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     // ref_gl draws translucent brush models at a flat quarter alpha rather
     // than the entity's own (glColor4f(1,1,1,0.25) in R_DrawBrushModel).
     const bool translucent = (entity.flags & RF_TRANSLUCENT) != 0;
+    SurfaceBatch batch;
+
     SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = &mvp,
-        // The surfaces are model-space, so the back-face test takes the same
-        // model-space camera the plane-side test above uses.
-        .eye   = { modelOrigin[0], modelOrigin[1], modelOrigin[2], 1.0f },
         .rgba  = translucent ? vu1::PackColorRGBA(128, 128, 128, 0x80 / 4) : kFullBright,
         .flags = translucent ? vu1::DrawFlags::Blended : vu1::DrawFlags::None,
-        .cullBackFaces = WorldBackFaceCullEnabled(),
-        .vertexAlpha   = false
+        .vertexAlpha = false
     };
 
     // A translucent submodel draws every surface at the entity's alpha rather
@@ -2190,7 +2161,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         {
             if (batchTexture != nullptr)
             {
-                FlushScratch(*batchTexture, state);
+                state.batch->Flush(*state.mvp, *batchTexture, state.flags);
             }
             batchTexture = texture;
         }
@@ -2204,7 +2175,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
 
     if (batchTexture != nullptr)
     {
-        FlushScratch(*batchTexture, state);
+        state.batch->Flush(*state.mvp, *batchTexture, state.flags);
     }
 
     // Light the surfaces just drawn, in this entity's own space. The chains are
@@ -2263,15 +2234,13 @@ void DrawSpriteEntity(const entity_t & entity)
     float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
     alpha = (alpha < 0.0f) ? 0.0f : ((alpha > 1.0f) ? 1.0f : alpha);
 
+    SurfaceBatch batch;
     const SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = &s_viewProjMatrix, // The quad is built in world space already.
-        .eye   = s_eyePosition,
         .rgba  = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f)),
         .flags = (alpha < 1.0f) ? vu1::DrawFlags::Blended : vu1::DrawFlags::None,
-        // Never back-face culled: the quad is built from the camera's own
-        // right/up vectors, so it cannot face away and the test would be useless.
-        .cullBackFaces = false,
-        .vertexAlpha   = false
+        .vertexAlpha = false
     };
 
     // The four corners, in ref_gl's order: bottom-left, top-left, top-right,
@@ -2310,7 +2279,7 @@ void DrawSpriteEntity(const entity_t & entity)
     triangle[2] = quad[3];
     GatherTriangle(triangle, *skin, state);
 
-    FlushScratch(*skin, state);
+    state.batch->Flush(*state.mvp, *skin, state.flags);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2344,17 +2313,13 @@ void DrawBeamEntity(const entity_t & entity)
 
     const float alpha = (entity.alpha > 0.0f && entity.alpha <= 1.0f) ? entity.alpha : 1.0f;
 
+    SurfaceBatch batch;
     const SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = &s_viewProjMatrix, // Built in world space.
-        .eye   = s_eyePosition,
-        .rgba  = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) |
-                 (static_cast<u32>(alpha * 128.0f) << 24),
+        .rgba  = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
         .flags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured,
-        // A cylinder does have a far half, but keeping it only makes the blend
-        // slightly denser - whereas culling it with the ring's winding guessed
-        // wrong would turn the beam inside out.
-        .cullBackFaces = false,
-        .vertexAlpha   = false
+        .vertexAlpha = false
     };
 
     math::Vec4 startPoints[kNumBeamSegs];
@@ -2403,7 +2368,7 @@ void DrawBeamEntity(const entity_t & entity)
         GatherTriangle(triangle, texture, state);
     }
 
-    FlushScratch(texture, state);
+    state.batch->Flush(*state.mvp, texture, state.flags);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2434,15 +2399,13 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
     // directly here, without the pitch flip the alias path wraps it in.
     const math::Mat4 mvp = MakeEntityMatrix(entity, /*flipPitchAngle=*/false) * s_viewProjMatrix;
 
+    SurfaceBatch batch;
     const SurfaceDrawState state = {
+        .batch = &batch,
         .mvp   = &mvp,
-        .eye   = s_eyePosition, // Unused; the octahedron is not culled (below).
         .rgba  = vu1::PackColorRGBA(channel(color[0]), channel(color[1]), channel(color[2]), 0x80),
         .flags = vu1::DrawFlags::None,
-        // Eight triangles for a debug marker: not worth risking the fans
-        // coming out inside-out and hiding the very thing they exist to show.
-        .cullBackFaces = false,
-        .vertexAlpha   = false
+        .vertexAlpha = false
     };
 
     constexpr float kRadius = 16.0f;
@@ -2484,7 +2447,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
         }
     }
 
-    FlushScratch(texture, state);
+    state.batch->Flush(*state.mvp, texture, state.flags);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2525,11 +2488,14 @@ void RenderParticles(const refdef_t & viewDef)
         (s_upVec[2] + s_rightVec[2]) * 1.5f,
     };
 
-    // One qword per particle, gathered here and referenced in place by the DMA.
-    // File-level static for the same reason the triangle batches are: far too
-    // large for the stack, and draws are synchronous, so one buffer serves the
-    // whole list.
-    static vu1::ParticleVertex s_particles[MAX_PARTICLES];
+    // One qword per particle, gathered straight into the frame chain and
+    // referenced in place by the DMA. Unlike a triangle batch the count is known
+    // before anything is written, so this claims exactly what it needs and has
+    // nothing to hand back - but it still reserves the chunks the draw will
+    // append on top, because those must not drain the chain out from under the
+    // span they reference.
+    chain::Reserve(chain::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
+    vu1::ParticleVertex * const particles = chain::Alloc<vu1::ParticleVertex>(numParticles);
 
     for (int i = 0; i < numParticles; ++i)
     {
@@ -2538,7 +2504,7 @@ void RenderParticles(const refdef_t & viewDef)
         const float alpha = (p.alpha < 0.0f) ? 0.0f : ((p.alpha > 1.0f) ? 1.0f : p.alpha);
         const u32   color = (global_palette[p.color & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24); 
 
-        vu1::ParticleVertex & dst = s_particles[i];
+        vu1::ParticleVertex & dst = particles[i];
         dst.rgba = color;
         dst.x = p.origin[0];
         dst.y = p.origin[1];
@@ -2548,7 +2514,7 @@ void RenderParticles(const refdef_t & viewDef)
     s_drawStats.particles += numParticles;
     ++s_drawStats.drawBatches;
 
-    vu1::DrawParticles(s_viewProjMatrix, texture, quadOffset, s_particles, numParticles, vu1::DrawFlags::Blended);
+    vu1::DrawParticles(s_viewProjMatrix, texture, quadOffset, particles, numParticles, vu1::DrawFlags::Blended);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2627,15 +2593,14 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
 
 void Init()
 {
-    s_backFaceCull      = Cvar_Get("ps2_backface_cull",       "0",   0); // NOTE: Off by default. BSP already culls backfacing surfaces.
-    s_skipWorld         = Cvar_Get("ps2_skip_world",          "0",   0);
-    s_skipAlphaSurfaces = Cvar_Get("ps2_skip_alpha_surfaces", "0",   0); // Debug: drop the translucent glass/water pass.
-    s_skipBrushModels   = Cvar_Get("ps2_skip_brushmodels",    "0",   0);
-    s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0",   0);
-    s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0",   0);
-    s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0);
+    s_skipWorld         = Cvar_Get("ps2_skip_world",          "0",   0); // Debug: skips drawing all world geometry/walls.
+    s_skipAlphaSurfaces = Cvar_Get("ps2_skip_alpha_surfaces", "0",   0); // Debug: skips drawing the translucent glass/water pass.
+    s_skipBrushModels   = Cvar_Get("ps2_skip_brushmodels",    "0",   0); // Debug: skips drawing world brush models (props/doors/static objects).
+    s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0",   0); // Debug: skips drawing sprites.
+    s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0",   0); // Debug: skips drawing entities.
+    s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0); // Debug: skips drawing particles.
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
-    s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0);
+    s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
     s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   0); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
     s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", 0); // Brightness of the VU1 point lights.
     s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.

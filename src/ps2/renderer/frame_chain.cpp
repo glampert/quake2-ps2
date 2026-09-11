@@ -23,6 +23,36 @@ namespace {
 
 static bool s_initialized = false;
 
+// The most recent *committable* allocation - what AllocMax handed out - and the NEXT tag that
+// carries the DMAC over it, which Commit has to re-aim once the real size is known.
+//
+// An exact Alloc clears both, which is what makes Commit's check do double duty: it fires on a
+// Commit of a block that was never committable, and on one something else has allocated on top
+// of since - two gathers open at once, where the first one's commit would silently cut the
+// second one's span away, with no assert firing on the pointer arithmetic alone and the
+// corruption surfacing later as a mangled DMA tag.
+static dma_tag_t * s_allocSkipTag = nullptr;
+static void *      s_lastAlloc    = nullptr;
+
+// Where the last Reserve said the chain may be built up to. Alloc must stay inside it: the
+// contract is that a caller reserves its whole sequence up front, precisely so no allocation
+// can drain, and until now that was a comment rather than something the code checked. Zero
+// means no live reservation, which is what a rewind leaves behind - so an Alloc with no
+// Reserve in front of it trips too.
+static int s_reserveEnd = 0;
+
+// Aims an allocation's skip tag at the first qword past its payload.
+//
+// Masked explicitly: the DMAC wants a physical address and packet2_chain_set_dma_tag stores
+// whatever it is handed (dma_channel_send_chain masks the chain's start address, but nothing
+// masks the addresses inside tags). The chain is in the normal cached segment today, so this
+// changes nothing - it is here so a move to UCAB cannot quietly send the DMAC off the end of
+// RAM instead.
+Q_ALWAYS_INLINE void AimSkipTag(dma_tag_t * const tag, const qword_t * const target)
+{
+    tag->ADDR = static_cast<u64>(reinterpret_cast<std::uintptr_t>(target) & 0x0FFFFFFFu);
+}
+
 // True once a Kick has gone out that nothing has waited on yet. Kept rather than polling the
 // DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
 // reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
@@ -114,6 +144,9 @@ void BeginFrame()
 
     s_half ^= 1;
     packet2_reset(Current(), /*clear_mem=*/0);
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
+    s_reserveEnd   = 0;
 
     s_kicks = 0;
     s_emergencyDrains = 0;
@@ -159,6 +192,7 @@ bool Reserve(const int qwords)
     const int capacity = QwordCapacity();
     if (QwordCount() + qwords <= capacity) [[likely]]
     {
+        s_reserveEnd = QwordCount() + qwords;
         return false;
     }
 
@@ -176,8 +210,88 @@ bool Reserve(const int qwords)
     // the per-batch path used to do for every batch - then hand the caller an empty chain.
     Drain();
 
+    s_reserveEnd = QwordCount() + qwords;
     ++s_emergencyDrains;
     return true;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Payload storage
+// ------------------------------------------------------------------------------------------------
+
+void * detail::AllocQwords(const int qwords, const bool committable)
+{
+    PS2_Assert(qwords > 0);
+
+    packet2_t * const pkt = Current();
+
+    // The reservation is what guarantees this cannot need to drain. Debug only - the capacity
+    // check below is the one that has to be live - but it is the check that catches the real
+    // mistake, which is reserving for the payload and forgetting the tags that follow it.
+    PS2_AssertMsg(QwordCount() + qwords + kAllocOverheadQwords <= s_reserveEnd,
+                  "chain::Alloc outside a reservation that covers it!");
+
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "chain::Alloc inside an open tag - payload cannot land mid-structure!");
+
+    // Live in release for the same reason VifPacket::EnsureSpace is: the overrun would run off
+    // the end of this half and into the other one, and the failure would surface a frame or two
+    // later as corruption with nothing to connect it back to here.
+    if (QwordCount() + qwords + kAllocOverheadQwords > QwordCapacity()) [[unlikely]]
+    {
+        Sys_Error("Frame chain: a %d qword allocation does not fit the %d qwords left in the "
+                  "half. Alloc never drains - the caller has to Reserve its worst case first.",
+                  qwords, QwordCapacity() - QwordCount());
+    }
+
+    // The chain is a tag stream: the qword after a tag's payload is read as the next tag, so
+    // raw storage cannot simply be left sitting in it - the DMAC would walk into the gathered
+    // vertices and hand them to VIF1 as VIFcodes. Front the allocation with a NEXT tag whose
+    // QWC is zero: transfer nothing, and continue at ADDR - which points past the payload.
+    // Through void*: -Wcast-align will not take qword_t* -> dma_tag_t* directly, and the
+    // cursor is qword aligned by construction (packet2 asserts it on every tag it adds).
+    void * const skipMem = pkt->next;
+    dma_tag_t * const skip = static_cast<dma_tag_t *>(skipMem);
+    packet2_chain_add_dma_tag(pkt, 0, 0, P2_DMA_TAG_NEXT, 0, nullptr, 0);
+
+    // TTE is on, so the tag's upper 64 bits reach VIF1 as two VIFcodes whatever the tag id is.
+    // They have to be NOPs, and they are also what pads the tag out to the whole qword.
+    packet2_vif_nop(pkt, 0);
+    packet2_vif_nop(pkt, 0);
+
+    qword_t * const mem = pkt->next;
+    pkt->next = mem + qwords;
+    AimSkipTag(skip, pkt->next);
+
+    // Only a committable block is worth remembering: an exact one is already the size it will
+    // stay, and forgetting it here is what makes a stray Commit on it assert.
+    s_allocSkipTag = committable ? skip : nullptr;
+    s_lastAlloc    = committable ? static_cast<void *>(mem) : nullptr;
+    return mem;
+}
+
+void detail::CommitQwords(void * const base, const int usedQwords)
+{
+    PS2_Assert(usedQwords >= 0);
+
+    packet2_t * const pkt = Current();
+    qword_t * const mem = static_cast<qword_t *>(base);
+
+    // Catches both ways this goes wrong, and they are the two invariants the whole scheme rests
+    // on: something appended to the chain since the Alloc (so cutting back would eat into it),
+    // or the chain was rewound underneath the allocation (so the pointer is stale and the gather
+    // wrote into memory that has since been handed to somebody else).
+    PS2_AssertMsg(mem >= pkt->base && (mem + usedQwords) <= pkt->next,
+                  "chain::Commit on a stale allocation - the chain moved underneath it!");
+    PS2_AssertMsg(base == s_lastAlloc,
+                  "chain::Commit on a block that was not the last AllocMax - committing an "
+                  "exact Alloc, or two gathers open at once?");
+
+    pkt->next = mem + usedQwords;
+    AimSkipTag(s_allocSkipTag, pkt->next);
+
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -251,6 +365,9 @@ bool Drain()
     }
 
     packet2_reset(pkt, /*clear_mem=*/0);
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
+    s_reserveEnd   = 0;
     return hadWork;
 }
 

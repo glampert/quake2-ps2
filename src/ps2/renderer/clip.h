@@ -47,7 +47,7 @@ union ClipDists
 
 // Everything a clipped vertex carries, laid out as five quadwords so a plane cut
 // interpolates it with five aligned vector lerps and no scalar float math at all.
-struct alignas(16) ClipVertex
+struct ClipVertex
 {
     math::Vec4 pos; // position in the space 'mvp' expects, w = 1
     math::Vec4 st;  // diffuse texture coords in xy; .z and .w are the caller's
@@ -64,14 +64,30 @@ struct alignas(16) ClipVertex
 };
 static_assert(sizeof(ClipVertex) == 80, "ClipVertex must be exactly five quadwords");
 
-// The clipper's ping-pong buffers. Owned by the caller so the common,
-// nothing-to-clip case touches neither: draws are synchronous, so one file-level
-// instance per caller serves every triangle in turn.
+// The clipper's ping-pong buffers. A parameter rather than internal state so
+// ClipTriangle stays a pure function - which is what lets a host harness drive
+// it - and so the common, nothing-to-clip case touches neither buffer.
 struct Scratch
 {
     ClipVertex a[kMaxClippedVerts];
     ClipVertex b[kMaxClippedVerts];
 };
+
+// One Scratch for the whole renderer, which is all the renderer has ever needed.
+//
+// A Scratch's live range is a single ClipTriangle call plus the caller's loop over
+// what it returned - *outVerts points into a or b - and clips never nest: a triangle
+// is finished before the next one starts, and the world, sky and alias passes run in
+// turn rather than interleaved.
+//
+namespace detail {
+extern Scratch g_sharedScratch;
+} // namespace detail
+
+Q_ALWAYS_INLINE Scratch & SharedScratch()
+{
+    return detail::g_sharedScratch;
+}
 
 // Fills in a corner's six clip-plane distances from its position. The vertex
 // draws untransformed and the VU applies 'mvp', so the judgement has to happen

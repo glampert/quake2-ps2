@@ -127,6 +127,61 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 }
 
 // ------------------------------------------------------------------------------------------------
+// Chain budget
+// ------------------------------------------------------------------------------------------------
+
+// What a draw costs the frame chain besides its vertex data, so a caller whose vertex data is
+// *itself* in the chain can reserve the pair together.
+//
+// It has to reserve the pair. The chunk loop reserves as it goes, and chain::Reserve drains and
+// rewinds when it comes up short - which would pull the chain out from under the very span the
+// chunks being emitted reference. Reserving the whole draw up front means that reservation can
+// never fire half way through one.
+
+// Vertices one VU1 run carries. Draws longer than this are split into chunks of this size,
+// submitted back to back in the same chain.
+constexpr int kMaxVertsPerBatch = 96;
+
+// Chain qwords one chunk appends: the header/GIF-tag inline unpack (1 tag qword plus 8 of
+// payload), the vertex REF unpack (1 - its VIFcodes ride in the tag's upper half) and the
+// FLUSH + MSCAL (1). 11 in practice, declared with room to spare; over-declaring only reserves
+// slightly more of the chain than a chunk needs.
+constexpr int kChunkChainQwords = 16;
+
+// Chain qwords a draw's opening costs: the transform block and the dynamic-light block, both
+// built in the chain rather than referenced out of a static. 8 and 12 qwords of payload, each
+// fronted by the skip tag chain::Alloc needs and followed by the REF tag that sends it.
+constexpr int kDrawSetupQwords = (8 + 2) + (12 + 2);
+
+// Vertices one particle VU run carries, and what one of its chunks costs: the same shape, with
+// an 11-qword header/constants/tag payload instead of 8.
+constexpr int kMaxParticlesPerBatch = 78;
+constexpr int kParticleChunkQwords  = 22;
+
+constexpr int ChunkCount(const int items, const int perChunk)
+{
+    return (items + perChunk - 1) / perChunk;
+}
+
+// Chain qwords DrawTriangles / DrawParticles need for 'count' vertices / particles, not
+// counting the data itself.
+//
+// The peak the chunk loop *demands*, which is one setup block more than the draw ever
+// appends: every chunk reserves the setup alongside itself, because a reservation that
+// drained would rewind the setup with everything else and the next chunk has to be able to
+// re-emit it. So the last chunk asks for room the draw will not end up using, and reserving
+// only what is written would let that final ask drain the chain mid-draw.
+constexpr int DrawTrianglesChainCost(const int vertCount)
+{
+    return (2 * kDrawSetupQwords) + (ChunkCount(vertCount, kMaxVertsPerBatch) * kChunkChainQwords);
+}
+
+constexpr int DrawParticlesChainCost(const int count)
+{
+    return (2 * kDrawSetupQwords) + (ChunkCount(count, kMaxParticlesPerBatch) * kParticleChunkQwords);
+}
+
+// ------------------------------------------------------------------------------------------------
 // Generic VU1 triangles (static world geometry)
 // ------------------------------------------------------------------------------------------------
 
@@ -176,6 +231,12 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // upload with the previous one's transform. Synchronous for now: returns once
 // the GS has consumed the batch, so the vertex data only needs to stay valid
 // for the duration of the call. Call between gs::Begin/EndFrame.
+//
+// 'verts' is normally a span of the frame chain itself (chain::Alloc), which is
+// how the gather buffers stopped being statics. Such a caller must have reserved
+// DrawTrianglesChainCost(vertCount) on top of the span - see the chain budget
+// above - and nothing may drain the chain between filling the span and this
+// call, or the REF tags below would point at reused memory.
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount,
                    DrawFlags flags = DrawFlags::None);

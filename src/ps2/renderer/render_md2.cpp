@@ -128,11 +128,12 @@ Q_ALWAYS_INLINE const u32 * KeyframeVertWords(const daliasframe_t * const frame)
 // Frame state / scratch buffers
 // ------------------------------------------------------------------------------------------------
 
-// Triangle gather buffers, flushed when full (referenced in place by DMA).
-// The two paths gather into their own: the EE lerp path into the shared
-// DrawVertex batch (batch.h, which also carries the clipper), the VU lerp path
-// into the byte-position and attribute streams of s_lerpBatch. Only one of them
-// is ever active for a given model at a time.
+// Triangle gather buffers, flushed when full (referenced in place by DMA out of
+// the frame chain). The two paths gather into their own: the EE lerp path into
+// the DrawVertex batch (batch.h, which also carries the clipper), the VU lerp
+// path into the keyframe/attribute chunk groups of the lerp batch. Only one of
+// them is ever active for a given model at a time, and both are locals of the
+// entity draw.
 constexpr int kBatchMaxVerts = 3 * 512;
 using AliasBatch = batch::TriangleBatch<kBatchMaxVerts>;
 
@@ -142,7 +143,7 @@ using AliasBatch = batch::TriangleBatch<kBatchMaxVerts>;
 // call site). 768 triangles covers 115 of the 119 stock models - everything but
 // the four bosses, which appear once each in a playthrough and fallback to a full shadow pass.
 constexpr int kLerpBatchMaxVerts = 3 * 768;
-static batch::VULerpTriangleBatch<kLerpBatchMaxVerts> s_lerpBatch;
+using LerpBatch = batch::VULerpTriangleBatch<kLerpBatchMaxVerts>;
 
 // ------------------------------------------------------------------------------------------------
 // Entity transform and frustum cull
@@ -589,17 +590,17 @@ Q_ALWAYS_INLINE void GatherClippedTriangle(AliasBatch & batch, clip::ClipVertex 
 // Projected shadow
 // ------------------------------------------------------------------------------------------------
 
-// The shadow's attributes, identical for every vertex of every shadow - filled
-// once, referenced forever. The colour is not in here: kShadowShadeLight is all
-// zero, so any shade term multiplies out to black and only the alpha in that
-// vector matters. These carry the zeroed ST the untextured draw wants.
+// The attribute a shadow vertex carries. Every lane of it is a placeholder: the
+// colour is not in here (kShadowShadeLight is all zero, so any shade term
+// multiplies out to black and only the alpha in that vector matters) and neither
+// is the ST, since the draw is untextured and the GS never samples.
 //
-// One VU chunk's worth rather than one batch's worth. Every entry is the same,
-// so the draw takes it as a repeating block that each chunk re-reads from the
-// start (see vu1::DrawLerpedTriangles' attribsRepeat) instead of an array as
-// long as the largest model - which at this batch size would be 33 KB of
-// identical qwords.
-static vu1::LerpDrawAttrib s_shadowAttribs[vu1::kMaxLerpVertsPerBatch];
+// Which is why the shadow that redraws the model's own stream does not need this
+// at all - that stream's real attributes multiply out to exactly the same black,
+// so there is no override and no repeating block. It exists only for the rebuild
+// path below, which writes it per vertex rather than leave chain memory the last
+// frame put something else in for the DMA to carry.
+constexpr vu1::LerpDrawAttrib kShadowAttrib = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 // Draws the entity's planar projected shadow: the same keyframe byte streams
 // the model just drew, run through the same VU1 lerp, with the flattening
@@ -652,7 +653,8 @@ constexpr math::Vec4 kShadowShadeLight = { 0.0f, 0.0f, 0.0f, 64.0f };
 // Rebuilds the model's position stream and draws it squashed. The slow path -
 // used only when the model did not go out in a single batch, so the stream the
 // main pass left behind is not the whole of it. See the call site.
-void DrawAliasMD2Shadow(const entity_t & entity, const mod::ModelInstance::AliasData & mesh,
+void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
+                        const mod::ModelInstance::AliasData & mesh,
                         const daliasframe_t * frame, const daliasframe_t * oldFrame,
                         const LerpConsts & lc, const math::Mat4 & viewProj,
                         const tex::Texture & skin, const vec3_t lightSpot,
@@ -662,8 +664,7 @@ void DrawAliasMD2Shadow(const entity_t & entity, const mod::ModelInstance::Alias
 
     auto flushShadowVerts = [&]()
     {
-        s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, kShadowShadeLight, faceCull,
-                          kShadowFlags, s_shadowAttribs); // Use shadow attribs override.
+        batch.Flush(mvp, skin, lc.frontv, lc.backv, kShadowShadeLight, faceCull, kShadowFlags);
     };
 
     // By value, not through the enclosing frame pointers: the loop stores through
@@ -676,12 +677,12 @@ void DrawAliasMD2Shadow(const entity_t & entity, const mod::ModelInstance::Alias
 
     for (int t = 0; t < numTris; ++t, src += 3)
     {
-        if (s_lerpBatch.IsFull())
+        if (batch.IsFull())
         {
             flushShadowVerts();
         }
 
-        const auto tri = s_lerpBatch.PushTriangle();
+        const auto tri = batch.PushTriangle();
         for (int i = 0; i < 3; ++i)
         {
             // Only the index; the shadow has no UVs, so this is the one path that
@@ -690,7 +691,11 @@ void DrawAliasMD2Shadow(const entity_t & entity, const mod::ModelInstance::Alias
 
             tri.pos[i].cur = curVerts[index];
             tri.pos[i].old = oldVerts[index];
-            // NOTE: tri.attrib is unset, s_shadowAttribs overrides it.
+
+            // The attribute is the same qword for every shadow vertex, but it
+            // still has to be written: the slot is chain memory the last frame
+            // left something else in, and the DMA transfers it either way.
+            tri.attrib[i] = kShadowAttrib;
         }
     }
     flushShadowVerts();
@@ -737,13 +742,6 @@ void InitEntityRendering()
     s_cullFace   = Cvar_Get("ps2_md2_cullface",    "1", 0);
     s_shadows    = Cvar_Get("ps2_md2_shadows",     "1", 0);
     s_clipWeapon = Cvar_Get("ps2_md2_clip_weapon", "1", 0);
-
-    // Shade zero, no texture coords, q = 1. The shadow's colour and alpha come
-    // from kShadowShadeLight, not from here.
-    for (vu1::LerpDrawAttrib & attrib : s_shadowAttribs)
-    {
-        attrib = { 0.0f, 0.0f, 0.0f, 1.0f };
-    }
 
     for (u32 & color : s_colorLUT)
     {
@@ -861,6 +859,12 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // path's triangles are counted by the gather buffer itself, since the
     // clipper is what decides how many of them there are.
     int emittedVerts = 0;
+
+    // Scoped to the whole entity rather than to the VU lerp branch that fills it:
+    // the shadow pass below draws out of it, either by redrawing the span the
+    // model's own Flush left in the chain or by gathering a fresh one.
+    LerpBatch lerpBatch;
+
     // The pose expansion and batch submission - everything from here to the
     // flush is per-triangle work, unlike Shade and Cull above.
     {
@@ -893,13 +897,13 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
             for (int t = 0; t < numTris; ++t, src += 3)
             {
-                if (s_lerpBatch.IsFull())
+                if (lerpBatch.IsFull())
                 {
-                    s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
-                                      faceCull, batchFlags);
+                    lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
+                                    faceCull, batchFlags);
                 }
 
-                const auto tri = s_lerpBatch.PushTriangle();
+                const auto tri = lerpBatch.PushTriangle();
                 for (int i = 0; i < 3; ++i)
                 {
                     // Read before anything is stored. Every store below is to
@@ -931,8 +935,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                 }
                 emittedVerts += 3;
             }
-            s_lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
-                              faceCull, batchFlags);
+            lerpBatch.Flush(mvp, skin, lc.frontv, lc.backv, vertexShadeLight,
+                            faceCull, batchFlags);
         }
         else
         {
@@ -946,7 +950,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                              : batchFlags;
 
             // Scoped to the EE lerp path, which is the only one that gathers
-            // DrawVertex; the VU path fills s_lerpBatch's streams instead.
+            // DrawVertex; the VU path fills lerpBatch's chunk groups instead.
             AliasBatch batch;
 
             const math::Vec3 * const lerpedPositions =
@@ -1039,22 +1043,24 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
         // The shadow's vertices are the model's own, byte for byte - the squash
         // rides in the matrix, not the data. So if the whole model went out in a
-        // single batch, that batch's position stream is still sitting in
-        // s_lerpBatch and the shadow is one more submission rather than a second
-        // walk of the entire glcmds list. 86% of the stock models fit.
+        // single batch, that batch's chunk groups are still sitting in the frame
+        // chain where its Flush committed them, and the shadow is one more set of
+        // chunk tags over them rather than a second walk of the entire glcmds
+        // list. 86% of the stock models fit.
         //
-        // Both conditions are needed: only the VU lerp path fills that stream at
+        // Both conditions are needed: only the VU lerp path fills those groups at
         // all, and only a model that never filled the batch mid-way left all of
         // itself in it rather than just its tail.
         if (vuLerp && emittedVerts > 0 && emittedVerts <= kLerpBatchMaxVerts)
         {
-            s_lerpBatch.RedrawLastFlush(ShadowMatrix(entity, lc, viewProj, lightSpot), skin,
-                                        lc.frontv, lc.backv, kShadowShadeLight, faceCull,
-                                        kShadowFlags, s_shadowAttribs);
+            lerpBatch.RedrawLastFlush(ShadowMatrix(entity, lc, viewProj, lightSpot), skin,
+                                      lc.frontv, lc.backv, kShadowShadeLight, faceCull,
+                                      kShadowFlags);
         }
         else
         {
-            DrawAliasMD2Shadow(entity, mesh, frame, oldFrame, lc, viewProj, skin, lightSpot, faceCull);
+            DrawAliasMD2Shadow(lerpBatch, entity, mesh, frame, oldFrame, lc, viewProj,
+                               skin, lightSpot, faceCull);
         }
     }
 }

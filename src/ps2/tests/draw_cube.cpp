@@ -55,14 +55,16 @@ constexpr int kMaxTess = 8;
 // turn, referenced in place by the DMA chain.
 alignas(16) static vu1::DrawVertex s_faceVerts[kMaxTess * kMaxTess * 6];
 
-// For ps2_testcube_vulerp:
-// byte-quantized positions and split-off attributes (face counts are always
-// even - tess^2 * 6 - so the byte stream never needs the odd-count pad).
-alignas(16) static vu1::LerpVertexBytes s_facePosBytes[kMaxTess * kMaxTess * 6];
-alignas(16) static vu1::LerpDrawAttrib  s_faceAttribs[kMaxTess * kMaxTess * 6];
+// For ps2_testcube_vulerp: byte-quantized positions and split-off attributes,
+// grouped the way the draw takes them - one vu1::LerpChunk per VU run, both
+// streams of a chunk side by side (face counts are always even - tess^2 * 6 -
+// so the byte stream never needs the odd-count pad).
+constexpr int kMaxFaceVerts  = kMaxTess * kMaxTess * 6;
+constexpr int kMaxFaceChunks = vu1::ChunkCount(kMaxFaceVerts, vu1::kMaxLerpVertsPerBatch);
+alignas(16) static vu1::LerpChunk s_faceChunks[kMaxFaceChunks];
 
-// Requantizes s_faceVerts[0..numVerts) into the byte-position/attribute
-// streams: byte = (coord + H) * 255 / (2H) - the exact inverse of the
+// Requantizes s_faceVerts[0..numVerts) into the chunk groups'
+// byte-position/attribute streams: byte = (coord + H) * 255 / (2H) - the exact inverse of the
 // frontv/backv scale and row-3 offset the vulerp draw sets up. Both
 // keyframes get the same bytes.
 //
@@ -85,10 +87,13 @@ math::Vec4 QuantizeFaceForVuLerp(int numVerts)
         const u32 bz = static_cast<u32>((src.z + kCubeHalfSize) * kQuant + 0.5f);
 
         const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte (the MD2 normal index) unused
-        s_facePosBytes[v].cur = packed;
-        s_facePosBytes[v].old = packed;
 
-        s_faceAttribs[v] = { 1.0f, src.s, src.t, src.q };
+        vu1::LerpChunk & chunk = s_faceChunks[v / vu1::kMaxLerpVertsPerBatch];
+        const int i = v % vu1::kMaxLerpVertsPerBatch;
+
+        chunk.pos[i].cur = packed;
+        chunk.pos[i].old = packed;
+        chunk.attrib[i]  = { 1.0f, src.s, src.t, src.q };
     }
 
     const u32 rgba = s_faceVerts[0].rgba;
@@ -254,7 +259,7 @@ void DrawRotatingCube()
         {
             const math::Vec4 shadeLight = QuantizeFaceForVuLerp(numVerts);
             vu1::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
-                                     shadeLight, s_facePosBytes, s_faceAttribs, numVerts);
+                                     shadeLight, s_faceChunks, numVerts);
         }
         else
         {

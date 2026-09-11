@@ -548,15 +548,8 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
 // Lerped-triangles batch layout (must match lerped_triangles.vcl)
 
-// kMaxLerpVertsPerBatch (vu1.h) is the vertices per lerped VU run: the
-// 3-qword-per-vertex batch (2 position qwords + 1 attribute) fits fewer than the
-// world path's 96. Whole triangles, and even - so every full chunk's slice of
-// the 8-byte position stream is whole source qwords starting 16-byte aligned.
-
-// Chain footprint of one lerped chunk: header/frontv/backv/shadeLight/tags
-// inline unpack (1 tag + 11 payload), two REF unpacks and the FLUSH + MSCAL -
-// 15 in practice, declared with the same margin as kChunkChainQwords.
-constexpr int kLerpChunkChainQwords = 22;
+// kMaxLerpVertsPerBatch and kLerpChunkChainQwords (vu1.h) are the vertices one
+// lerped VU run carries and what its chunk costs the chain.
 
 // The regions sit at fixed offsets sized for the maximum chunk (short
 // chunks leave gaps), so the microprogram addresses them with immediates.
@@ -581,8 +574,8 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
                               const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
-                              const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
-                              int vertCount, FaceCull faceCull, DrawFlags flags)
+                              const LerpChunk & chunk, int vertCount,
+                              FaceCull faceCull, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
     pkt.EnsureSpace(kLerpChunkChainQwords);
@@ -625,12 +618,12 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
     // qwords per vertex, padded to an even vertex count so the transfer is
     // whole qwords (every word the DMA carries must be unpack payload).
     const int srcVerts = vertCount + (vertCount & 1);
-    pkt.AddUnpackDataFmt(kLerpPositionsAddr, positions,
+    pkt.AddUnpackDataFmt(kLerpPositionsAddr, chunk.pos,
                          static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
                          static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
                          P2_UNPACK_V4_8, true);
 
-    pkt.AddUnpackData(kLerpAttribsAddr, attribs, static_cast<u32>(vertCount), true);
+    pkt.AddUnpackData(kLerpAttribsAddr, chunk.attrib, static_cast<u32>(vertCount), true);
 
     pkt.AddStartProgram(s_lerpedProgAddr);
 }
@@ -638,13 +631,12 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
-                         int vertCount, FaceCull faceCull, DrawFlags flags, bool attribsRepeat)
+                         const LerpChunk * chunks, int vertCount,
+                         FaceCull faceCull, DrawFlags flags)
 {
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawLerpedTriangles wants whole triangles!");
-    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(positions) & 15u) == 0, "Position data must be 16-byte aligned!");
-    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(attribs) & 15u) == 0, "Attribute data must be 16-byte aligned!");
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(chunks) & 15u) == 0, "Chunk groups must be 16-byte aligned!");
 
     gs::FlushPending2D();
 
@@ -659,22 +651,19 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     const int ctx = gs::CurrentContext();
     VifPacket pkt = chain::Packet();
 
-    // Chunking as in DrawTriangles. Full chunks are even, so every chunk's
-    // slice of the 8-byte position stream starts 16-byte aligned; only a
-    // final odd chunk pads its transfer (see AddLerpBatchChunk).
-    for (int firstVert = 0; firstVert < vertCount; firstVert += kMaxLerpVertsPerBatch)
+    // Chunking as in DrawTriangles, except the caller has already grouped the
+    // geometry this way: one LerpChunk is one VU run's two streams, so the loop
+    // walks groups rather than slicing two parallel arrays. Only a final odd
+    // chunk pads its position transfer (see AddLerpBatchChunk).
+    for (int firstVert = 0, c = 0; firstVert < vertCount; firstVert += kMaxLerpVertsPerBatch, ++c)
     {
         ReserveChunk(pkt, kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxLerpVertsPerBatch) ? remaining : kMaxLerpVertsPerBatch;
 
-        // A repeating block is re-read from its start by every chunk; a
-        // per-vertex stream advances with the positions.
-        const LerpDrawAttrib * const chunkAttribs = attribsRepeat ? attribs : (attribs + firstVert);
-
         AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, shadeLight, stScaleS, stScaleT,
-                          positions + firstVert, chunkAttribs, chunkVerts, faceCull, flags);
+                          chunks[c], chunkVerts, faceCull, flags);
     }
 
     chain::Drain();

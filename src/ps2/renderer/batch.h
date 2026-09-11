@@ -28,11 +28,14 @@
  *  The clipper's ping-pong buffers are not in here; they are one shared instance
  *  (clip::SharedScratch), EE-only, and never reach the DMAC.
  *
- *  Two invariants hold between a batch's first push and its Flush, and both come
- *  from the span being the top of the chain: nothing else may allocate from the
- *  chain, and nothing may drain it. chain::Commit asserts the first; the
- *  second is why vu1's draws take their texture residency before they append
- *  anything (see vu1.h's chain budget).
+ *  Two invariants hold over a span, and both come from it being part of the
+ *  chain: while it is claimed nothing else may allocate from the chain, and
+ *  until the frame ends nothing may rewind it. chain::Commit asserts the first.
+ *  The second is chain::Reserve's overflow path, which is why a batch reserves
+ *  the whole of what it is about to build - the data *and* every tag that will
+ *  reference it - before it claims anything (see vu1.h's chain budget). Drains
+ *  are not part of this: a drain empties the pipeline but leaves the chain
+ *  where it is, so a span outlives the draw that submitted it.
  *
  *  The first invariant is what decides where a batch may live. Two of them
  *  holding claimed spans at once is not a thing the chain can represent - the
@@ -86,7 +89,7 @@ public:
 
     // What one flush cycle claims from the chain: the vertices, plus everything
     // the chunks that reference them will append afterwards. Both together,
-    // because the chunk loop reserves as it goes and a reservation that drained
+    // because the chunk loop reserves as it goes and a reservation that overflowed
     // half way through would rewind the chain out from under the span.
     static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::DrawVertex>(MaxVerts)
                                       + vu1::DrawTrianglesChainCost(MaxVerts);
@@ -187,8 +190,8 @@ public:
 private:
     // The batch's vertices, claimed from the frame chain on the first push of a
     // flush cycle and given back at Flush. Reserving is separate from claiming on
-    // purpose: chain::Reserve may drain and rewind the chain, which is safe here
-    // and only here, because nothing of this batch's is live yet.
+    // purpose: chain::Reserve may rewind the chain, which is safe here and only
+    // here, because nothing of this batch's is live yet.
     Q_ALWAYS_INLINE vu1::DrawVertex * Verts()
     {
         if (m_verts == nullptr) [[unlikely]]
@@ -219,16 +222,29 @@ private:
 
 // Triangle batch specialized for the interpolated MD2 models.
 //
-// NOTE: still owns its two streams, and is still a file-level static for that
-// reason. It gets the same treatment as TriangleBatch above - streams into the
-// frame chain, instance down to a cursor and a count, scoped to its pass - once
-// the chain can keep a span alive across a Flush, which is what RedrawLastFlush
-// needs and what Flush's drain currently rewinds away.
+// Same shape as TriangleBatch - a cursor into a span of the frame chain, claimed
+// on the first push and handed back at Flush - with one difference that decides
+// its whole layout: the VU lerp takes two streams, the keyframe bytes and the
+// per-vertex attributes, and a chain block is cut back from its end. Two
+// allocations could not both shrink, so they are one allocation of vu1::LerpChunk
+// groups: each group is one VU run's worth of both streams, side by side, and
+// Flush commits whole groups. See vu1.h's LerpChunk.
+//
+// The span outlives its own Flush on purpose - that is what RedrawLastFlush
+// draws from. It stays good until the chain is rewound, which is why the claim
+// reserves two draws' worth of tags rather than one.
 template<int MaxVerts>
-class alignas(16) VULerpTriangleBatch final
+class VULerpTriangleBatch final
 {
 public:
     VULerpTriangleBatch() = default;
+
+    // As TriangleBatch: a batch that goes out of scope still holding a span left
+    // the chain's cursor above gathered vertices nothing will ever reference.
+    ~VULerpTriangleBatch()
+    {
+        PS2_AssertMsg(m_chunks == nullptr, "VULerpTriangleBatch destroyed without a Flush!");
+    }
 
     // Non-copyable.
     VULerpTriangleBatch(const VULerpTriangleBatch &) = delete;
@@ -236,58 +252,69 @@ public:
 
     static_assert((MaxVerts % 3) == 0, "Batch capacity must be a whole number of triangles!");
 
+    // Groups the capacity needs. A group holds a whole number of triangles
+    // (vu1.cpp asserts kMaxLerpVertsPerBatch is one), so a triangle never
+    // straddles two of them and PushTriangle only ever has to notice that the
+    // current group is full.
+    static constexpr int kMaxChunks = vu1::ChunkCount(MaxVerts, vu1::kMaxLerpVertsPerBatch);
+
+    // What one flush cycle claims from the chain: the groups, the tags of the
+    // draw that sends them - and a second draw's worth of tags, because
+    // RedrawLastFlush emits another set over the same data and must not be the
+    // thing that overflows. An overflow between the two would rewind the chain
+    // out from under the span the redraw exists to reference.
+    static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::LerpChunk>(kMaxChunks)
+                                      + (2 * vu1::DrawLerpedTrianglesChainCost(MaxVerts));
+
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
     Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
 
-    // The VU-lerp equivalent of TriangleBatch::Flush, submitting the two SoA streams.
-    //
-    // 'attribsOverride' replaces m_attribs, and is taken as a repeating block
-    // rather than a per-vertex stream: every caller that overrides does so
-    // because its attributes are the same for every vertex, so it only has to
-    // supply vu1::kMaxLerpVertsPerBatch of them however long the batch is.
+    // The VU-lerp equivalent of TriangleBatch::Flush, submitting the gathered
+    // groups. Does nothing when the buffer is empty.
     void Flush(const math::Mat4 & mvp, const tex::Texture & texture,
                const math::Vec3 & frontv, const math::Vec3 & backv,
                const math::Vec4 & shadeLight,
-               const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
-               const vu1::LerpDrawAttrib * attribsOverride = nullptr)
+               const vu1::FaceCull faceCull, const vu1::DrawFlags flags)
     {
         // Recorded even when there is nothing to send, so RedrawLastFlush after
         // an empty flush draws nothing rather than the previous caller's model.
+        m_lastFlushed      = m_chunks;
         m_lastFlushedCount = m_vertCount;
 
         if (m_vertCount > 0)
         {
+            // Whole groups: the tail of a partly filled last group is the only
+            // thing a flush cycle wastes, and it is bounded by one group.
+            chain::Commit(m_chunks, vu1::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
+
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
-                                     m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
-                                     m_vertCount, faceCull, flags, (attribsOverride != nullptr));
+                                     m_chunks, m_vertCount, faceCull, flags);
             m_vertCount = 0;
         }
+
+        m_chunks     = nullptr;
+        m_chunkVerts = vu1::kMaxLerpVertsPerBatch; // next push starts a group
     }
 
     // Draws the vertices of the most recent Flush again, under a different
-    // transform and attribute stream, without rebuilding them.
+    // transform, without rebuilding them.
     //
-    // Flush leaves both streams where they are and only resets the count, and
-    // DrawLerpedTriangles is synchronous - it returns once the GS has consumed
-    // the batch - so what the last submission referenced is still sitting there
-    // intact. The MD2 shadow is exactly this: the model's own keyframe bytes
-    // under a squashed matrix, a flat attribute stream and an all-zero
-    // shadeLight, which the caller would otherwise walk the whole triangle
-    // stream a second time to rebuild identically.
+    // The groups the last Flush submitted are still sitting in the chain: a
+    // Flush commits the span and moves on, and nothing rewinds the chain until
+    // the frame ends. So the redraw is a second set of chunk tags over data that
+    // is already there. The MD2 shadow is exactly this - the model's own
+    // keyframe bytes under a squashed matrix, with an all-zero shadeLight that
+    // multiplies every vertex's shade term out to black, so even the attribute
+    // stream can be the model's own.
     //
     // Only valid while nothing has been pushed since that Flush, and only worth
     // anything if the geometry went out in a single batch - a caller that filled
     // the buffer mid-model left only its tail behind.
-    //
-    // NOTE: this is one of the places that rests on draws being synchronous. If
-    // submission ever goes asynchronous, the stream has to stay owned until the
-    // frame's fence, like every other buffer the DMA references in place.
     void RedrawLastFlush(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const vu1::FaceCull faceCull, const vu1::DrawFlags flags,
-                         const vu1::LerpDrawAttrib * attribsOverride = nullptr)
+                         const vu1::FaceCull faceCull, const vu1::DrawFlags flags)
     {
         PS2_AssertMsg(m_vertCount == 0, "RedrawLastFlush after pushing new vertices!");
 
@@ -295,30 +322,15 @@ public:
         {
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
-                                     m_vertBytes, (attribsOverride != nullptr) ? attribsOverride : m_attribs,
-                                     m_lastFlushedCount, faceCull, flags, (attribsOverride != nullptr));
+                                     m_lastFlushed, m_lastFlushedCount, faceCull, flags);
         }
-    }
-
-    struct Vert
-    {
-        vu1::LerpVertexBytes & pos;
-        vu1::LerpDrawAttrib  & attrib;
-    };
-
-    Q_ALWAYS_INLINE Vert PushVertex()
-    {
-        PS2_AssertMsg(m_vertCount < MaxVerts, "VULerpTriangleBatch is full!");
-        const Vert v = { m_vertBytes[m_vertCount], m_attribs[m_vertCount] };
-        ++m_vertCount;
-        return v;
     }
 
     // Three consecutive slots of each stream, for a caller filling a whole
     // triangle at once - the count then moves once instead of three times, and
-    // IsFull() is answered once instead of three times. Same contract as
-    // PushVertex: check IsFull() (and flush) first, which is enough because
-    // capacity is a triangle multiple.
+    // IsFull() is answered once instead of three times. The caller must check
+    // IsFull() (and flush) first, which is enough because capacity is a
+    // triangle multiple.
     struct Tri
     {
         vu1::LerpVertexBytes * pos;    // [3]
@@ -328,20 +340,62 @@ public:
     Q_ALWAYS_INLINE Tri PushTriangle()
     {
         PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "VULerpTriangleBatch is full!");
-        const Tri t = { &m_vertBytes[m_vertCount], &m_attribs[m_vertCount] };
-        m_vertCount += 3;
+
+        // One test covers both the first push of a cycle and a group boundary:
+        // m_chunkVerts starts out saying the (non-existent) current group is
+        // full, so the claim and the advance are the same branch.
+        if (m_chunkVerts == vu1::kMaxLerpVertsPerBatch) [[unlikely]]
+        {
+            NextChunk();
+        }
+
+        const Tri t = { m_pos, m_attrib };
+        m_pos        += 3;
+        m_attrib     += 3;
+        m_chunkVerts += 3;
+        m_vertCount  += 3;
         return t;
     }
 
 private:
+    // Claims the span on the first push of a flush cycle, and steps to the next
+    // group after that. Reserving is separate from claiming on purpose:
+    // chain::Reserve may rewind the chain, which is safe here and only here,
+    // because nothing of this batch's is live yet.
+    void NextChunk()
+    {
+        if (m_chunks == nullptr) [[unlikely]]
+        {
+            chain::Reserve(kClaimQwords);
+            m_chunks = chain::AllocMax<vu1::LerpChunk>(kMaxChunks);
+            m_chunk  = m_chunks;
+        }
+        else
+        {
+            ++m_chunk;
+        }
+        m_pos        = m_chunk->pos;
+        m_attrib     = m_chunk->attrib;
+        m_chunkVerts = 0;
+    }
+
     int m_vertCount = 0;
 
-    // Vertices the last Flush submitted; see RedrawLastFlush.
-    int m_lastFlushedCount = 0;
+    // Vertices the last Flush submitted, and where they are; see RedrawLastFlush.
+    int               m_lastFlushedCount = 0;
+    vu1::LerpChunk *  m_lastFlushed      = nullptr;
 
-    // The +1 on the positions is the DrawLerpedTriangles pad element for odd flush counts (transferred, never read).
-    alignas(16) vu1::LerpVertexBytes m_vertBytes[static_cast<size_t>(MaxVerts + 1)];
-    alignas(16) vu1::LerpDrawAttrib  m_attribs[static_cast<size_t>(MaxVerts)];
+    // The claim, the group being filled and how much of it is spoken for.
+    vu1::LerpChunk * m_chunks     = nullptr; // into the frame chain; null between flush cycles
+    vu1::LerpChunk * m_chunk      = nullptr;
+    int              m_chunkVerts = vu1::kMaxLerpVertsPerBatch;
+
+    // Cursors rather than an index off m_chunk: the gather loop's stores are ones
+    // the compiler cannot prove disjoint from anything under -fno-strict-aliasing,
+    // so a base plus an index it has to redo per push costs more than two pointers
+    // it can bump.
+    vu1::LerpVertexBytes * m_pos    = nullptr;
+    vu1::LerpDrawAttrib  * m_attrib = nullptr;
 };
 
 } // namespace ps2::batch

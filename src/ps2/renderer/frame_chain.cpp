@@ -36,10 +36,45 @@ static void *      s_lastAlloc    = nullptr;
 
 // Where the last Reserve said the chain may be built up to. Alloc must stay inside it: the
 // contract is that a caller reserves its whole sequence up front, precisely so no allocation
-// can drain, and until now that was a comment rather than something the code checked. Zero
-// means no live reservation, which is what a rewind leaves behind - so an Alloc with no
-// Reserve in front of it trips too.
+// can rewind, and until now that was a comment rather than something the code checked.
+//
+// Survives a Drain, because a reservation does: a drain empties the pipeline without moving the
+// chain, so what was reserved is still reserved and still where it was. Only a rewind clears it,
+// and the zero that leaves behind is what trips an Alloc with no Reserve in front of it at all.
 static int s_reserveEnd = 0;
+
+// True once a Kick has gone out that nothing has waited on yet. Kept rather than polling the
+// DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
+// reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
+static bool s_kickInFlight = false;
+
+// How much of the current half has already been submitted. The write cursor never goes back
+// within a frame, so a kick sends the slice from here to the cursor and moves this up to meet
+// it - each segment a self-contained chain, ending in its own terminator, with the next one
+// starting at the qword after it.
+static int s_kickedQwords = 0;
+
+// The two halves, alternating per frame. Both are packet2 headers over memory we do not own -
+// packet2_create_from takes the base rather than allocating one - so neither is ever passed to
+// packet2_free, which would try to free the loader's arena out from under it.
+static packet2_t * s_packets[2] = {};
+static int s_half = 0;
+
+// High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
+// copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
+static u32 s_peakQwords = 0;
+static u32 s_frameQwords = 0;          // built this frame, across any rewind
+static u32 s_frameQwordsLastFrame = 0;
+static int s_kicks = 0;
+static int s_kicksLastFrame = 0;
+static int s_emergencyDrains = 0;
+static int s_emergencyDrainsLasFrame = 0;
+
+Q_ALWAYS_INLINE packet2_t * Current()
+{
+    PS2_AssertMsg(s_initialized, "chain::Init not called!");
+    return s_packets[s_half];
+}
 
 // Aims an allocation's skip tag at the first qword past its payload.
 //
@@ -53,34 +88,31 @@ Q_ALWAYS_INLINE void AimSkipTag(dma_tag_t * const tag, const qword_t * const tar
     tag->ADDR = static_cast<u64>(reinterpret_cast<std::uintptr_t>(target) & 0x0FFFFFFFu);
 }
 
-// True once a Kick has gone out that nothing has waited on yet. Kept rather than polling the
-// DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
-// reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
-static bool s_kickInFlight = false;
-
-// The two halves, alternating per frame. Both are packet2 headers over memory we do not own -
-// packet2_create_from takes the base rather than allocating one - so neither is ever passed to
-// packet2_free, which would try to free the loader's arena out from under it.
-static packet2_t * s_packets[2] = {};
-static int s_half = 0;
-
-// High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
-// copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
-static u32 s_peakQwords = 0;
-static int s_kicks = 0;
-static int s_kicksLastFrame = 0;
-static int s_emergencyDrains = 0;
-static int s_emergencyDrainsLasFrame = 0;
-
-// Worst case a Kick() appends past whatever the caller has already written: the trailing FLUSH
-// block and the END tag. Reserve() has to keep this much in hand at all times, or an overflow
-// would have nowhere to put the terminator it needs in order to drain.
-constexpr int kTerminatorQwords = 4;
-
-Q_ALWAYS_INLINE packet2_t * Current()
+// Throws the current half away and starts it over. Everything the frame has built so far goes
+// with it, so this may only run where nothing is live: the top of a frame, an overflow that has
+// already drained, and the world load that is about to take the memory back.
+//
+// The high-water goes in here rather than only at EndFrame, or a frame that overflowed would
+// report the size of its last segment instead of the size that made it overflow.
+void Rewind()
 {
-    PS2_AssertMsg(s_initialized, "chain::Init not called!");
-    return s_packets[s_half];
+    packet2_t * const pkt = Current();
+
+    const u32 used = static_cast<u32>(packet2_get_qw_count(pkt));
+    if (used > s_peakQwords)
+    {
+        s_peakQwords = used;
+    }
+
+    // Banked before the reset, so a frame that overflowed still reports what it built rather
+    // than only the segment it happened to end on. BeginFrame zeroes this after its own rewind.
+    s_frameQwords += used;
+
+    packet2_reset(pkt, /*clear_mem=*/0);
+    s_kickedQwords = 0;
+    s_allocSkipTag = nullptr;
+    s_lastAlloc    = nullptr;
+    s_reserveEnd   = 0;
 }
 
 } // namespace
@@ -142,12 +174,17 @@ void BeginFrame()
     // frame of GS latency to buy anything. Until then, correctness before cleverness.
     WaitIdle();
 
-    s_half ^= 1;
-    packet2_reset(Current(), /*clear_mem=*/0);
-    s_allocSkipTag = nullptr;
-    s_lastAlloc    = nullptr;
-    s_reserveEnd   = 0;
+    // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
+    // frames from now and whatever was built and never submitted would simply not have drawn.
+    // Harmless today, since every draw ends in a Drain - and exactly the thing that has to keep
+    // holding once one kick per frame moves that Drain out to EndFrame.
+    PS2_AssertMsg(QwordCount() == s_kickedQwords,
+                  "chain::BeginFrame with work in the half nothing ever kicked!");
 
+    s_half ^= 1;
+    Rewind();
+
+    s_frameQwords = 0; // after Rewind, which banked the stale half it just reset
     s_kicks = 0;
     s_emergencyDrains = 0;
 }
@@ -162,6 +199,7 @@ void EndFrame()
         s_peakQwords = used;
     }
 
+    s_frameQwordsLastFrame = s_frameQwords + used;
     s_kicksLastFrame = s_kicks;
     s_emergencyDrainsLasFrame = s_emergencyDrains;
 }
@@ -207,8 +245,11 @@ bool Reserve(const int qwords)
     }
 
     // Everything built so far still has to reach the GS, so send it and wait - exactly the work
-    // the per-batch path used to do for every batch - then hand the caller an empty chain.
+    // the per-batch path used to do for every batch - then hand the caller an empty chain. The
+    // rewind is the part that makes this different from an ordinary Drain, and the part that
+    // costs the caller everything it had built.
     Drain();
+    Rewind();
 
     s_reserveEnd = QwordCount() + qwords;
     ++s_emergencyDrains;
@@ -287,6 +328,12 @@ void detail::CommitQwords(void * const base, const int usedQwords)
                   "chain::Commit on a block that was not the last AllocMax - committing an "
                   "exact Alloc, or two gathers open at once?");
 
+    // The cursor is about to move down, and it may not move down past work the DMAC has already
+    // been pointed at: the terminator a kick writes sits at the cursor, so a commit that reached
+    // back over one would rewrite a tag in a segment already submitted.
+    PS2_AssertMsg(static_cast<int>(mem - pkt->base) >= s_kickedQwords,
+                  "chain::Commit on a block that has already been kicked!");
+
     pkt->next = mem + usedQwords;
     AimSkipTag(s_allocSkipTag, pkt->next);
 
@@ -301,10 +348,18 @@ void detail::CommitQwords(void * const base, const int usedQwords)
 void Kick()
 {
     packet2_t * const pkt = Current();
-    if (packet2_get_qw_count(pkt) == 0)
+    if (packet2_get_qw_count(pkt) == static_cast<u32>(s_kickedQwords))
     {
-        return; // nothing built
+        return; // nothing built since the last one
     }
+
+    // One chain at a time on the channel: the segment about to go out would otherwise overwrite
+    // TADR under a transfer still walking the previous one. Free when the caller is Drain(),
+    // which has already waited.
+    WaitIdle();
+
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "chain::Kick with a tag still open - the segment has no valid end!");
 
     // Trailing FLUSH: stalls VIF1 until the last microprogram ends and its XGKICKs drain to the
     // GS, so waiting on this chain's DMA covers the VU work too.
@@ -327,7 +382,18 @@ void Kick()
             FlushCache(0);
         }
 
-        dma_channel_send_packet2(pkt, DMA_CHANNEL_VIF1, /*flush_cache=*/0);
+        // dma_channel_send_packet2 in all but the start address: it always sends from the
+        // packet's base, and this has to start at the first qword the last kick did not cover.
+        // Same masking it does (the DMAC wants a physical address) and the same TTE flag, taken
+        // from the packet rather than assumed, since that is what decides whether the upper half
+        // of every tag reaches VIF1 as VIFcodes.
+        void * const segment = reinterpret_cast<void *>(
+            reinterpret_cast<std::uintptr_t>(pkt->base + s_kickedQwords) & 0x0FFFFFFFu);
+
+        dma_channel_send_chain(DMA_CHANNEL_VIF1, segment, 0,
+                               pkt->tte ? DMA_FLAG_TRANSFERTAG : 0, 0);
+
+        s_kickedQwords = static_cast<int>(packet2_get_qw_count(pkt));
         s_kickInFlight = true;
         ++s_kicks;
     }
@@ -350,24 +416,11 @@ void WaitIdle()
 
 bool Drain()
 {
-    packet2_t * const pkt = Current();
-    const bool hadWork = (packet2_get_qw_count(pkt) != 0) || s_kickInFlight;
+    const bool hadWork = (packet2_get_qw_count(Current()) != static_cast<u32>(s_kickedQwords))
+                       || s_kickInFlight;
 
     Kick();
     WaitIdle();
-
-    // Roll the high-water before rewinding, or a frame that drained mid-way would only ever
-    // report the size of its final segment.
-    const u32 used = static_cast<u32>(packet2_get_qw_count(pkt));
-    if (used > s_peakQwords)
-    {
-        s_peakQwords = used;
-    }
-
-    packet2_reset(pkt, /*clear_mem=*/0);
-    s_allocSkipTag = nullptr;
-    s_lastAlloc    = nullptr;
-    s_reserveEnd   = 0;
     return hadWork;
 }
 
@@ -377,7 +430,11 @@ void DrainBeforeWorldLoad()
     {
         return; // a load before the renderer is up cannot be racing anything
     }
+
+    // The rewind is the point of this one: the half is about to become the .bsp lump staging
+    // buffer, so whatever the abandoned frame left in it has to stop being chain.
     Drain();
+    Rewind();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -387,6 +444,11 @@ void DrainBeforeWorldLoad()
 u32 PeakBytes()
 {
     return s_peakQwords * 16u;
+}
+
+u32 BytesLastFrame()
+{
+    return s_frameQwordsLastFrame * 16u;
 }
 
 int KicksLastFrame()

@@ -8,6 +8,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/render_view.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
@@ -81,6 +82,13 @@ struct FrameSample
     // followed an eviction also forced a GS drain, so these are the first thing
     // to check against a frame-time spike.
     int vramUploads, vramOomSyncs, vramResident;
+
+    // chain counters. The chain is built front to back across a whole frame and
+    // only rewound when it runs out, so chainKB against chain::kFrameChainBytes
+    // is what says whether the capacity is right - and chainDrains is what says
+    // it was not: every one of those is a full pipeline stall the frame did not
+    // ask for. chainKicks is the number this refactor exists to bring down.
+    int chainKB, chainKicks, chainDrains;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -126,7 +134,8 @@ void WriteBatch()
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
-                    "vramUploads,vramOomSyncs,vramResident\n");
+                    "vramUploads,vramOomSyncs,vramResident,"
+                    "chainKB,chainKicks,chainDrains\n");
         std::printf("FLOG#note,timings are microseconds\n");
     }
 
@@ -151,12 +160,13 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d\n",
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsUnclipped, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled, s.boxesCulled,
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
-                          s.vramUploads, s.vramOomSyncs, s.vramResident);
+                          s.vramUploads, s.vramOomSyncs, s.vramResident,
+                          s.chainKB, s.chainKicks, s.chainDrains);
         }
 
         std::printf("%s", line);
@@ -235,6 +245,12 @@ void FrameLogCapture()
     s.vramUploads  = v.uploadsThisFrame;
     s.vramOomSyncs = v.oomSyncsThisFrame;
     s.vramResident = v.residentTextures;
+
+    // chain::EndFrame has not run for the new frame either, so these are still the finished
+    // frame's. Rounded to KB because the interesting comparison is against a 512 KB half.
+    s.chainKB     = static_cast<int>(chain::BytesLastFrame() / 1024u);
+    s.chainKicks  = chain::KicksLastFrame();
+    s.chainDrains = chain::EmergencyDrainsLastFrame();
 }
 
 void FrameLogFlush()

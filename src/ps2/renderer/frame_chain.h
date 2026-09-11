@@ -49,6 +49,12 @@ namespace ps2::chain {
 constexpr u32 kFrameChainBytes  = 512u * 1024u;
 constexpr u32 kFrameChainQwords = kFrameChainBytes / 16u;
 
+// Worst case a Kick() appends past whatever the caller has already written: the trailing FLUSH
+// block and the END tag. Public because it is part of the capacity arithmetic - a caller
+// reserving a sequence that ends in a kick (every draw does) has to count it, or the terminator
+// comes out of the next caller's budget.
+constexpr int kTerminatorQwords = 4;
+
 // Points the two halves at the loader scratch and opens the first one. Call once at renderer
 // init, after mod::Init() - the arena the halves live in is reserved from there.
 void Init();
@@ -74,14 +80,21 @@ int QwordCapacity();
 
 // Makes room for 'qwords' more, and says whether it had to empty the chain to do it.
 //
-// The overflow path is the same work the renderer used to do for every single batch: terminate
-// what is built, kick it, wait for VU1 and the GS to consume it, and rewind. So it is always
-// correct and never worse than the old behaviour - but it drains the pipeline, and a true
-// return means every piece of per-chain state the caller had set up (the frame constants, the
-// current batch's GIF tags) is gone and has to be re-emitted before anything else is appended.
+// **This is the only thing that rewinds a half mid-frame, and that is what makes it the only
+// thing that can invalidate a span.** Everything else only ever appends: a Kick submits what has
+// been built since the last one and leaves the write cursor where it is, so a REF tag emitted at
+// the top of the frame still points at live data at the bottom of it.
+//
+// The overflow path is the work the renderer used to do for every single batch: terminate what is
+// built, kick it, wait for VU1 and the GS to consume it, and rewind. So it is always correct and
+// never worse than the old behaviour - but it drains the pipeline, and a true return means every
+// pointer into the chain and every piece of per-chain state the caller had set up (the frame
+// constants, the current batch's GIF tags) is gone and has to be re-emitted before anything else
+// is appended.
 //
 // Callers that must not be interrupted mid-structure should reserve their whole worst case up
-// front rather than reserving piecemeal.
+// front rather than reserving piecemeal - and a caller whose data has to outlive its own draw
+// (the MD2 shadow redrawing the model's stream) has to reserve that second draw up front too.
 bool Reserve(int qwords);
 
 // --------------------------------------------------------------------------------------------
@@ -94,16 +107,19 @@ bool Reserve(int qwords);
 // its worst case here, fills what it needs, gives the rest back, and the chunks its Flush
 // emits reference the span in place exactly as they used to reference the static.
 //
-// **Alloc never drains, and that is the whole reason it is separate from Reserve.** A drain
-// rewinds the chain, which invalidates every outstanding pointer and everything already built,
-// so it may only happen where the caller knows nothing is live. Reserve is that point, and it
-// covers the whole upcoming sequence - the payload *and* the tags that will reference it,
-// which are emitted through VifPacket and cannot drain either. That is why a caller reserves
-// more than it allocates (see CalcAllocCost and vu1.h's chain budget), and why the two cannot be
-// collapsed into one call: they answer different questions.
+// **Alloc can never rewind, and that is the whole reason it is separate from Reserve.** A rewind
+// invalidates every outstanding pointer and everything already built, so it may only happen where
+// the caller knows nothing is live. Reserve is that point, and it covers the whole upcoming
+// sequence - the payload, the tags that will reference it, and the kick that sends them. That is
+// why a caller reserves more than it allocates (see CalcAllocCost and vu1.h's chain budget), and
+// why the two cannot be collapsed into one call: they answer different questions.
 //
 // Allocating outside a reservation that covers it asserts, and overrunning the half Sys_Errors
 // rather than corrupting the other one.
+//
+// **Lifetime: a block is good until the half is rewound**, which is BeginFrame in the ordinary
+// case. Not until the next kick, and not until the draw that referenced it returns - which is the
+// rule that replaced "draws are synchronous" for anything living in here.
 
 // Qwords one allocation costs on top of its payload: the tag that carries the DMAC over the
 // storage rather than through it. A source chain is a tag stream - the qword after a tag's
@@ -188,16 +204,27 @@ void Commit(T * const base, const int usedCount)
 // Submission
 // --------------------------------------------------------------------------------------------
 
-// Terminates the chain with a trailing FLUSH so a DMA wait covers the VU runs and their
-// XGKICKs, writes the data cache back, and kicks it at VIF1. Does nothing on an empty chain.
+// Submits everything built since the last Kick() as a chain of its own: terminates that segment
+// with a trailing FLUSH so a DMA wait covers the VU runs and their XGKICKs, writes the data cache
+// back, and kicks it at VIF1. Does nothing when nothing new has been built.
+//
+// Segment-at-a-time rather than whole-buffer, because the write cursor never goes back: a half
+// holds one frame's worth of chain built front to back, and each kick sends the slice the last
+// one did not. The terminator is written into the chain at the cursor and the next segment starts
+// after it, which is what kTerminatorQwords costs.
 void Kick();
 
 // Blocks until the chain the last Kick() sent has been fully consumed.
 void WaitIdle();
 
-// Kick + WaitIdle + rewind, for a caller that needs the GS to have caught up before it changes
-// something the queued draws depend on - an upload into evicted VRAM, a lightmap atlas rewrite,
-// a CLUT refresh. Returns false if there was nothing to drain.
+// Kick + WaitIdle, for a caller that needs the GS to have caught up before it changes something
+// the queued draws depend on - an upload into evicted VRAM, a lightmap atlas rewrite, a CLUT
+// refresh. Returns false if there was nothing to drain.
+//
+// Does **not** rewind: the pipeline empties, but everything built stays where it is and every
+// pointer into it stays good. That is what lets a draw's vertex data outlive its own submission,
+// which the MD2 shadow's redraw of the model's stream needs. The chain is rewound at BeginFrame,
+// by Reserve's overflow path, and by DrainBeforeWorldLoad - nowhere else.
 bool Drain();
 
 // The interlock that lets the halves live in the loader's lump scratch: waits for anything in
@@ -212,6 +239,11 @@ void DrainBeforeWorldLoad();
 // Most bytes either half has ever held, against kFrameChainBytes. The two together are what
 // says whether the capacity is right.
 u32 PeakBytes();
+
+// Bytes the frame just finished built, counting what an overflow rewind threw away. Against
+// kFrameChainBytes this is the number that says whether a frame fits a half - PeakBytes() only
+// ever reports what one half held at once, which is the same thing until the day it overflows.
+u32 BytesLastFrame();
 
 // Chains kicked, and overflow drains taken, during the frame just finished. One kick and zero
 // emergency drains is the good case; the drain firing every frame means the capacity is too small.

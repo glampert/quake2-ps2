@@ -9,6 +9,7 @@
  * ================================================================================================ */
 
 #include "ps2/math/vec_mat.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/vif_packet.h"
 
 namespace ps2::tex { struct Texture; }
@@ -133,10 +134,10 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 // What a draw costs the frame chain besides its vertex data, so a caller whose vertex data is
 // *itself* in the chain can reserve the pair together.
 //
-// It has to reserve the pair. The chunk loop reserves as it goes, and chain::Reserve drains and
-// rewinds when it comes up short - which would pull the chain out from under the very span the
-// chunks being emitted reference. Reserving the whole draw up front means that reservation can
-// never fire half way through one.
+// It has to reserve the pair. The chunk loop reserves as it goes, and chain::Reserve rewinds when
+// it comes up short - which would pull the chain out from under the very span the chunks being
+// emitted reference. Reserving the whole draw up front means that reservation can never fire half
+// way through one.
 
 // Vertices one VU1 run carries. Draws longer than this are split into chunks of this size,
 // submitted back to back in the same chain.
@@ -153,6 +154,14 @@ constexpr int kChunkChainQwords = 16;
 // fronted by the skip tag chain::Alloc needs and followed by the REF tag that sends it.
 constexpr int kDrawSetupQwords = (8 + 2) + (12 + 2);
 
+// Vertices one lerped VU run carries, and what one of its chunks costs: the 3-qword-per-vertex
+// batch (2 position qwords + 1 attribute) fits fewer than the world path's 96. Whole triangles,
+// and even - so every full chunk's slice of the 8-byte position stream is whole source qwords
+// starting 16-byte aligned. The chunk is the header/frontv/backv/shadeLight/tags inline unpack
+// (1 tag + 11 payload), two REF unpacks and the FLUSH + MSCAL: 15 in practice.
+constexpr int kMaxLerpVertsPerBatch  = 78;
+constexpr int kLerpChunkChainQwords  = 22;
+
 // Vertices one particle VU run carries, and what one of its chunks costs: the same shape, with
 // an 11-qword header/constants/tag payload instead of 8.
 constexpr int kMaxParticlesPerBatch = 78;
@@ -163,22 +172,34 @@ constexpr int ChunkCount(const int items, const int perChunk)
     return (items + perChunk - 1) / perChunk;
 }
 
-// Chain qwords DrawTriangles / DrawParticles need for 'count' vertices / particles, not
-// counting the data itself.
+// Chain qwords the three draws need for 'count' vertices / particles, not counting the data
+// itself.
 //
 // The peak the chunk loop *demands*, which is one setup block more than the draw ever
 // appends: every chunk reserves the setup alongside itself, because a reservation that
-// drained would rewind the setup with everything else and the next chunk has to be able to
+// overflowed would rewind the setup with everything else and the next chunk has to be able to
 // re-emit it. So the last chunk asks for room the draw will not end up using, and reserving
-// only what is written would let that final ask drain the chain mid-draw.
+// only what is written would let that final ask rewind the chain mid-draw.
+//
+// Plus the terminator, because every draw ends in a kick and the kick writes its FLUSH + END
+// into the chain at the cursor. Small, but it belongs to the draw that caused it - left out, it
+// would silently come out of whatever the next caller reserved.
 constexpr int DrawTrianglesChainCost(const int vertCount)
 {
-    return (2 * kDrawSetupQwords) + (ChunkCount(vertCount, kMaxVertsPerBatch) * kChunkChainQwords);
+    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+         + (ChunkCount(vertCount, kMaxVertsPerBatch) * kChunkChainQwords);
+}
+
+constexpr int DrawLerpedTrianglesChainCost(const int vertCount)
+{
+    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+         + (ChunkCount(vertCount, kMaxLerpVertsPerBatch) * kLerpChunkChainQwords);
 }
 
 constexpr int DrawParticlesChainCost(const int count)
 {
-    return (2 * kDrawSetupQwords) + (ChunkCount(count, kMaxParticlesPerBatch) * kParticleChunkQwords);
+    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+         + (ChunkCount(count, kMaxParticlesPerBatch) * kParticleChunkQwords);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -235,8 +256,9 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // 'verts' is normally a span of the frame chain itself (chain::Alloc), which is
 // how the gather buffers stopped being statics. Such a caller must have reserved
 // DrawTrianglesChainCost(vertCount) on top of the span - see the chain budget
-// above - and nothing may drain the chain between filling the span and this
-// call, or the REF tags below would point at reused memory.
+// above - so that nothing here can rewind the chain out from under it. A drain
+// is harmless; a rewind would leave the REF tags below pointing at memory the
+// next gather is about to write.
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount,
                    DrawFlags flags = DrawFlags::None);
@@ -296,39 +318,49 @@ Q_ALWAYS_INLINE void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
         : "$8");
 }
 
+// One VU run's input, both streams together: the geometry is handed over a chunk
+// at a time rather than as two long parallel arrays.
+//
+// The layout is what the chain forced and what the chain wanted anyway. A gather
+// writing into the frame chain claims one block and gives back the tail it did
+// not use (chain::AllocMax / Commit), and a block is cut back from its end - so
+// two streams that both have to shrink cannot be two allocations. Grouped per
+// chunk they are one, the two REF tags of a chunk point at neighbouring qwords
+// instead of half a batch apart, and a short final chunk wastes at most one
+// group's tail instead of the whole of both streams' slack.
+//
+// 'pos' is sized for the maximum chunk, which is also what supplies the pad the
+// byte stream needs at an odd vertex count: the DMA carries whole source qwords,
+// so an odd chunk transfers one element past its count (transferred, never read).
+// An odd chunk is always shorter than the maximum, so that element is in here.
+struct alignas(16) LerpChunk
+{
+    LerpVertexBytes pos[kMaxLerpVertsPerBatch];    // 2 keyframe words per vertex
+    LerpDrawAttrib  attrib[kMaxLerpVertsPerBatch]; // 1 qword per vertex
+};
+static_assert((sizeof(LerpChunk) % 16) == 0, "LerpChunk must be a whole number of qwords");
+static_assert((sizeof(LerpVertexBytes) * kMaxLerpVertsPerBatch % 16) == 0,
+              "The attribute stream must start qword aligned - the unpack REFs it directly");
+
 // Draws textured triangles whose positions VU1 interpolates from the two
 // keyframe streams: position = cur * frontv + old * backv, plus the MVP's
 // row 3 - fold the MD2 lerp's uniform 'move' translation in there (see
-// render_md2.cpp). Both arrays must be 16-byte aligned, and 'positions'
-// needs one readable element past vertCount when the count is odd: the byte
-// stream is DMA'd in whole qwords and the pad element fills the last one
-// (transferred, never read). Chunking, texture residency and synchronicity
-// as DrawTriangles.
-// Vertices one lerped chunk carries. Public only so a caller passing a repeating
-// attribute block (see 'attribsRepeat' below) knows how large it has to be.
-constexpr int kMaxLerpVertsPerBatch = 78;
-
-// 'attribs' normally holds one entry per vertex, indexed alongside 'positions'.
-// With 'attribsRepeat' it is instead a block of kMaxLerpVertsPerBatch entries
-// that every chunk re-reads from the start, for geometry whose attributes do not
-// vary at all - the projected shadow, which is one flat colour over the whole
-// model and would otherwise need an identical qword per vertex of the largest
-// model the batch can hold.
+// render_md2.cpp). 'chunks' must be 16-byte aligned and hold
+// ChunkCount(vertCount, kMaxLerpVertsPerBatch) groups, filled front to back -
+// every group but the last one full. Chunking, texture residency and
+// synchronicity as DrawTriangles.
 //
-// It saves the memory, not the transfer: each chunk still unpacks its own copy
-// into its half of the VU's double buffer, so the DMA carries the same bytes
-// either way.
 // 'shadeLight' is the batch's light color in GS units (0-128 per channel, the
 // entity's shade times the modulate identity) with the vertex alpha in .w. The
 // microprogram builds each vertex's color as clamp(shade * shadeLight), so an
 // all-zero .xyz gives flat black at whatever alpha .w carries - which is how the
-// projected shadow draws without its own attribute stream.
+// projected shadow draws over the model's own attribute stream, untouched.
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const LerpVertexBytes * positions, const LerpDrawAttrib * attribs,
-                         int vertCount, FaceCull faceCull = FaceCull::None,
-                         DrawFlags flags = DrawFlags::None, bool attribsRepeat = false);
+                         const LerpChunk * chunks, int vertCount,
+                         FaceCull faceCull = FaceCull::None,
+                         DrawFlags flags = DrawFlags::None);
 
 // ------------------------------------------------------------------------------------------------
 // Particles

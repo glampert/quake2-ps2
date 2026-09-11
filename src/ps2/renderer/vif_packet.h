@@ -58,7 +58,7 @@ public:
     // 'qwords' is a safe upper bound for what comes next (DEBUG ONLY).
     //
     // This is the backstop, not the mechanism: a draw too large for one chain is
-    // chain::Reserve's job, and it drains rather than failing. What is left for
+    // chain::Reserve's job, and it rewinds rather than failing. What is left for
     // this to catch is a chunk emitter writing more than the footprint constant
     // it declares - a code bug, but one whose symptom is DMA tags written over
     // the other chain half, which then fails somewhere unrelated.

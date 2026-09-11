@@ -682,20 +682,24 @@ void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
             flushShadowVerts();
         }
 
+        // __restrict for the reason the main gather loop gives.
         const auto tri = batch.PushTriangle();
+        vu1::LerpVertexBytes * const __restrict triPos    = tri.pos;
+        vu1::LerpDrawAttrib  * const __restrict triAttrib = tri.attrib;
+
         for (int i = 0; i < 3; ++i)
         {
             // Only the index; the shadow has no UVs, so this is the one path that
             // does not want the whole qword. Bounds were settled at load.
             const u32 index = src[i].index;
 
-            tri.pos[i].cur = curVerts[index];
-            tri.pos[i].old = oldVerts[index];
+            triPos[i].cur = curVerts[index];
+            triPos[i].old = oldVerts[index];
 
             // The attribute is the same qword for every shadow vertex, but it
             // still has to be written: the slot is chain memory the last frame
             // left something else in, and the DMA transfers it either way.
-            tri.attrib[i] = kShadowAttrib;
+            triAttrib[i] = kShadowAttrib;
         }
     }
     flushShadowVerts();
@@ -903,7 +907,23 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                                     faceCull, batchFlags);
                 }
 
+                // __restrict, and it earns its keep: the two cursors live in the
+                // batch, the batch is a local whose address escapes, and every
+                // store below is one gcc cannot prove disjoint from it under
+                // -fno-strict-aliasing - so without this it spills both and
+                // reloads them before each of the six stores. Worth 7 of the 16
+                // instructions per triangle this loop gained when the gather
+                // target stopped being a static.
+                //
+                // The promise holds: pos and attrib are disjoint sub-arrays of one
+                // LerpChunk, and everything read here (the mesh, the keyframes,
+                // the shade table) is model or .rodata, never chain. Note they are
+                // declared *after* the flush above, so Flush - which does reach
+                // the chain through the batch - is never in scope with them.
                 const auto tri = lerpBatch.PushTriangle();
+                vu1::LerpVertexBytes * const __restrict triPos    = tri.pos;
+                vu1::LerpDrawAttrib  * const __restrict triAttrib = tri.attrib;
+
                 for (int i = 0; i < 3; ++i)
                 {
                     // Read before anything is stored. Every store below is to
@@ -917,7 +937,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     // copy the qword whole, then write the shade over lane 0. ST
                     // needs no scaling here - the microprogram applies the skin's
                     // power-of-two correction.
-                    vu1::CopyLerpAttrib(tri.attrib[i], src[i]);
+                    vu1::CopyLerpAttrib(triAttrib[i], src[i]);
 
                     // One load of the keyframe vertex rather than two: the normal
                     // index is the top byte of the word already in hand, so
@@ -925,13 +945,13 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     // to the same address. See KeyframeVertWords.
                     const u32 curBits = curVerts[index];
 
-                    tri.pos[i].cur = curBits;
-                    tri.pos[i].old = oldVerts[index];
+                    triPos[i].cur = curBits;
+                    triPos[i].old = oldVerts[index];
 
                     // The raw shade dot, not a packed color: the microprogram
                     // multiplies the batch's shadeLight by it and converts. Same
                     // indexed load and store the color LUT cost, minus the table.
-                    tri.attrib[i].shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
+                    triAttrib[i].shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
                 }
                 emittedVerts += 3;
             }

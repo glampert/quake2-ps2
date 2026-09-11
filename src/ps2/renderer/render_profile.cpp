@@ -81,9 +81,6 @@ struct FrameSample
     // followed an eviction also forced a GS drain, so these are the first thing
     // to check against a frame-time spike.
     int vramUploads, vramOomSyncs, vramResident;
-
-    // Bytes vu1 REF'd to the DMA this frame.
-    int submittedBytes;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -129,7 +126,7 @@ void WriteBatch()
                     "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,trisBackFacing,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
-                    "vramUploads,vramOomSyncs,vramResident,submittedBytes\n");
+                    "vramUploads,vramOomSyncs,vramResident\n");
         std::printf("FLOG#note,timings are microseconds\n");
     }
 
@@ -154,12 +151,12 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          "%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsUnclipped, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled, s.trisBackFacing,
                           s.boxesCulled, s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
-                          s.vramUploads, s.vramOomSyncs, s.vramResident, s.submittedBytes);
+                          s.vramUploads, s.vramOomSyncs, s.vramResident);
         }
 
         std::printf("%s", line);
@@ -239,8 +236,6 @@ void FrameLogCapture()
     s.vramUploads  = v.uploadsThisFrame;
     s.vramOomSyncs = v.oomSyncsThisFrame;
     s.vramResident = v.residentTextures;
-
-    s.submittedBytes = vu1::FrameSubmittedBytes();
 }
 
 void FrameLogFlush()

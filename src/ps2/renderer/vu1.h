@@ -333,29 +333,11 @@ struct DynamicLight
 void SetDynamicLights(const DynamicLight * lights, int count);
 
 // ------------------------------------------------------------------------------------------------
-// VU1 initialization and stats tracking
+// VU1 initialization
 // ------------------------------------------------------------------------------------------------
 
 // Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory
 // and programs the double-buffer registers. Call once, after gs::Init().
 void Init();
-
-// Rolls the per-frame byte counter into the high-water mark and clears it.
-// Called from gs::BeginFrame().
-void BeginFrame();
-
-// Most bytes any single frame has ever handed to the DMA as REF'd payload:
-// the vertex streams of every batch plus one FrameConstants block per draw
-// call. Both draw paths funnel through here, so unlike DrawStats::trisDrawn
-// (which the MD2 PushVertex paths bypass) this counts everything.
-//
-// This is exactly the per-frame demand a frame arena would have to satisfy,
-// measured before building one. Reported as "ArenaHi" by ps2_show_drawstats.
-int PeakFrameSubmittedBytes();
-
-// The same figure for the frame in progress, before BeginFrame() rolls it over.
-// Read between frames (the frame log samples it in PS2_BeginFrame, ahead of
-// gs::BeginFrame) to get the frame that just finished.
-int FrameSubmittedBytes();
 
 } // namespace ps2::vu1

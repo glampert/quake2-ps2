@@ -34,6 +34,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/render_profile.h"
@@ -67,17 +68,19 @@ constexpr int kDoubleBufferOffset = 496;
 constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
 
-// The chain is tags plus small per-chunk inline unpacks; constants and
-// vertices are referenced in place. Sized so a DrawTriangles call fits ~30
-// chunks (~2900 verts) before it must flush the chain mid-call.
-constexpr int kDrawPacketQwords = 512;
-
-// Conservative chain footprint of one chunk segment (header/tags inline
-// unpack, vertex REF unpack, FLUSH + MSCAL; ~13 qwords in practice) and of
-// the chain tail (trailing FLUSH + END tag). DrawTriangles flushes the packet
-// when the next chunk plus the tail might not fit.
+// Chain footprint of one chunk segment, declared with room to spare: the
+// header/GIF-tag inline unpack is 1 tag qword plus 8 of payload, the vertex REF
+// unpack is 1 (its VIFcodes ride in the tag's upper half) and the FLUSH + MSCAL
+// is 1 - 11 in practice. Over-declaring only reserves slightly more of the chain
+// than a chunk needs; under-declaring overruns the half, which
+// VifPacket::EnsureSpace turns into a Sys_Error rather than a silent corruption.
 constexpr int kChunkChainQwords = 16;
-constexpr int kChainTailQwords  = 4;
+
+// What re-opening a draw's chain costs: the two REF unpacks BeginDrawChain
+// emits, one qword each. Reserved alongside every chunk rather than once,
+// because a reservation that has to drain the chain rewinds the constants with
+// everything else - see ReserveChunk.
+constexpr int kDrawSetupQwords = 2;
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
@@ -131,14 +134,7 @@ struct alignas(16) FrameConstants
 static_assert(sizeof(FrameConstants) == 8 * 16, "Must match the VU memory layout");
 
 static FrameConstants s_constants;
-static VifPacket s_drawPacket;
 static bool s_initialized = false;
-
-// REF'd payload bytes submitted this frame, and the high-water across the run.
-// Sizes the frame arena that will replace the per-module gather statics; see
-// vu1::PeakFrameSubmittedBytes.
-static int s_frameSubmittedBytes = 0;
-static int s_peakSubmittedBytes  = 0;
 
 // Micro memory entry point of the VU1 programs (64-bit
 // instruction units; the textured program sits at 0).
@@ -403,41 +399,24 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     s_constants.clipScale  = kClipScale;
     s_constants.colorClamp = kColorClamp;
 
-    pkt.Reset();
-
-    pkt.AddUnpackData(kFrameConstantsAddr, &s_constants, sizeof(FrameConstants) / 16, false);
-    s_frameSubmittedBytes += static_cast<int>(sizeof(FrameConstants));
-
+    pkt.AddUnpackData(kFrameConstantsAddr, &s_constants,  sizeof(FrameConstants) / 16, false);
     pkt.AddUnpackData(kLightBlockAddr, &s_lightConstants, sizeof(LightConstants) / 16, false);
-    s_frameSubmittedBytes += static_cast<int>(sizeof(LightConstants));    
 }
 
-// FLUSH so a DMA wait covers the VU runs and their XGKICKs, then terminate
-// and send the chain, blocking until it is fully consumed.
-void SendChainAndWait(VifPacket & pkt)
+// Makes room in the chain for one chunk and (re)opens the draw's chain when it
+// has to - the whole of the bookkeeping the three draw paths share.
+//
+// The constants block is reserved with every chunk rather than once, because a
+// reservation that overflows drains the chain and rewinds it: the constants go
+// with it, and the chunk that follows would otherwise transform against whatever
+// the previous draw happened to leave in VU memory. 'firstChunk' opens it for
+// the same reason at the top of a call, where nothing has emitted it yet.
+void ReserveChunk(VifPacket & pkt, const int chunkQwords, const math::Mat4 & mvp,
+                  const DrawFlags flags, const bool firstChunk)
 {
-    pkt.AddFlush();
-    pkt.AddEndTag();
-
-    // Send is FlushCache(0) plus a DMA kick, and the flush is a kernel syscall
-    // that writes back the whole data cache - paid once per batch. DmaFlush
-    // nests inside DmaSend so the outer total stays comparable with earlier
-    // captures while the split says how much of it is the cache writeback.
+    if (chain::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
     {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaSend);
-        {
-            PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaFlush);
-            VifPacket::FlushDataCache();
-        }
-        pkt.Kick();
-    }
-
-    // The stall this whole batch exists to pay for: one per drawBatches, and the
-    // single largest recoverable cost in the renderer. Charged to the shared
-    // GSWait total (render_profile.h) alongside the GIF-side waits in gs.cpp.
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        pkt.Wait();
+        BeginDrawChain(pkt, mvp, flags);
     }
 }
 
@@ -471,38 +450,17 @@ void Init()
     PS2_AssertMsg(s_litTrisProgAddr + litInstructions <= 2048,
                   "Microprograms overflow VU1 micro memory!");
 
-    s_drawPacket.Init(kDrawPacketQwords);
-
-    // Upload the microprograms and set up the double buffer. Synchronous;
-    // VU1 is ready once this returns.
-    VifPacket & pkt = s_drawPacket;
+    // Upload the microprograms and set up the double buffer. Built into the frame
+    // chain like every other VIF1 transfer, which is why vu1::Init has to run
+    // after chain::Init - see the ordering note in PS2_RefInit. Synchronous: the
+    // Drain terminates, kicks and waits, so VU1 is ready once it returns.
+    VifPacket pkt = chain::Packet();
     pkt.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
     pkt.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
     pkt.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
     pkt.AddMicroProgram(s_litTrisProgAddr, VU1Prog_LitTriangles_Code());
     pkt.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    pkt.AddEndTag();
-    pkt.Send();
-    pkt.Wait();
-}
-
-void BeginFrame()
-{
-    if (s_frameSubmittedBytes > s_peakSubmittedBytes)
-    {
-        s_peakSubmittedBytes = s_frameSubmittedBytes;
-    }
-    s_frameSubmittedBytes = 0;
-}
-
-int PeakFrameSubmittedBytes()
-{
-    return s_peakSubmittedBytes;
-}
-
-int FrameSubmittedBytes()
-{
-    return s_frameSubmittedBytes;
+    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -526,7 +484,7 @@ static void AddBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx
                           const DrawVertex * verts, int vertCount, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxVertsPerBatch && (vertCount % 3) == 0);
-    pkt.EnsureSpace(kChunkChainQwords + kChainTailQwords);
+    pkt.EnsureSpace(kChunkChainQwords);
 
     pkt.OpenInlineUnpack(kBatchHeaderAddr, true);
     {
@@ -561,31 +519,24 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
     const int ctx = gs::CurrentContext();
-
-    s_frameSubmittedBytes += vertCount * static_cast<int>(sizeof(DrawVertex));
-
-    VifPacket & pkt = s_drawPacket;
-    BeginDrawChain(pkt, mvp, flags);
+    VifPacket pkt = chain::Packet();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
     for (int firstVert = 0; firstVert < vertCount; firstVert += kMaxVertsPerBatch)
     {
-        // If the next chunk plus the chain tail might not fit the packet,
-        // send what we have and open a fresh, self-contained chain. The
-        // Wait() makes this safe: everything referenced so far was consumed.
-        if (pkt.QwordCount() + kChunkChainQwords + kChainTailQwords > kDrawPacketQwords)
-        {
-            SendChainAndWait(pkt);
-            BeginDrawChain(pkt, mvp, flags);
-        }
+        ReserveChunk(pkt, kChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxVertsPerBatch) ? remaining : kMaxVertsPerBatch;
         AddBatchChunk(pkt, texture, ctx, verts + firstVert, chunkVerts, flags);
     }
 
-    SendChainAndWait(pkt);
+    // Still one kick and one stall per draw call, exactly where the per-batch
+    // path put them. Only the buffer underneath has changed; hoisting this out
+    // to one kick per frame is Stage 5, once the gathers write into the chain
+    // and their vertex data no longer has to stay alive past the call.
+    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -600,9 +551,8 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 // the 8-byte position stream is whole source qwords starting 16-byte aligned.
 
 // Chain footprint of one lerped chunk: header/frontv/backv/shadeLight/tags
-// inline unpack (1 + 11 qwords), two REF unpacks, FLUSH + MSCAL; ~18 in
-// practice. Over-declaring only sends the chain a chunk early; under-declaring
-// overruns the packet, which EnsureSpace turns into a Sys_Error.
+// inline unpack (1 tag + 11 payload), two REF unpacks and the FLUSH + MSCAL -
+// 15 in practice, declared with the same margin as kChunkChainQwords.
 constexpr int kLerpChunkChainQwords = 22;
 
 // The regions sit at fixed offsets sized for the maximum chunk (short
@@ -632,7 +582,7 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
                               int vertCount, FaceCull faceCull, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
-    pkt.EnsureSpace(kLerpChunkChainQwords + kChainTailQwords);
+    pkt.EnsureSpace(kLerpChunkChainQwords);
 
     pkt.OpenInlineUnpack(kLerpBatchHeaderAddr, true);
     {
@@ -698,30 +648,20 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::EnsureTextureResident(texture);
     PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
-    const int ctx = gs::CurrentContext();
-
-    // Both streams, plus the odd-count pad element the position DMA carries.
-    s_frameSubmittedBytes += (vertCount + (vertCount & 1)) * static_cast<int>(sizeof(LerpVertexBytes))
-                          + vertCount * static_cast<int>(sizeof(LerpDrawAttrib));
-
     // A property of the texture, so it is resolved here rather than threaded
     // down from every caller; StScaleFor is pure arithmetic on its dimensions.
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
-    VifPacket & pkt = s_drawPacket;
-    BeginDrawChain(pkt, mvp, flags);
+    const int ctx = gs::CurrentContext();
+    VifPacket pkt = chain::Packet();
 
     // Chunking as in DrawTriangles. Full chunks are even, so every chunk's
     // slice of the 8-byte position stream starts 16-byte aligned; only a
     // final odd chunk pads its transfer (see AddLerpBatchChunk).
     for (int firstVert = 0; firstVert < vertCount; firstVert += kMaxLerpVertsPerBatch)
     {
-        if (pkt.QwordCount() + kLerpChunkChainQwords + kChainTailQwords > kDrawPacketQwords)
-        {
-            SendChainAndWait(pkt);
-            BeginDrawChain(pkt, mvp, flags);
-        }
+        ReserveChunk(pkt, kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxLerpVertsPerBatch) ? remaining : kMaxLerpVertsPerBatch;
@@ -734,7 +674,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                           positions + firstVert, chunkAttribs, chunkVerts, faceCull, flags);
     }
 
-    SendChainAndWait(pkt);
+    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -758,8 +698,9 @@ constexpr int kMaxParticlesPerBatch = 78;
 static_assert(kPrtQuadOffsetAddr == 1 && kPrtUV0Addr == 2 && kPrtUV1Addr == 3 && kPrtGifTagsAddr == 4 && kPrtDataAddr == 11, "Batch layout must match the #defines in particles.vcl");
 static_assert(kPrtDataAddr + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
 
-// Chain footprint of one particle chunk: the 11-qword header/constants/tags
-// inline unpack, one REF unpack, FLUSH + MSCAL; ~16 in practice.
+// Chain footprint of one particle chunk: the header/constants/tags inline
+// unpack (1 tag + 11 payload), one REF unpack and the FLUSH + MSCAL - 14 in
+// practice, declared with the same margin as kChunkChainQwords.
 constexpr int kPrtChunkChainQwords = 22;
 
 // ref_gl's "hack a scale up to keep particles from disappearing": past 20 units
@@ -788,7 +729,7 @@ static void AddParticleChunk(VifPacket & pkt, const tex::Texture & texture, int 
                              const ParticleVertex * particles, int count, DrawFlags flags)
 {
     PS2_Assert(count > 0 && count <= kMaxParticlesPerBatch);
-    pkt.EnsureSpace(kPrtChunkChainQwords + kChainTailQwords);
+    pkt.EnsureSpace(kPrtChunkChainQwords);
 
     pkt.OpenInlineUnpack(kPrtBatchHeaderAddr, true);
     {
@@ -845,10 +786,6 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::EnsureTextureResident(texture);
     PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
-    const int ctx = gs::CurrentContext();
-
-    s_frameSubmittedBytes += count * static_cast<int>(sizeof(ParticleVertex));
-
     // The corner offset transforms once for the whole call, as a direction
     // (w = 0). Because it is orthogonal to the view axis its clip z and w both
     // come out zero, which is what lets the microprogram reuse the centre's
@@ -861,16 +798,12 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
-    VifPacket & pkt = s_drawPacket;
-    BeginDrawChain(pkt, mvp, flags);
+    const int ctx = gs::CurrentContext();
+    VifPacket pkt = chain::Packet();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {
-        if (pkt.QwordCount() + kPrtChunkChainQwords + kChainTailQwords > kDrawPacketQwords)
-        {
-            SendChainAndWait(pkt);
-            BeginDrawChain(pkt, mvp, flags);
-        }
+        ReserveChunk(pkt, kPrtChunkChainQwords, mvp, flags, /*firstChunk=*/first == 0);
 
         const int remaining  = count - first;
         const int chunkCount = (remaining < kMaxParticlesPerBatch) ? remaining : kMaxParticlesPerBatch;
@@ -878,7 +811,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
                          particles + first, chunkCount, flags);
     }
 
-    SendChainAndWait(pkt);
+    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------

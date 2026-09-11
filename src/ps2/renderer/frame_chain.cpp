@@ -137,9 +137,9 @@ void EndFrame()
 // Building
 // ------------------------------------------------------------------------------------------------
 
-packet2_t * Packet()
+vu1::VifPacket Packet()
 {
-    return Current();
+    return vu1::VifPacket{ Current(), QwordCapacity() };
 }
 
 int QwordCount()
@@ -147,12 +147,16 @@ int QwordCount()
     return static_cast<int>(packet2_get_qw_count(Current()));
 }
 
+int QwordCapacity()
+{
+    return static_cast<int>(kFrameChainQwords) - kTerminatorQwords;
+}
+
 bool Reserve(const int qwords)
 {
     PS2_Assert(qwords >= 0);
 
-    const int capacity = static_cast<int>(kFrameChainQwords) - kTerminatorQwords;
-
+    const int capacity = QwordCapacity();
     if (QwordCount() + qwords <= capacity) [[likely]]
     {
         return false;

@@ -32,7 +32,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
-#include <packet2.h>
+#include "ps2/renderer/vif_packet.h"
 
 namespace ps2::chain {
 
@@ -59,10 +59,16 @@ void BeginFrame();
 void EndFrame();
 
 // The chain being built. Valid between BeginFrame and EndFrame.
-packet2_t * Packet();
+vu1::VifPacket Packet();
 
 // Qwords written into the current half so far.
 int QwordCount();
+
+// Qwords a caller may write into a half. Not kFrameChainQwords: the chain always holds back
+// room for the terminator Kick() appends, because a half with no room left for its own END tag
+// could not be drained. Reserve() measures against exactly this, and it is the capacity to hand
+// any helper that range-checks its own writes.
+int QwordCapacity();
 
 // Makes room for 'qwords' more, and says whether it had to empty the chain to do it.
 //
@@ -94,7 +100,7 @@ bool Drain();
 void DrainBeforeWorldLoad();
 
 // --------------------------------------------------------------------------------------------
-// Debug overlay counters
+// Debug counters
 // --------------------------------------------------------------------------------------------
 
 // Most bytes either half has ever held, against kFrameChainBytes. The two together are what

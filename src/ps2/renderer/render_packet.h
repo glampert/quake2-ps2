@@ -79,6 +79,11 @@ public:
         return static_cast<int>(m_ptr - m_base);
     }
 
+    int QwordCapacity() const
+    {
+        return m_maxQwords;
+    }
+
     // The most qwords this packet has ever held. Reset() banks it, and the current
     // cycle is folded in here so a packet that is filled but never Reset (the clear
     // and texture-upload chains) still reports honestly. This is what the capacity
@@ -89,19 +94,18 @@ public:
         return (used > m_peakQwords) ? used : m_peakQwords;
     }
 
-    int Capacity() const { return m_maxQwords; }
-
-    // Halt visibly if the next emission would overrun the buffer. 'qwords' is a
-    // safe upper bound for what comes next. Sys_Error, not PS2_Assert. Asserts
-    // compile out of the release build and an overflow here would stomp memory.
-    void EnsureSpace(int qwords) const
+    // Halt visibly if the next emission would overrun the buffer.
+    // 'qwords' is a safe upper bound for what comes next (DEBUG ONLY).
+    void EnsureSpace(const int qwords) const
     {
+#if PS2_QUAKE_ASSERTS
         if (QwordCount() + qwords > m_maxQwords) [[unlikely]]
         {
             Sys_Error("Render packet overflow: %d qwords in use + %d needed exceeds "
                       "the %d capacity. Raise the size passed to Init().",
                       QwordCount(), qwords, m_maxQwords);
         }
+#endif // PS2_QUAKE_ASSERTS
     }
 
     // --------------------------------------------------------------------------------------------
@@ -232,16 +236,18 @@ private:
     // forgets EnsureSpace - or one whose upper bound turns out to be wrong - still
     // gets a named error rather than corrupting the heap. kGuardQwords is what
     // keeps the write that tripped this inside our own allocation.
-    void Advance(qword_t * const newPtr)
+    Q_ALWAYS_INLINE void Advance(qword_t * const newPtr)
     {
         m_ptr = newPtr;
 
+#if PS2_QUAKE_ASSERTS
         if (QwordCount() > m_maxQwords) [[unlikely]]
         {
             Sys_Error("Render packet overflow: emission ran to %d qwords, past the %d "
                       "capacity (into the %d qword guard). Raise the size passed to Init().",
                       QwordCount(), m_maxQwords, kGuardQwords);
         }
+#endif // PS2_QUAKE_ASSERTS
     }
 
     qword_t * m_base       = nullptr; // owns the qword buffer

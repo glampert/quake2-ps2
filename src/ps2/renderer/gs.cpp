@@ -451,7 +451,6 @@ void BeginFrame()
     // The GS is idle now, so nothing queued can reference reused VRAM anymore.
     s_vramReuseHazard = false;
     vram::BeginFrame();
-    vu1::BeginFrame();
     chain::BeginFrame();
 }
 

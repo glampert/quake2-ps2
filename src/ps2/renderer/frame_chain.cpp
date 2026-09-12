@@ -272,8 +272,12 @@ void * detail::AllocQwords(const int qwords, const bool committable)
     PS2_AssertMsg(QwordCount() + qwords + kAllocOverheadQwords <= s_reserveEnd,
                   "chain::Alloc outside a reservation that covers it!");
 
+    // An allocation fronts itself with a NEXT tag, which has to be part of the tag stream
+    // rather than of somebody else's payload - so nothing may have a tag open here. In practice
+    // that means a pending 2D batch: gs::FlushPending2D closes it, and the rule is that whoever
+    // claims the chain calls it first (see batch.h), not that the draw eventually will.
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
-                  "chain::Alloc inside an open tag - payload cannot land mid-structure!");
+                  "chain::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
 
     // Live in release for the same reason VifPacket::EnsureSpace is: the overrun would run off
     // the end of this half and into the other one, and the failure would surface a frame or two

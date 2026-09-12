@@ -44,15 +44,16 @@ int HeapTotalWords();
 // anything was evicted - the caller must sync the GS before writing over reused
 // VRAM.
 //
-// Failure is not fatal and not the end of the road: the caller drains the GS
-// (which is what the this-frame protection guards against), calls UnpinAll and
-// retries, then Defragment and retries. See gs::EnsureTextureResident.
+// Failure is not fatal and not the end of the road: the caller fences the GS -
+// sending the frame's chain so far and waiting for it, which is what the this-frame
+// protection guards against - then calls UnpinAll and retries, then Defragment and
+// retries. See gs::EnsureTextureResident.
 Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvicted);
 
 // Drops the this-frame eviction protection from every resident texture, making
-// the whole heap evictable again. Only legal once the GS is idle - the pins
-// exist because a block bound this frame may still be queued in the frame's chain
-// or rasterising, and nothing else re-establishes that guarantee. Relative LRU
+// the whole heap evictable again. Only legal once the GS has been fenced - the pins
+// exist because a block bound this frame is still sitting in the frame's chain
+// unsent, or queued at the GS, and nothing else re-establishes that guarantee. Relative LRU
 // order is preserved, so the coldest textures stay the preferred victims.
 void UnpinAll();
 

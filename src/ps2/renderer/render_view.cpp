@@ -7,7 +7,7 @@
  *  tree front-to-back culling against the view frustum and threads every visible
  *  opaque surface onto its texture's draw chain, and DrawTextureChains then
  *  gathers each chain's triangles into a scratch buffer and submits them through
- *  vu1::DrawTriangles - one synchronous batch per texture. Translucent surfaces
+ *  vu1::DrawTriangles - one batch per texture. Translucent surfaces
  *  are routed aside and drawn back-to-front at the end of the frame by
  *  RenderAlphaSurfaces, and sky surfaces aside to render_sky.cpp, which draws
  *  the skybox behind them once the opaque world is down.
@@ -2494,6 +2494,11 @@ void RenderParticles(const refdef_t & viewDef)
     // nothing to hand back - but it still reserves the chunks the draw will
     // append on top, because those must not drain the chain out from under the
     // span they reference.
+    //
+    // Closing the 2D section first, because taking the chain is what the boundary
+    // actually is: a pending 2D batch holds an open DMA tag and an allocation
+    // cannot land inside one (see batch.h).
+    gs::FlushPending2D();
     chain::Reserve(chain::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
     vu1::ParticleVertex * const particles = chain::Alloc<vu1::ParticleVertex>(numParticles);
 

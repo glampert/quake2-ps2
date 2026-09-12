@@ -10,11 +10,12 @@
  *  (ps2gl's trick): it only marks the victim non-resident - the victim's pixels
  *  stay in EE RAM and re-upload transparently the next time it is bound.
  *
- *  Textures bound this frame are pinned, because their draws may still be queued
- *  or rasterising, and a request that would have to evict one fails rather than
- *  corrupting them. That failure is a normal condition, not an error: the caller
- *  (gs::EnsureTextureResident) drains the GS, calls UnpinAll and retries, then
- *  Defragment and retries, trading pipelining for the space. Since Defragment
+ *  Textures bound this frame are pinned, because their draws are still sitting in
+ *  the frame's chain unsent - or already queued at the GS - and a request that would
+ *  have to evict one fails rather than corrupting them. That failure is a normal
+ *  condition, not an error: the caller (gs::EnsureTextureResident) fences the GS,
+ *  which sends the chain and waits for it, then calls UnpinAll and retries, then
+ *  Defragment and retries, trading the whole frame's pipelining for the space. Since Defragment
  *  remakes the heap as one free block, the retry can only fail for a texture
  *  larger than the entire heap, which the caller rejects up front.
  *

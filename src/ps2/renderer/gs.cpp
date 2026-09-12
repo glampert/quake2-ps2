@@ -16,12 +16,15 @@
  *  color+depth clear into the head of it. 2D and 3D then draw in any order,
  *  both into that same chain. 2D primitives accumulate in a deferred "pending
  *  batch" (always-pass z-test, so it lands on top); the first primitive after a
- *  flush opens it lazily. The batch is flushed to the GS - sent and waited on -
- *  automatically at each 2D->3D boundary (the VU1 path calls FlushPending2D()
- *  before drawing over PATH1, so its triangles land under any 2D issued
- *  afterwards) and once more by EndFrame(). Flushing at the boundary also keeps
- *  the deferred draws' textures resident: they are consumed before a later 3D
- *  upload can evict the VRAM they sample.
+ *  flush opens it lazily. The batch is closed at each 2D->3D boundary (the VU1
+ *  path calls FlushPending2D() before drawing over PATH1, so its triangles land
+ *  under any 2D issued afterwards) and once more by EndFrame().
+ *
+ *  Nothing is sent until EndFrame: the whole frame is one chain and one kick.
+ *  Ordering is the chain's own order plus the VIF FLUSH each block opens with,
+ *  and where a frame needs the GS to have actually *finished* - an upload about
+ *  to land on VRAM queued draws still sample - FenceGs sends the chain so far
+ *  and waits for it.
  *
  *  The clear and the 2D batch are GIF packets, not VU work, and they ride the
  *  chain as DIRECT blocks: VIF1 hands their qwords to the GIF over PATH2 as it
@@ -35,8 +38,9 @@
  *  framebuffers and z-buffer (~1.27 MB), managed by vram.cpp. While a texture
  *  is resident, binding it is just a TEX0/TEX1 register write - no DMA upload,
  *  no pipeline flush. When the heap fills, the least-recently-bound textures
- *  are evicted; uploads over reused VRAM first sync the GS so queued draws
- *  keep sampling the old texels, not the new ones.
+ *  are evicted; an upload over reused VRAM first fences the GS - sending the
+ *  frame's chain so far and waiting for it - so the draws already built keep
+ *  sampling the old texels, not the new ones.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -483,23 +487,15 @@ void BeginFrame()
                 static_cast<float>(kRenderWidth), static_cast<float>(kRenderHeight),
                 static_cast<int>(s_clearColor[0]), static_cast<int>(s_clearColor[1]), static_cast<int>(s_clearColor[2]));
     clear.EnableTests(s_drawCtx, s_zbuffer); // restore the real z-test for the 3D world
-    clear.Finish();
     CloseGifBlock();
 
-    // Sent and waited on here rather than left to ride the frame's first kick, because what
-    // the rest of BeginFrame rests on is the GS being *idle*: with it idle nothing queued can
-    // still be sampling VRAM, which is what clears the reuse hazard and lets vram::BeginFrame
-    // drop last frame's pins. Stage 5's business, when the whole frame becomes one kick.
+    // Nothing is sent here. The clear sits at the head of the chain and goes out with the rest
+    // of the frame at EndFrame - which is the whole point of the stage, and is safe precisely
+    // because the chain is ordered: the VU1 world that follows it cannot reach the GS first.
     //
-    // Drain marks its own time - DmaSend and DmaFlush for the kick, GsWait for the wait - so
-    // only the FINISH wait needs a scope here, and the markers stay disjoint rather than one
-    // nesting inside another and being counted twice.
-    chain::Drain();
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        RenderPacket::WaitFinish();
-    }
-
+    // The two lines below still need the GS to be idle, and it is: EndFrame fenced it before
+    // returning and nothing has been submitted since. That is also what makes the CLUT rewrite
+    // in RefreshLitPalette above safe.
     s_vramReuseHazard = false;
     vram::BeginFrame();
 }
@@ -557,16 +553,17 @@ void FlushPending2D()
     }
     s_in2D = false;
 
-    s_gifBlock.Finish();
     CloseGifBlock();
 
-    chain::Drain(); // marks its own DmaSend/DmaFlush/GsWait
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        RenderPacket::WaitFinish();
-    }
-
-    s_vramReuseHazard = false; // GS idle again
+    // Closed, not sent. The block stays where it is and goes out with the frame, and what used
+    // to be an EE drain here is now two things the chain does on its own: 3D that follows
+    // lands after it because it is later in the chain, and cannot overtake it at the GIF
+    // because every block opens with a VIF FLUSH.
+    //
+    // The one job this no longer does is making the GS idle, so s_vramReuseHazard is not
+    // cleared here any more - a texture bound by the 2D just closed may still be sampled by
+    // draws nothing has sent. FenceGs is what clears it now, and vram::TryAllocate refusing to
+    // evict anything bound this frame is what keeps that rare.
 }
 
 bool In2DMode()
@@ -620,58 +617,68 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
     }
 }
 
-// The GS may still be drawing - or hold queued draws that will sample - VRAM
-// about to be overwritten by an upload into evicted space: flush anything
-// queued and wait for the GS to go idle first. Inside the 2D section the open
-// GIF block carries the FINISH and the whole chain goes out; otherwise a bare
-// FINISH rides the scratch packet (VU1 batches are synchronous, but their DMA
-// completing does not mean the GS has finished rasterizing them).
+// Empties the whole pipeline: sends the frame's chain as far as it has been built and blocks
+// until the GS has finished drawing every bit of it. The frame then carries on building where
+// it left off - this is a stall, not a reset, and no pointer into the chain moves.
 //
-// Note what the 3D path gets here is still a GS drain, which is only sufficient
-// while every batch is kicked and waited on as it is built. Once submission is
-// deferred to one kick a frame, the draws this is protecting will not have been
-// sent yet and the chain's own valve has to replace it - Stage 5.
-static void SyncGsBeforeVramReuse()
+// It replaces the old SyncGsBeforeVramReuse, and the difference is the first step. Draining
+// the GS was enough while every batch was kicked and waited on as it was built, because then
+// everything that existed had been sent. Now the draws this is protecting are sitting in the
+// chain unsent, so the chain has to go out before the wait means anything.
+//
+// The FINISH is GIF data and so needs a path. Inside a 2D section the open block carries it
+// and the section resumes in a fresh one afterwards - GS registers are the GS's, so it picks
+// up exactly where it was. Outside one, a bare FINISH rides the scratch packet over PATH3
+// *after* the chain has landed, which is what puts it last in the GS's queue.
+//
+// Its chain cost is the terminator the kick writes, which every draw already reserves - see
+// the note on chain::kTerminatorQwords in vu1.h. It must not reserve anything itself: this
+// fires in the middle of a draw, with the gather it is about to reference already in the
+// chain, and a reservation that overflowed would rewind that away.
+static void FenceGs()
 {
     if (s_in2D)
     {
-        // GS registers persist across the send, so the section carries on in a fresh block
-        // exactly as it used to carry on in the same packet after a Reset.
         s_gifBlock.Finish();
         CloseGifBlock();
-
-        chain::Drain(); // marks its own DmaSend/DmaFlush/GsWait
-        {
-            PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-            RenderPacket::WaitFinish();
-        }
-
-        OpenGifBlock(k2DBlockMinQwords);
     }
-    else
+
+    chain::Drain(); // marks its own DmaSend/DmaFlush/GsWait
+
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
 
-        RenderPacket & pkt = s_texUploadPacket;
-        pkt.Reset();
-        pkt.Finish();
+        if (!s_in2D)
+        {
+            RenderPacket & pkt = s_texUploadPacket;
+            pkt.Reset();
+            pkt.Finish();
 
-        pkt.Wait();
-        pkt.SendNormal();
-        pkt.WaitFinish();
+            pkt.Wait();
+            pkt.SendNormal();
+        }
+
+        RenderPacket::WaitFinish();
     }
+
+    if (s_in2D)
+    {
+        OpenGifBlock(k2DBlockMinQwords);
+    }
+
     s_vramReuseHazard = false;
 }
 
 // Finds 'sizeWords' of VRAM for the texture, escalating when the heap is full.
 //
 // The normal path evicts the least-recently-bound textures, but never ones bound
-// this frame: their draws may still be queued or rasterizing. When that leaves
-// nothing to take, the pins are the only thing in the way - and the sole reason
-// they exist is work still in flight. Draining the GS retires that work, after
-// which dropping the pins is legitimate and the whole heap is fair game again.
-// The frame still renders correctly; it just loses its pipelining, and anything
-// evicted re-uploads when it is next bound.
+// this frame: their draws are still in the chain, or queued at the GS. When that
+// leaves nothing to take, the pins are the only thing in the way - and the sole
+// reason they exist is work that has not been drawn yet. Fencing the GS retires
+// that work, after which dropping the pins is legitimate and the whole heap is
+// fair game again. The frame still renders correctly; it just spends its one kick
+// early and pays a second one at EndFrame, and anything evicted re-uploads when it
+// is next bound.
 //
 // The last rung repacks the heap into one free block, so it can only come up
 // short for a texture larger than the entire heap - which the caller rejects
@@ -685,10 +692,10 @@ static vram::Address AllocateVramFor(const tex::Texture & texture, int sizeWords
 
     if (addr == vram::Address::Invalid)
     {
-        Com_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), draining the GS to unpin.\n",
+        Com_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), fencing the GS to unpin.\n",
                     texture.name, sizeWords * 4 / 1024);
 
-        SyncGsBeforeVramReuse();
+        FenceGs();
         s_currentTex = nullptr; // the 2D dedupe must not survive an eviction
         vram::UnpinAll();
         vram::NoteOomSync();
@@ -747,7 +754,7 @@ void EnsureTextureResident(const tex::Texture & texture)
         vram::Touch(texture);
         if (boundThisFrame)
         {
-            SyncGsBeforeVramReuse();
+            FenceGs();
         }
     }
     else
@@ -770,7 +777,7 @@ void EnsureTextureResident(const tex::Texture & texture)
         // recycled; the upload below would pull it out from under them.
         if (s_vramReuseHazard)
         {
-            SyncGsBeforeVramReuse();
+            FenceGs();
         }
 
         texture.vramAddr = addr;
@@ -966,13 +973,23 @@ void EndFrame()
     PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
     s_frameStarted = false;
 
-    // Send whatever 2D accumulated since the last flush (the HUD/console overlay
-    // in the common case) so it lands on top before the buffer is displayed.
+    // Close whatever 2D accumulated since the last flush (the HUD/console overlay in the
+    // common case) so it lands on top before the buffer is displayed.
     FlushPending2D();
 
+    // The frame's one kick. Everything the frame told the GS to do has been sitting in the
+    // chain since BeginFrame - the clear, every VU1 batch, every 2D block - and this is where
+    // all of it goes out: one FlushCache(0), one chain, one wait, against the fifty-odd of
+    // them a frame used to take.
+    //
+    // The wait is still here, so this is not yet a pipelined frame; what it buys is the EE's
+    // time back, not the GS's. Overlapping frame N's GS with frame N+1's EE is Stage 8, and
+    // needs a fence that can express two frames in flight rather than one FINISH bit.
+    FenceGs();
+
     // Rolls the frame chain's high-water and latches its counters for the overlay. Everything
-    // the frame told the GS to do went through it - the clear, every VU1 batch and the 2D
-    // overlay flushed just above - so from here those counters measure the whole frame.
+    // the frame told the GS to do went through it, so from here those counters measure the
+    // whole frame - and ChainKck is now the number this stage exists to move.
     chain::EndFrame();
 
     {

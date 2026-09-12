@@ -73,10 +73,10 @@ void EndFrame();
 // deferred "pending batch" - a DIRECT block of the frame's chain - with an
 // always-pass z-test, so it draws on top; the first primitive after a flush opens
 // it lazily - callers just draw, no bracket.
-// The batch is flushed (sent and waited on) automatically before the next 3D
-// draw and by EndFrame(), which keeps its layering correct and its textures
-// resident. Rarely needed directly; the VU1 3D path calls it before drawing so
-// its triangles land under any 2D issued afterwards.
+// The batch is closed automatically before the next 3D draw and by EndFrame(),
+// which is what keeps its layering correct; nothing is sent until EndFrame kicks
+// the frame's chain. Rarely needed directly; the VU1 3D path calls it before
+// drawing so its triangles land under any 2D issued afterwards.
 void FlushPending2D();
 
 // True while a pending 2D batch is open (a 2D primitive has drawn since the last flush).

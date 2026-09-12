@@ -524,7 +524,10 @@ const math::Vec3 * LerpVertsEE(const dtrivertx_t * verts, const dtrivertx_t * ol
                                const int numVerts, const LerpConsts & lc, const bool powersuit)
 {
     // Lerped model-space positions of one entity's pose, indexed by the glcmds'
-    // vertex index. 24 KB; draws are synchronous, so every entity reuses it in turn.
+    // vertex index. 24 KB, and one instance for every entity in the frame: this is EE-only
+    // working memory that the gather reads back and copies into the chain, so unlike the
+    // gather buffers it never reaches the DMAC and nothing is still reading it when the next
+    // entity starts.
     static math::Vec3 s_lerpedPositions[MAX_VERTS];
 
     PS2_Assert(numVerts <= static_cast<int>(ArrayLength(s_lerpedPositions)));

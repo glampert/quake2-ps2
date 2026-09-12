@@ -49,6 +49,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_view.h"
 #include "ps2/renderer/vu1.h"
 
@@ -192,10 +193,17 @@ private:
     // flush cycle and given back at Flush. Reserving is separate from claiming on
     // purpose: chain::Reserve may rewind the chain, which is safe here and only
     // here, because nothing of this batch's is live yet.
+    //
+    // **Claiming the chain is the 2D->3D boundary, not the draw.** A pending 2D
+    // batch holds an open DMA tag in the chain, and an allocation cannot land
+    // inside one - its own tag has to be part of the tag stream, not of somebody
+    // else's payload. vu1::Draw* closes the section too, but by then this has
+    // already run, so the flush has to happen here, where the chain is taken.
     Q_ALWAYS_INLINE vu1::DrawVertex * Verts()
     {
         if (m_verts == nullptr) [[unlikely]]
         {
+            gs::FlushPending2D();
             chain::Reserve(kClaimQwords);
             m_verts = chain::AllocMax<vu1::DrawVertex>(MaxVerts);
         }
@@ -361,11 +369,13 @@ private:
     // Claims the span on the first push of a flush cycle, and steps to the next
     // group after that. Reserving is separate from claiming on purpose:
     // chain::Reserve may rewind the chain, which is safe here and only here,
-    // because nothing of this batch's is live yet.
+    // because nothing of this batch's is live yet. The 2D flush is the 2D->3D
+    // boundary - see TriangleBatch::Verts for why it belongs here.
     void NextChunk()
     {
         if (m_chunks == nullptr) [[unlikely]]
         {
+            gs::FlushPending2D();
             chain::Reserve(kClaimQwords);
             m_chunks = chain::AllocMax<vu1::LerpChunk>(kMaxChunks);
             m_chunk  = m_chunks;

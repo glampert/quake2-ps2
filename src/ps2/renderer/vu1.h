@@ -151,8 +151,15 @@ constexpr int kChunkChainQwords = 16;
 
 // Chain qwords a draw's opening costs: the transform block and the dynamic-light block, both
 // built in the chain rather than referenced out of a static. 8 and 12 qwords of payload, each
-// fronted by the skip tag chain::Alloc needs and followed by the REF tag that sends it.
-constexpr int kDrawSetupQwords = (8 + 2) + (12 + 2);
+// fronted by the skip tag chain::Alloc needs and followed by the REF tag that sends it, plus
+// the VIF FLUSH in front of the pair.
+//
+// That FLUSH is what stops the two unpacks landing on VU memory a microprogram is still
+// reading. Both go to *absolute* addresses - the constants sit below the double buffer and the
+// light block above it - so unlike a chunk's data they get no protection from the buffer swap,
+// and since draws stopped being kicked and waited on one at a time the previous draw's last
+// chunk is routinely still running when the next draw's setup arrives.
+constexpr int kDrawSetupQwords = 1 + (8 + 2) + (12 + 2);
 
 // Vertices one lerped VU run carries, and what one of its chunks costs: the 3-qword-per-vertex
 // batch (2 position qwords + 1 attribute) fits fewer than the world path's 96. Whole triangles,
@@ -181,9 +188,13 @@ constexpr int ChunkCount(const int items, const int perChunk)
 // re-emit it. So the last chunk asks for room the draw will not end up using, and reserving
 // only what is written would let that final ask rewind the chain mid-draw.
 //
-// Plus the terminator, because every draw ends in a kick and the kick writes its FLUSH + END
-// into the chain at the cursor. Small, but it belongs to the draw that caused it - left out, it
-// would silently come out of whatever the next caller reserved.
+// Plus the terminator. A draw no longer ends in a kick, but it can still contain one: the GS
+// fence gs::EnsureTextureResident takes when an upload is about to land on VRAM that queued
+// draws may still sample has to send the chain now that nothing else will until EndFrame, and
+// a kick writes its FLUSH + END into the chain at the cursor. Budgeted here rather than
+// reserved where it fires, because reserving there is exactly what must not happen - a
+// reservation that overflowed would rewind the chain out from under the span the draw is
+// about to reference.
 constexpr int DrawTrianglesChainCost(const int vertCount)
 {
     return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
@@ -249,16 +260,19 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // the given transform and texture (uploaded to GS VRAM on demand). Any whole-
 // triangle count works: draws beyond kMaxVertsPerBatch are split into chunks
 // submitted back to back in the same DMA chain, overlapping each chunk's
-// upload with the previous one's transform. Synchronous for now: returns once
-// the GS has consumed the batch, so the vertex data only needs to stay valid
-// for the duration of the call. Call between gs::Begin/EndFrame.
+// upload with the previous one's transform. Call between gs::Begin/EndFrame.
 //
-// 'verts' is normally a span of the frame chain itself (chain::Alloc), which is
-// how the gather buffers stopped being statics. Such a caller must have reserved
-// DrawTrianglesChainCost(vertCount) on top of the span - see the chain budget
-// above - so that nothing here can rewind the chain out from under it. A drain
-// is harmless; a rewind would leave the REF tags below pointing at memory the
-// next gather is about to write.
+// **Not synchronous.** This appends to the frame's chain and returns; nothing is
+// sent until gs::EndFrame kicks it. So the vertex data has to stay valid for the
+// rest of the frame, not for the duration of the call - which is why 'verts' is a
+// span of the frame chain itself (chain::Alloc) rather than a gather static, and
+// why a static is no longer a thing a caller can hand over.
+//
+// Such a caller must have reserved DrawTrianglesChainCost(vertCount) on top of the
+// span - see the chain budget above - so that nothing here can rewind the chain out
+// from under it. A kick is harmless (it leaves the chain where it is); a rewind
+// would leave the REF tags below pointing at memory the next gather is about to
+// write.
 void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const DrawVertex * verts, int vertCount,
                    DrawFlags flags = DrawFlags::None);

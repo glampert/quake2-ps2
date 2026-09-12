@@ -383,10 +383,15 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     constexpr int kFrameConstantsQwords = sizeof(FrameConstants) / 16;
     constexpr int kLightConstantsQwords = sizeof(LightConstants) / 16;
     // Each block costs what chain::CalcAllocCost says - its payload plus the skip tag - and the
-    // REF tag that sends it.
-    static_assert(kDrawSetupQwords == chain::CalcAllocCost<FrameConstants>(1)
-                                    + chain::CalcAllocCost<LightConstants>(1) + 2,
+    // REF tag that sends it, and the FLUSH below is the one qword on top.
+    static_assert(kDrawSetupQwords == 1 + chain::CalcAllocCost<FrameConstants>(1)
+                                        + chain::CalcAllocCost<LightConstants>(1) + 2,
                   "kDrawSetupQwords must match what BeginDrawChain appends");
+
+    // Both unpacks below write absolute VU addresses, which the double buffer does not
+    // protect, and the previous draw's last chunk is very likely still running: wait for it.
+    // See kDrawSetupQwords.
+    pkt.AddFlush();
 
     FrameConstants * const constants = chain::Alloc<FrameConstants>(1);
 
@@ -534,12 +539,6 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         const int chunkVerts = (remaining < kMaxVertsPerBatch) ? remaining : kMaxVertsPerBatch;
         AddBatchChunk(pkt, texture, ctx, verts + firstVert, chunkVerts, flags);
     }
-
-    // Still one kick and one stall per draw call, exactly where the per-batch
-    // path put them. Only the buffer underneath has changed; hoisting this out
-    // to one kick per frame is Stage 5, once the gathers write into the chain
-    // and their vertex data no longer has to stay alive past the call.
-    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -665,8 +664,6 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, shadeLight, stScaleS, stScaleT,
                           chunks[c], chunkVerts, faceCull, flags);
     }
-
-    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -800,8 +797,6 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
         AddParticleChunk(pkt, texture, ctx, clipOffset, uvMaxU, uvMaxV,
                          particles + first, chunkCount, flags);
     }
-
-    chain::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------

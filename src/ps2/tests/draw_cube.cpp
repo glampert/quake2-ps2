@@ -11,6 +11,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/renderer/frame_chain.h"
 #include "ps2/math/vec_mat.h"
 
 namespace ps2::test {
@@ -47,23 +48,18 @@ constexpr int kFaces[6][4] = {
     { 3, 2, 6, 7 }, // top    (y+)
 };
 
-// Largest ps2_testcube_tess value: per-axis quads per face; caps s_faceVerts.
+// Largest ps2_testcube_tess value: per-axis quads per face; caps a face's vertex count.
 constexpr int kMaxTess = 8;
+constexpr int kMaxFaceVerts = kMaxTess * kMaxTess * 6;
 
-// One face's worth of vertices, refilled before each face draw - since
-// DrawTriangles is synchronous a single buffer can serve all six faces in
-// turn, referenced in place by the DMA chain.
-alignas(16) static vu1::DrawVertex s_faceVerts[kMaxTess * kMaxTess * 6];
+// One face's worth of vertices, refilled before each face draw. EE-side only, and only for the
+// ps2_testcube_vulerp path, which reads it back to requantize: a buffer the DMA chain
+// references cannot be reused per face any more, because a draw is not consumed before the
+// next one is built - it is consumed at EndFrame, with all six faces still in the chain. The
+// plain path emits straight into a span of the chain instead.
+static vu1::DrawVertex s_faceVerts[kMaxFaceVerts];
 
-// For ps2_testcube_vulerp: byte-quantized positions and split-off attributes,
-// grouped the way the draw takes them - one vu1::LerpChunk per VU run, both
-// streams of a chunk side by side (face counts are always even - tess^2 * 6 -
-// so the byte stream never needs the odd-count pad).
-constexpr int kMaxFaceVerts  = kMaxTess * kMaxTess * 6;
-constexpr int kMaxFaceChunks = vu1::ChunkCount(kMaxFaceVerts, vu1::kMaxLerpVertsPerBatch);
-alignas(16) static vu1::LerpChunk s_faceChunks[kMaxFaceChunks];
-
-// Requantizes s_faceVerts[0..numVerts) into the chunk groups'
+// Requantizes s_faceVerts[0..numVerts) into 'chunks', the chunk groups'
 // byte-position/attribute streams: byte = (coord + H) * 255 / (2H) - the exact inverse of the
 // frontv/backv scale and row-3 offset the vulerp draw sets up. Both
 // keyframes get the same bytes.
@@ -74,7 +70,7 @@ alignas(16) static vu1::LerpChunk s_faceChunks[kMaxFaceChunks];
 // batch light, which leaves the six faces differently coloured but flat. This
 // is a bring-up scene for the transform and texturing, so that is enough -
 // returns the light for the caller to hand to the draw.
-math::Vec4 QuantizeFaceForVuLerp(int numVerts)
+math::Vec4 QuantizeFaceForVuLerp(vu1::LerpChunk * const chunks, int numVerts)
 {
     constexpr float kQuant = 255.0f / (2.0f * kCubeHalfSize);
 
@@ -88,7 +84,7 @@ math::Vec4 QuantizeFaceForVuLerp(int numVerts)
 
         const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte (the MD2 normal index) unused
 
-        vu1::LerpChunk & chunk = s_faceChunks[v / vu1::kMaxLerpVertsPerBatch];
+        vu1::LerpChunk & chunk = chunks[v / vu1::kMaxLerpVertsPerBatch];
         const int i = v % vu1::kMaxLerpVertsPerBatch;
 
         chunk.pos[i].cur = packed;
@@ -196,7 +192,8 @@ void DrawRotatingCube()
                               Vec3{ 0.0f, 0.0f, 0.0f },
                               Vec3{ 0.0f, 1.0f, 0.0f });
     const Mat4 proj  = PerspectiveProjection(DegToRad(60.0f), 4.0f / 3.0f,
-                                             static_cast<float>(gs::Width()), static_cast<float>(gs::Height()),
+                                             static_cast<float>(gs::Width()),
+                                             static_cast<float>(gs::Height()),
                                              2.0f, 2000.0f);
 
     const Mat4 mvp = model * view * proj;
@@ -246,6 +243,13 @@ void DrawRotatingCube()
         mvpLerp.m[3][3] = row3.w;
     }
 
+    // This runs at the end of the frame, after the console and the HUD, so the 2D
+    // section is open and holding a DMA tag - and the faces below allocate from the
+    // chain, which cannot happen inside one. Closing it here rather than leaving it
+    // to the draw is the same rule the batches follow: the 2D->3D boundary is where
+    // the chain is claimed, not where it is submitted.
+    gs::FlushPending2D();
+
     const int tick = Sys_Milliseconds() / 2000;
     for (int face = 0; face < 6; ++face)
     {
@@ -253,17 +257,34 @@ void DrawRotatingCube()
                           ? ((face % 3) + tick) % tex::kNumDebugTextures
                           : face;
 
-        const int numVerts = EmitFace(s_faceVerts, kFaces[face], tess);
+        // Both paths gather into the frame chain, like every other 3D path: the face has to
+        // stay valid until EndFrame kicks, and the reservation has to cover the draw's tags as
+        // well as the data so that nothing here can rewind what the previous face left behind.
+        const int numVerts = tess * tess * 6;
 
         if (vuLerp)
         {
-            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(numVerts);
+            EmitFace(s_faceVerts, kFaces[face], tess);
+
+            const int numChunks = vu1::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
+            chain::Reserve(chain::CalcAllocCost<vu1::LerpChunk>(numChunks)
+                         + vu1::DrawLerpedTrianglesChainCost(numVerts));
+
+            vu1::LerpChunk * const chunks = chain::Alloc<vu1::LerpChunk>(numChunks);
+            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, numVerts);
+
             vu1::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
-                                     shadeLight, s_faceChunks, numVerts);
+                                     shadeLight, chunks, numVerts);
         }
         else
         {
-            vu1::DrawTriangles(mvp, tex::DebugTexture(variant), s_faceVerts, numVerts);
+            chain::Reserve(chain::CalcAllocCost<vu1::DrawVertex>(numVerts)
+                         + vu1::DrawTrianglesChainCost(numVerts));
+
+            vu1::DrawVertex * const verts = chain::Alloc<vu1::DrawVertex>(numVerts);
+            EmitFace(verts, kFaces[face], tess);
+
+            vu1::DrawTriangles(mvp, tex::DebugTexture(variant), verts, numVerts);
         }
     }
 }

@@ -20,7 +20,7 @@
  *      |-- MSCAL         -- run the microprogram                /
  *      |-- ... ~130 more chunks ...
  *      |-- DIRECT block  -- the 2D/HUD overlay
- *      `-- FLUSH + END
+ *      `-- FLUSH + END   -- appended by the one kick at gs::EndFrame
  *
  *  Where the memory comes from: both halves live inside the world loader's lump scratch
  *  (mod::WorldScratchBlock), which is claimed only while a .bsp is being parsed and is dead
@@ -42,10 +42,12 @@ namespace ps2::chain {
 // bounded by kWorldScratchCapacity / 2 - model_load.cpp static_asserts the pair against each
 // other, and raising this means raising that.
 //
-// 512 KB covers roughly the median frame (about 540 KB of chain for a 4000-triangle view), so
-// a typical frame kicks twice rather than the 50+ times the per-batch submission used to. The
-// number to steer by is PeakBytes() against the capacity, plus EmergencyDrainsLastFrame(): the
-// overflow path is correct but it costs a full pipeline drain, so it should be rare.
+// Measured over the two perf demos, a frame builds 420 KB of chain on average and 681 KB at
+// p95, so 512 KB holds most frames whole and the rest take one overflow rewind: about 1.5
+// kicks a frame against the 53 the per-draw path took. The numbers to steer by are
+// BytesLastFrame() - which counts what a rewind threw away, so it is the one that says whether
+// a frame *fits* - and EmergencyDrainsLastFrame(). Raising this to hold p95 whole would mean
+// raising kWorldScratchCapacity with it, and the halves already fill the loader's scratch.
 constexpr u32 kFrameChainBytes  = 512u * 1024u;
 constexpr u32 kFrameChainQwords = kFrameChainBytes / 16u;
 
@@ -217,9 +219,14 @@ void Kick();
 // Blocks until the chain the last Kick() sent has been fully consumed.
 void WaitIdle();
 
-// Kick + WaitIdle, for a caller that needs the GS to have caught up before it changes something
-// the queued draws depend on - an upload into evicted VRAM, a lightmap atlas rewrite, a CLUT
-// refresh. Returns false if there was nothing to drain.
+// Kick + WaitIdle, for a caller that needs what the frame has built so far to have reached the
+// GS before it changes something those draws depend on - an upload into evicted VRAM, a
+// lightmap atlas rewrite, a CLUT refresh - and for the one kick at the end of the frame.
+// Returns false if there was nothing to drain.
+//
+// Waiting on the DMA covers the VU runs and their XGKICKs, because of the FLUSH the terminator
+// carries, but not the GS finishing what it was handed. A caller that needs *that* wants
+// gs::FenceGs, which is this plus a FINISH event.
 //
 // Does **not** rewind: the pipeline empties, but everything built stays where it is and every
 // pointer into it stays good. That is what lets a draw's vertex data outlive its own submission,

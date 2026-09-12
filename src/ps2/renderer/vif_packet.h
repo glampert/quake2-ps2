@@ -132,6 +132,23 @@ public:
         packet2_vif_close_unpack_manual(m_packet, numElements);
     }
 
+    // A VIF FLUSH of its own: stalls VIF1 until the running microprogram has ended and its
+    // XGKICKs have reached the GS. One qword - the CNT tag carries the FLUSH and a NOP in the
+    // two VIFcode slots tte gives it, and the tag's own QWC is zero.
+    //
+    // Needed in front of anything that writes VU data memory at an *absolute* address, which
+    // the double buffer does not protect: the VIF would happily overwrite the frame constants
+    // the program still running is reading out of them. The per-chunk unpacks do not need it
+    // because they are double-buffered, and the MSCAL that follows each one carries a FLUSH of
+    // its own anyway.
+    void AddFlush()
+    {
+        packet2_chain_open_cnt(m_packet, 0, 0, 0);
+        packet2_vif_flush(m_packet, 0);
+        packet2_vif_nop(m_packet, 0);
+        packet2_chain_close_tag(m_packet);
+    }
+
     // Small unpacks built directly into the chain: open, append qwords, close.
     void OpenInlineUnpack(const u32 vuAddr, const bool useTop)
     {

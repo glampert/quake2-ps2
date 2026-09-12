@@ -56,21 +56,23 @@ float IntensityScale();
 // Background colour used by BeginFrame()'s screen clear.
 void SetClearColor(u8 r, u8 g, u8 b);
 
-// The most qwords either per-frame DMA packet has ever held, against the capacity
-// both were allocated with. The two packets are the whole ps2::heap::MemTag::Renderer
-// budget - shown as "DmaPeak" in the draw-stats overlay.
-int FramePacketPeakQwords();
-int FramePacketCapacityQwords();
+// The most qwords one GIF block in the frame chain has ever held - in practice the 2D
+// overlay, which is much the larger of the two and the only one whose size varies.
+// Shown as "Gif2DPk" in the draw-stats overlay; what it measures against is the chain
+// half it has to fit inside (chain::kFrameChainBytes), not a packet of its own.
+int Gif2DPeakQwords();
 
-// Per-frame lifecycle: BeginFrame() clears the back buffer (color + depth,
-// sent immediately); EndFrame() flushes any pending 2D (see below), waits for
-// vsync and flips to the front. 2D and 3D may be drawn in any order between them.
+// Per-frame lifecycle: BeginFrame() opens the frame's DMA chain and clears the back
+// buffer (color + depth, at the head of that chain); EndFrame() flushes any pending 2D
+// (see below), waits for vsync and flips to the front. 2D and 3D may be drawn in any
+// order between them, and both build into the same chain.
 void BeginFrame();
 void EndFrame();
 
 // 2D draws (FillRect/SetTextureFor2D/DrawTexturedRect) accumulate into a
-// deferred "pending batch" with an always-pass z-test, so it draws on top; the
-// first primitive after a flush opens it lazily - callers just draw, no bracket.
+// deferred "pending batch" - a DIRECT block of the frame's chain - with an
+// always-pass z-test, so it draws on top; the first primitive after a flush opens
+// it lazily - callers just draw, no bracket.
 // The batch is flushed (sent and waited on) automatically before the next 3D
 // draw and by EndFrame(), which keeps its layering correct and its textures
 // resident. Rarely needed directly; the VU1 3D path calls it before drawing so

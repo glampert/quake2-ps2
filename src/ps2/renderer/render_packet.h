@@ -1,10 +1,18 @@
 #pragma once
 /* ================================================================================================
  * File: render_packet.h
- * Brief: RenderPacket wraps a ps2sdk DMA packet together with the write cursor that the
- *        libdraw draw_* helpers thread through, so building GIF packets reads as method
- *        calls on the packet instead of free functions over a bare qword pointer. Thin
- *        wrappers only: blending state, DMA waits and frame pacing stay with the caller.
+ * Brief: RenderPacket wraps the write cursor that the libdraw draw_* helpers thread through,
+ *        so building GIF packets reads as method calls on the packet instead of free functions
+ *        over a bare qword pointer. Thin wrappers only: blending state, DMA waits and frame
+ *        pacing stay with the caller.
+ *
+ *  Two ways to be pointed at memory, and the difference is ownership rather than behaviour:
+ *  Init() allocates a buffer of its own, which is what the synchronous texture-upload path
+ *  still needs (it sends the packet itself), while Attach() borrows a DIRECT block opened
+ *  inside the frame chain, so the clear and the 2D overlay build straight into the frame's
+ *  one source chain and are submitted with it. Every draw_* wrapper below is the same either
+ *  way - that is the whole point, since it is what let the 2D call sites stay untouched when
+ *  the frame packets went away.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -27,7 +35,7 @@ class RenderPacket final
 public:
     RenderPacket() = default;
 
-    // Non-copyable: owns the underlying packet buffer.
+    // Non-copyable: may own the underlying packet buffer, and is a cursor either way.
     RenderPacket(const RenderPacket &) = delete;
     RenderPacket & operator=(const RenderPacket &) = delete;
 
@@ -62,6 +70,7 @@ public:
 
         m_maxQwords = maxQwords;
         m_ptr       = m_base;
+        m_owned     = true;
     }
 
     // Rewinds the write cursor to the start of the buffer, banking what the cycle
@@ -71,6 +80,48 @@ public:
         const int used = QwordCount();
         if (used > m_peakQwords) { m_peakQwords = used; }
         m_ptr = m_base;
+    }
+
+    // Points the wrappers at memory somebody else owns - the payload of a DIRECT block
+    // opened in the frame chain - instead of a buffer of this packet's own. 'maxQwords' is
+    // what may be written there before the block has to be closed and sent.
+    //
+    // Nothing is allocated and nothing is sent: Detach() hands the cursor back to whoever
+    // opened the block, and that owner is what puts the data on the wire. Note there is no
+    // kGuardQwords slack past the bound here - what follows an attached block is the rest of
+    // the chain half, not our own spare room - which is why Advance()'s check is live rather
+    // than debug-only.
+    void Attach(qword_t * const cursor, const int maxQwords)
+    {
+        PS2_AssertMsg(!m_owned, "RenderPacket::Attach on a packet that owns its buffer!");
+        PS2_AssertMsg(m_base == nullptr, "RenderPacket::Attach with a block already attached!");
+        PS2_Assert(cursor != nullptr && maxQwords > 0);
+
+        m_base      = cursor;
+        m_ptr       = cursor;
+        m_maxQwords = maxQwords;
+    }
+
+    // Gives the borrowed block back, banking what it held. The cursor the owner needs is
+    // Cursor(), read before this.
+    void Detach()
+    {
+        PS2_AssertMsg(!m_owned, "RenderPacket::Detach on a packet that owns its buffer!");
+        PS2_AssertMsg(m_base != nullptr, "RenderPacket::Detach with no block attached!");
+
+        const int used = QwordCount();
+        if (used > m_peakQwords) { m_peakQwords = used; }
+
+        m_base      = nullptr;
+        m_ptr       = nullptr;
+        m_maxQwords = 0;
+    }
+
+    // Where the cursor ended up - what an attached block's owner needs to know how far the
+    // draw_* wrappers advanced it.
+    qword_t * Cursor() const
+    {
+        return m_ptr;
     }
 
     // Qwords written since the last Reset().
@@ -84,10 +135,11 @@ public:
         return m_maxQwords;
     }
 
-    // The most qwords this packet has ever held. Reset() banks it, and the current
-    // cycle is folded in here so a packet that is filled but never Reset (the clear
-    // and texture-upload chains) still reports honestly. This is what the capacity
-    // passed to Init() should be sized against - see kPacketQwords in gs.cpp.
+    // The most qwords this packet has ever held. Reset() and Detach() bank it, and the
+    // current cycle is folded in here so a packet that is filled but never Reset (the
+    // texture-upload chain) still reports honestly. For an owned packet this is what the
+    // capacity passed to Init() should be sized against; for the attached 2D block it is
+    // how much of a chain half the overlay wants (the "Gif2DPk" row in the draw stats).
     int PeakQwords() const
     {
         const int used = QwordCount();
@@ -201,6 +253,22 @@ public:
         Advance(draw_finish(m_ptr));
     }
 
+    // Ends the GIF packet without drawing anything: a PACKED tag with NLOOP = 0, so no data
+    // follows it, and EOP set.
+    //
+    // The GIF stays bound to the path feeding it until it sees EOP, and most of the draw_*
+    // helpers above emit their tags with EOP clear. A block that simply stopped after one of
+    // those would leave PATH2 open, and the next microprogram's XGKICK - PATH1, in the same
+    // chain a few qwords later - would wait for a packet nothing is going to finish. So every
+    // DIRECT block in the frame chain is closed with one of these, whatever it ends on.
+    void EndGifPacket()
+    {
+        EnsureSpace(1);
+
+        PACK_GIFTAG(m_ptr, GIF_SET_TAG(0, 1, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
+        Advance(m_ptr + 1);
+    }
+
     // Wait until FINISH event occurs.
     static void WaitFinish()
     {
@@ -240,20 +308,23 @@ private:
     {
         m_ptr = newPtr;
 
-#if PS2_QUAKE_ASSERTS
+        // Live in release, not just under asserts. An owned packet has kGuardQwords of its own
+        // slack to land in, so the overrun is contained either way - but an attached one is a
+        // window into the frame chain, and what it would run into is the next segment's DMA
+        // tags. That fails somewhere else entirely, with nothing pointing back to here.
         if (QwordCount() > m_maxQwords) [[unlikely]]
         {
-            Sys_Error("Render packet overflow: emission ran to %d qwords, past the %d "
-                      "capacity (into the %d qword guard). Raise the size passed to Init().",
-                      QwordCount(), m_maxQwords, kGuardQwords);
+            Sys_Error("Render packet overflow: emission ran to %d qwords, past the %d capacity. "
+                      "Raise the size passed to Init(), or the block budget in gs.cpp.",
+                      QwordCount(), m_maxQwords);
         }
-#endif // PS2_QUAKE_ASSERTS
     }
 
-    qword_t * m_base       = nullptr; // owns the qword buffer
+    qword_t * m_base       = nullptr; // start of the buffer or block being written
     qword_t * m_ptr        = nullptr; // write cursor, advanced by every append
     int       m_maxQwords  = 0;       // capacity of m_base, for EnsureSpace
     int       m_peakQwords = 0;       // high-water of QwordCount, for sizing m_maxQwords
+    bool      m_owned      = false;   // true once Init allocated m_base; Attach borrows instead
 };
 
 } // namespace ps2::gs

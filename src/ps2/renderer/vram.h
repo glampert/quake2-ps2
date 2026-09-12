@@ -51,7 +51,7 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvict
 
 // Drops the this-frame eviction protection from every resident texture, making
 // the whole heap evictable again. Only legal once the GS is idle - the pins
-// exist because a block bound this frame may still be queued in the frame packet
+// exist because a block bound this frame may still be queued in the frame's chain
 // or rasterising, and nothing else re-establishes that guarantee. Relative LRU
 // order is preserved, so the coldest textures stay the preferred victims.
 void UnpinAll();
@@ -61,7 +61,7 @@ void UnpinAll();
 void Touch(const tex::Texture & texture);
 
 // True when the (resident) texture was already bound this frame - its draws may
-// still be queued in the unsent frame packet, so overwriting its VRAM (dynamic
+// still be queued in the unsent part of the frame's chain, so overwriting its VRAM (dynamic
 // texture re-upload) must sync the GS first.
 bool BoundThisFrame(const tex::Texture & texture);
 

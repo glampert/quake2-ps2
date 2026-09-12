@@ -417,12 +417,11 @@ void DrawDrawStatsOverlay()
         { "LmStyle", lmStats.styleUpdates   },
         { "LmDyn",   lmStats.dynamicUpdates },
         { "LmRest",  lmStats.restoreUpdates },
-        // Most qwords a per-frame DMA packet has ever held, against the capacity
-        // it was allocated with. The two frame packets are the whole Renderer
-        // memory tag, so a peak far below the capacity means kPacketQwords is
-        // oversized and can be cut.
-        { "DmaPeak", ps2::gs::FramePacketPeakQwords()     },
-        { "DmaCap",  ps2::gs::FramePacketCapacityQwords() },
+        // Most qwords one GIF block in the frame chain has ever held - the 2D
+        // overlay in practice, since the clear is a fixed ~30. It is a slice of
+        // ChainCap below rather than a budget of its own, so what it says is how
+        // much of a chain half a full console wants on top of the world.
+        { "Gif2DPk", ps2::gs::Gif2DPeakQwords() },
         // The frame DMA chain: high-water in KB against its capacity, how many
         // times it was kicked last frame, and how many of those kicks were the
         // overflow emergency rather than the end of the frame. One kick and zero

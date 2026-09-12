@@ -3,8 +3,9 @@
  * File: vif_packet.h
  * Brief: VifPacket wraps a ps2sdk packet2 DMA source chain aimed at VIF1, the path used to
  *        feed VU1: microprogram upload (MPG), data unpacks into VU memory and program kicks
- *        (MSCAL). Sibling of RenderPacket, which drives the GIF/PATH3 2D path. Thin wrappers
- *        only: what goes into VU memory stays with the caller.
+ *        (MSCAL), and - through the DIRECT blocks at the bottom of the class - the raw GIF
+ *        data for the clear and the 2D overlay. Thin wrappers only: what goes into VU memory
+ *        stays with the caller.
  *
  *  Non-owning, and deliberately so. The chain being built belongs to ps2::chain
  *  (frame_chain.h), which owns the memory, the rewind, the terminator and the kick - a
@@ -155,6 +156,72 @@ public:
     void AddU32(const u32 value)
     {
         packet2_add_u32(m_packet, value);
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // DIRECT blocks: GIF data carried through VIF1 to the GIF over PATH2
+    // --------------------------------------------------------------------------------------------
+
+    // What opening a DIRECT block costs on top of its payload: the CNT tag, whose own qword also
+    // carries the two VIFcodes below. Part of the chain budget arithmetic, like kAllocOverheadQwords.
+    static constexpr int kDirectOverheadQwords = 1;
+
+    // Opens a DIRECT transfer: everything written until CloseDirect goes to the GIF verbatim as
+    // GIF tags and register data. That is the frame clear and the 2D overlay - GIF packets rather
+    // than VU work, which is why they used to be built in packets of their own and sent down the
+    // GIF channel instead of riding here.
+    //
+    // The leading FLUSH is the ordering the 2D path used to buy with an EE-side drain. It stalls
+    // VIF1 until the last microprogram has ended and its XGKICKs have reached the GS, so a block
+    // opened after a batch cannot interleave with PATH1 at the GIF - a stall in the VIF, downstream
+    // of the EE, rather than the EE waiting for the whole pipeline. It costs nothing when no VU
+    // work is outstanding, which is why it is unconditional.
+    //
+    // FLUSH and DIRECT are the two VIFcodes riding the CNT tag's own qword (tte=1), so the opening
+    // is one qword and the payload starts on the next - which is also what makes CloseDirect's
+    // qword count come out right, since it measures from the VIFcode's own address.
+    void OpenDirect()
+    {
+        packet2_chain_open_cnt(m_packet, 0, 0, 0);
+        packet2_vif_flush(m_packet, 0);
+        packet2_vif_open_direct(m_packet, 0);
+    }
+
+    // Patches the DIRECT VIFcode's qword count and the CNT tag's QWC from where the cursor ended up.
+    void CloseDirect()
+    {
+        const vif_code_t * const code = m_packet->vif_code_opened_at;
+        PS2_AssertMsg(code != nullptr, "VifPacket::CloseDirect with no DIRECT block open!");
+
+        // The payload starts at the qword boundary just past the VIFcode's own word.
+        const std::uintptr_t payload = reinterpret_cast<std::uintptr_t>(code) + sizeof(u32);
+        const u32 qwords = static_cast<u32>((reinterpret_cast<std::uintptr_t>(m_packet->next) - payload) >> 4);
+
+        // An empty DIRECT is not a harmless no-op: the count is a 16-bit immediate and zero means
+        // 65536 qwords, so the VIF would swallow the rest of the chain as GIF data. The 65535 cap
+        // cannot be reached from a half this size, but it is the other end of the same field.
+        PS2_AssertMsg(qwords > 0 && qwords <= 0xFFFFu,
+                      "VifPacket::CloseDirect on an empty or oversized block - a DIRECT carries 1..65535 qwords!");
+
+        packet2_vif_close_direct_manual(m_packet, qwords);
+        packet2_chain_close_tag(m_packet);
+    }
+
+    // The raw write cursor inside an open DIRECT block, and the way to hand back where a writer
+    // left it. For payload built by something that takes a qword_t * of its own - libdraw's draw_*
+    // emitters, which report their size by returning the advanced cursor rather than up front.
+    qword_t * DirectCursor() const
+    {
+        PS2_AssertMsg(m_packet->vif_code_opened_at != nullptr, "VifPacket::DirectCursor with no DIRECT block open!");
+        return m_packet->next;
+    }
+
+    void SetDirectCursor(qword_t * const cursor)
+    {
+        PS2_AssertMsg(m_packet->vif_code_opened_at != nullptr, "VifPacket::SetDirectCursor with no DIRECT block open!");
+        PS2_AssertMsg(cursor >= m_packet->next && (cursor - m_packet->base) <= m_maxQwords,
+                      "VifPacket::SetDirectCursor past the end of the chain half!");
+        m_packet->next = cursor;
     }
 
 private:

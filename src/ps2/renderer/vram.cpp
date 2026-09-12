@@ -413,7 +413,7 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvict
 
         // Nothing fits: evict the least-recently-bound texture and retry.
         // Textures bound this frame are off-limits - their draws may still be
-        // queued in the frame packet or in flight on the GS.
+        // queued in the frame's chain or in flight on the GS.
         Block * victim = nullptr;
         for (Block * block = s_blockList; block != nullptr; block = block->next)
         {

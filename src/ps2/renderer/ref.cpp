@@ -220,8 +220,8 @@ void DrawProfileOverlay()
 
     const int panelHeight = ((numRows + 1) * kLineHeight) + (kPadding * 2); // Header + one per event.
 
-    // Right edge aligned with the FPS counter above, which ends at width - 4.
-    const int panelX = viddef.width - kPanelWidth - 4;
+    // Right edge aligned with the FPS counter above.
+    const int panelX = viddef.width - kPanelWidth;
     const int panelY = 16; // Clears the 12px FPS box at y = 2.
 
     // A black background to give the text more contrast.
@@ -456,6 +456,17 @@ void DrawDrawStatsOverlay()
         DrawInternalString(textX, textY, line);
         textY += kLineHeight;
     }
+}
+
+void DrawDebugOverlays()
+{
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Overlay);
+
+    DrawFpsCounter();
+    DrawProfileOverlay();
+    DrawMemUsageOverlay();
+    DrawVramUsageOverlay();
+    DrawDrawStatsOverlay();
 }
 
 } // namespace
@@ -724,15 +735,7 @@ void PS2_EndFrame()
     // them is to know how much of a capture is the thing doing the measuring.
     // Each is cvar gated and returns immediately when off, so this reads near
     // zero in a release-style configuration.
-    {
-        PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Overlay);
-
-        DrawFpsCounter();
-        DrawProfileOverlay();
-        DrawMemUsageOverlay();
-        DrawVramUsageOverlay();
-        DrawDrawStatsOverlay();
-    }
+    DrawDebugOverlays();
 
     ps2::gs::EndFrame();
 }

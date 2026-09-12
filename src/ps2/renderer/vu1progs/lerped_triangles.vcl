@@ -11,10 +11,18 @@
 ; unchanged. Preprocessed with vclpp; -j injects the boilerplate.
 ;
 ; Vertex colour is computed here rather than handed over packed:
-; each vertex carries a scalar shade term and the batch carries the
+; each vertex carries a shade term and the batch carries the
 ; entity's light, so the colour is one broadcast multiply, a clamp
 ; and an ftoi0. That replaces a 162-entry lookup table the EE used
 ; to rebuild for every entity of every frame.
+;
+; The shade term rides in the *old keyframe's* 4th byte, quantized
+; to shade * 128, rather than in a lane of the attribute qword. The
+; EE was storing that word anyway and the byte held a
+; lightnormalindex nothing here reads, so putting it there leaves
+; the attribute qword with nothing the model does not already have
+; baked - and the EE stopped gathering that stream at all. It is
+; now the model's own vertexes, referenced where they lie.
 ;
 ; VU data memory layout (qwords; must match vu1.cpp):
 ;   0-3  MVP matrix rows (row-vector convention; row 3 carries 'move')
@@ -36,23 +44,30 @@
 ;         (.y/.z); the lanes never mix in one operation.
 ;   +1    frontv: current frame scale * (1 - backlerp), w = 0
 ;   +2    backv:  old frame scale * backlerp, w = 0
-;   +3    shadeLight: the entity's light in GS units (0-128 per
-;         channel) with the vertex alpha in .w
+;   +3    shadeLight: the entity's light, vertex alpha in .w. Not
+;         in GS units any more - it carries the 1/128 matching the
+;         quantized shade byte, so light * shade lands back in the
+;         0-255 the clamp expects
 ;   +4    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
 ;         prim tag)
 ;   +11   positions: 2 qwords per vertex - the current frame's
 ;         dtrivertx_t then the old frame's, each unpacked by the
-;         VIF from V4_8 bytes to four *unsigned integers* per qword
-;         (x, y, z, lightnormalindex; the last is baggage the EE
-;         used to index its colour LUT with - never read here)
-;   +167  attributes: 1 qword per vertex: (shade, s, t, q)
+;         VIF from V4_8 bytes to four *unsigned integers* per qword.
+;         The current frame's 4th lane is its lightnormalindex,
+;         which the EE indexes the shade table with and this program
+;         never reads; the old frame's is the quantized shade term
+;         the EE wrote over it, and is where the colour comes from
+;   +167  attributes: 1 qword per vertex: (unused, s, t, q), handed
+;         to the DMA straight out of the model hunk - .x is the
+;         model's own keyframe index, never a float
 ;   +245  the GS packet built here: 7 tags + 3 qwords per vertex
 ;
 ; The position qwords hold integer bit patterns until itof0
 ; converts them - they must only ever be touched by raw loads and
 ; itof0, never an FMAC op (integers look like denormals and would
-; flush to zero). The attribute qword carries no such thing any
-; more: every lane of it is a real float meant for the FMAC.
+; flush to zero). The attribute qword's .x is one of those too, now
+; that it comes from the model: the single FMAC that touches it
+; discards the result, and says so where it happens.
 ;--------------------------------------------------------------------
 
 ; Batch offsets, relative to XTOP:
@@ -87,7 +102,7 @@
 ;   {
 ;       ivec4 curI = pos[offCur];  // (x, y, z, normalindex) ints, 0-255
 ;       ivec4 oldI = pos[offOld];
-;       vec4  stq  = attr[offStq]; // (shade, s, t, q)
+;       vec4  stq  = attr[offStq]; // (unused, s, t, q)
 ;
 ;       vec4 cur = itof(curI);
 ;       vec4 old = itof(oldI);
@@ -110,17 +125,19 @@
 ;
 ;       // Perspective divide; the STQ words share the 1/w so the GS
 ;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
-;       // The shade term gets scaled too - unused, but the rotate
-;       // below moves it into the ST qword's ignored .w:
+;       // The keyframe index in .x gets scaled too - it reads as
+;       // zero (the VU has no denormals) and the rotate below moves
+;       // it into the ST qword's ignored .w:
 ;       float q  = 1.0f / pos.w;
 ;       pos.xyz *= q;                    // now NDC
 ;       vec4 stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
 ;
-;       // The vertex colour, from the unscaled shade term broadcast
-;       // across the entity's light. This is the whole of what the
-;       // EE's per-entity colour LUT used to compute, and the clamp
-;       // it needed 486 compares for is two instructions here:
-;       vec4 colour  = shadeLight * stq.x;   // .w = alpha * shade
+;       // The vertex colour, from the quantized shade term in the
+;       // old keyframe's .w broadcast across the entity's light.
+;       // This is the whole of what the EE's per-entity colour LUT
+;       // used to compute, and the clamp it needed 486 compares for
+;       // is two instructions here:
+;       vec4 colour  = shadeLight * old.w;   // .w = alpha * shade
 ;       colour.xyz   = clamp(colour.xyz, 0, 255);
 ;       colour.w     = shadeLight.w;         // alpha, untouched
 ;
@@ -165,6 +182,14 @@
     ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
     ; interpolation. The rotate below lands that 1/w in the ST qword's
     ; third word, which is where PACKED RGBAQ latches its Q from.
+    ;
+    ; Unmasked, and .x is the one place in this program an integer bit pattern
+    ; deliberately reaches an FMAC. The attribute qword now arrives verbatim from
+    ; the model and its .x is the model's own keyframe index; the VU has no
+    ; denormals, so it reads as zero and the product is zero. That is fine here
+    ; and nowhere else: the lane it rotates into is the ST qword's unread fourth
+    ; word. Masking to .yzw instead would leave .x uninitialised for the mr32
+    ; below, which openvcl rejects outright.
     div        q,          vf00[w], fPos[w]
     mul.xyz    fPos,       fPos,    q
     mulq       fStqScaled, fStq,    q
@@ -181,11 +206,16 @@
     mul.yz fStqScaled, fStqScaled, fStScale
 
     ; The vertex colour: the entity's light scaled by this vertex's shade
-    ; term, broadcast from the attribute's .x - which is the unscaled fStq,
-    ; not the perspective-divided copy above. Alpha is moved in rather than
-    ; multiplied; it is the batch's, not the vertex's. The clamp is the one
-    ; the EE spent 486 compares an entity on.
-    mulx.xyz fColor, fShadeLight, fStq
+    ; term, broadcast from the *old* keyframe's .w - the byte the EE packed the
+    ; quantized shade into (shade * 128), already widened by the VIF and
+    ; converted by the itof0 above. The batch's light carries the matching 1/128,
+    ; so the product is the colour the float shade used to give.
+    ;
+    ; Reading it here rather than from the attribute qword is what lets that
+    ; qword come straight out of the model hunk with no EE gather at all.
+    ; Alpha is moved in rather than multiplied; it is the batch's, not the
+    ; vertex's. The clamp is the one the EE spent 486 compares an entity on.
+    mulw.xyz fColor, fShadeLight, fOld
     move.w   fColor, fShadeLight
     max.xyz  fColor, fColor, vf00
     mini.xyz fColor, fColor, fColorClamp

@@ -573,7 +573,8 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
                               const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
-                              const LerpChunk & chunk, int vertCount,
+                              const LerpPosChunk & posChunk, const LerpDrawAttrib * attribs,
+                              int vertCount,
                               FaceCull faceCull, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
@@ -603,7 +604,9 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
 
         // The entity's light, which the microprogram multiplies by each vertex's
         // shade term to get its color. On the EE this was a 162-entry table
-        // rebuilt per entity per frame; here it is four floats per batch.
+        // rebuilt per entity per frame; here it is four floats per batch. The
+        // shade arrives quantized (shade * 128), so .xyz carry the light already
+        // divided by 128 - see VertexShadeLight.
         pkt.AddFloat(shadeLight.x);
         pkt.AddFloat(shadeLight.y);
         pkt.AddFloat(shadeLight.z);
@@ -617,12 +620,15 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
     // qwords per vertex, padded to an even vertex count so the transfer is
     // whole qwords (every word the DMA carries must be unpack payload).
     const int srcVerts = vertCount + (vertCount & 1);
-    pkt.AddUnpackDataFmt(kLerpPositionsAddr, chunk.pos,
+    pkt.AddUnpackDataFmt(kLerpPositionsAddr, posChunk.pos,
                          static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
                          static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
                          P2_UNPACK_V4_8, true);
 
-    pkt.AddUnpackData(kLerpAttribsAddr, chunk.attrib, static_cast<u32>(vertCount), true);
+    // Referenced in the model hunk rather than in the chain: this is the stream the
+    // EE no longer gathers at all. One REF tag either way - the DMAC does not care
+    // which side of the bus the qwords came from, and nothing rewrites a model.
+    pkt.AddUnpackData(kLerpAttribsAddr, attribs, static_cast<u32>(vertCount), true);
 
     pkt.AddStartProgram(s_lerpedProgAddr);
 }
@@ -630,12 +636,13 @@ static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const LerpChunk * chunks, int vertCount,
-                         FaceCull faceCull, DrawFlags flags)
+                         const LerpPosChunk * posChunks, const LerpDrawAttrib * attribs,
+                         int vertCount, FaceCull faceCull, DrawFlags flags)
 {
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawLerpedTriangles wants whole triangles!");
-    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(chunks) & 15u) == 0, "Chunk groups must be 16-byte aligned!");
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(posChunks) & 15u) == 0, "Position chunks must be 16-byte aligned!");
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(attribs) & 15u) == 0, "Attribute stream must be 16-byte aligned!");
 
     gs::FlushPending2D();
 
@@ -650,10 +657,11 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     const int ctx = gs::CurrentContext();
     VifPacket pkt = chain::Packet();
 
-    // Chunking as in DrawTriangles, except the caller has already grouped the
-    // geometry this way: one LerpChunk is one VU run's two streams, so the loop
-    // walks groups rather than slicing two parallel arrays. Only a final odd
-    // chunk pads its position transfer (see AddLerpBatchChunk).
+    // Chunking as in DrawTriangles. The positions are already grouped this way -
+    // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
+    // same boundary, which works because the caller gathered the positions from the
+    // attribute array in order. Only a final odd chunk pads its position transfer
+    // (see AddLerpBatchChunk).
     for (int firstVert = 0, c = 0; firstVert < vertCount; firstVert += kMaxLerpVertsPerBatch, ++c)
     {
         ReserveChunk(pkt, kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
@@ -662,7 +670,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         const int chunkVerts = (remaining < kMaxLerpVertsPerBatch) ? remaining : kMaxLerpVertsPerBatch;
 
         AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, shadeLight, stScaleS, stScaleT,
-                          chunks[c], chunkVerts, faceCull, flags);
+                          posChunks[c], attribs + firstVert, chunkVerts, faceCull, flags);
     }
 }
 

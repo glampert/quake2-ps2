@@ -284,95 +284,71 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 // The two keyframes' quantized positions of one vertex, interleaved: the
 // current frame's dtrivertx_t bytes, then the old frame's, both copied
 // verbatim from the MD2 frame data (the VIF widens each byte into an integer
-// lane; the microprogram converts and lerps them). The 4th byte of each word
-// is that frame's lightnormalindex, which rides along unread - the EE indexes
-// its color LUT with it instead.
+// lane; the microprogram converts and lerps them).
+//
+// The 4th byte of each word is that frame's lightnormalindex. 'cur' keeps its
+// copy - the EE indexes the shade table with it - and 'old' does not: that byte
+// is where the vertex's **quantized shade term** rides instead, shade * 128 in
+// 0..255, which the microprogram reads out of the lerped .w lane.
+//
+// That is the whole reason the attribute stream can be the model's own baked
+// vertices, untouched: the one per-vertex value the EE still has to compute goes
+// in a byte nothing was using, in a word it was storing anyway. shade runs
+// [0.70, 1.99] (see kMaxShadeDot), so *128 lands inside a byte exactly, and the
+// quantization step is 1/128 of a shade unit - against a 5-bit framebuffer
+// channel, eight times finer than anything that can be displayed.
 struct LerpVertexBytes
 {
     u32 cur;
     u32 old;
 };
 
-// Per-vertex attributes for DrawLerpedTriangles - everything but the
-// position. One qword, matching the microprogram's input layout.
+// One VU run's worth of keyframe bytes, which is what a lerp chunk gathers.
 //
-// The color is not packed here: 'shade' is the vertex's shade term and the
-// microprogram multiplies the batch's shadeLight by it, clamps and converts,
-// which is the whole of what the EE used to do by building a 162-entry lookup
-// table per entity per frame. It also means this qword holds no packed color,
-// so the denormal rule that governs DrawVertex does not apply - every lane
-// here is a real float meant for the FMAC.
+// The attributes are not beside them any more: they are the model's own baked
+// vertices, referenced where they lie in the model hunk, so there is only one
+// stream left to gather and it no longer needs the two-streams-in-one-block
+// grouping that vu1::LerpChunk existed for.
+struct alignas(16) LerpPosChunk
+{
+    LerpVertexBytes pos[kMaxLerpVertsPerBatch];
+};
+static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole number of qwords");
+
+// Per-vertex attributes for DrawLerpedTriangles - everything but the position
+// and the shade. One qword, matching the microprogram's input layout.
+//
+// **Nothing writes one of these any more.** mod::AliasVertex has exactly this
+// shape, so a model's baked attributes are handed to the DMA where they lie and
+// the per-vertex attribute gather is gone - which is what this type is for now:
+// naming the layout the microprogram reads, not a buffer anybody fills.
+//
+// Lane 0 is whatever the source left there (the model's keyframe index, an
+// integer bit pattern) and the microprogram never reads it. It used to be the
+// shade; that moved into the position stream's spare byte, which is what freed
+// the rest of the qword to come straight from the model.
 struct alignas(16) LerpDrawAttrib
 {
-    float shade;   // per-vertex shade term, multiplied by the batch's shadeLight
+    u32   unused;  // the source's own business; the microprogram does not read it
     float s, t, q; // texture coords; q must be 1.0f
 };
 static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qword");
 
-// The one-qword sibling of CopyDrawVertex, for a caller whose source is already
-// laid out as a LerpDrawAttrib - mod::AliasVertex deliberately is, keeping the
-// keyframe index where the shade goes so a model's baked attributes reach the
-// batch in one move and the shade is written over lane 0 afterwards.
+// Draws 'vertCount' keyframe-lerped vertices: 'posChunks' is the gathered position
+// stream, one LerpPosChunk per VU run, and 'attribs' is a contiguous run of
+// vertCount per-vertex attributes the chunks slice in the same order.
 //
-// The reason is gcc, not the FMAC: it never forms lq/sq of its own accord, so a
-// plain struct assignment becomes four ld/sd pairs in the innermost step of the
-// entity gather. Templated on the source only to avoid a dependency on the model
-// headers here; the layout is asserted rather than assumed.
-template<typename SrcT>
-Q_ALWAYS_INLINE void CopyLerpAttrib(LerpDrawAttrib & dst, const SrcT & src)
-{
-    static_assert(sizeof(SrcT) == sizeof(LerpDrawAttrib) && alignof(SrcT) == 16,
-                  "CopyLerpAttrib's lq/sq need one qword-aligned qword");
-
-    asm volatile (
-        "lq $8, 0x00(%1) \n\t"
-        "sq $8, 0x00(%2) \n\t"
-        : "=m" (dst)
-        : "r" (&src), "r" (&dst), "m" (src)
-        : "$8");
-}
-
-// One VU run's input, both streams together: the geometry is handed over a chunk
-// at a time rather than as two long parallel arrays.
-//
-// The layout is what the chain forced and what the chain wanted anyway. A gather
-// writing into the frame chain claims one block and gives back the tail it did
-// not use (chain::AllocMax / Commit), and a block is cut back from its end - so
-// two streams that both have to shrink cannot be two allocations. Grouped per
-// chunk they are one, the two REF tags of a chunk point at neighbouring qwords
-// instead of half a batch apart, and a short final chunk wastes at most one
-// group's tail instead of the whole of both streams' slack.
-//
-// 'pos' is sized for the maximum chunk, which is also what supplies the pad the
-// byte stream needs at an odd vertex count: the DMA carries whole source qwords,
-// so an odd chunk transfers one element past its count (transferred, never read).
-// An odd chunk is always shorter than the maximum, so that element is in here.
-struct alignas(16) LerpChunk
-{
-    LerpVertexBytes pos[kMaxLerpVertsPerBatch];    // 2 keyframe words per vertex
-    LerpDrawAttrib  attrib[kMaxLerpVertsPerBatch]; // 1 qword per vertex
-};
-static_assert((sizeof(LerpChunk) % 16) == 0, "LerpChunk must be a whole number of qwords");
-static_assert((sizeof(LerpVertexBytes) * kMaxLerpVertsPerBatch % 16) == 0,
-              "The attribute stream must start qword aligned - the unpack REFs it directly");
-
-// Draws textured triangles whose positions VU1 interpolates from the two
-// keyframe streams: position = cur * frontv + old * backv, plus the MVP's
-// row 3 - fold the MD2 lerp's uniform 'move' translation in there (see
-// render_md2.cpp). 'chunks' must be 16-byte aligned and hold
-// ChunkCount(vertCount, kMaxLerpVertsPerBatch) groups, filled front to back -
-// every group but the last one full. Chunking, texture residency and
-// synchronicity as DrawTriangles.
-//
-// 'shadeLight' is the batch's light color in GS units (0-128 per channel, the
-// entity's shade times the modulate identity) with the vertex alpha in .w. The
-// microprogram builds each vertex's color as clamp(shade * shadeLight), so an
-// all-zero .xyz gives flat black at whatever alpha .w carries - which is how the
-// projected shadow draws over the model's own attribute stream, untouched.
+// The two come from different places on purpose. Positions are an indexed gather
+// and have to be built, so they live in the frame chain like every other gather;
+// attributes are the model's own baked array in draw order, so they are referenced
+// where they lie and never copied. Both must stay valid until the frame's kick -
+// the chain does by construction, the model hunk because nothing unloads a model
+// mid-frame - and 'attribs' must be qword aligned, which mod::AliasVertex is.
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const LerpChunk * chunks, int vertCount,
+                         const LerpPosChunk * posChunks, const LerpDrawAttrib * attribs,
+                         int vertCount,
                          FaceCull faceCull = FaceCull::None,
                          DrawFlags flags = DrawFlags::None);
 

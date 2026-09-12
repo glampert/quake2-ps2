@@ -231,12 +231,15 @@ private:
 // Triangle batch specialized for the interpolated MD2 models.
 //
 // Same shape as TriangleBatch - a cursor into a span of the frame chain, claimed
-// on the first push and handed back at Flush - with one difference that decides
-// its whole layout: the VU lerp takes two streams, the keyframe bytes and the
-// per-vertex attributes, and a chain block is cut back from its end. Two
-// allocations could not both shrink, so they are one allocation of vu1::LerpChunk
-// groups: each group is one VU run's worth of both streams, side by side, and
-// Flush commits whole groups. See vu1.h's LerpChunk.
+// on the first push and handed back at Flush - gathering the keyframe position
+// stream in vu1::LerpPosChunk groups, one per VU run.
+//
+// It gathers *only* positions. The other half of what the microprogram reads, the
+// per-vertex attributes, is the model's own baked array in draw order, so the
+// batch carries a cursor into it rather than a copy of it: SetAttribSource names
+// the array, PushTriangle advances nothing of it, and Flush hands the draw the
+// slice matching the positions it just submitted. That is what this class used to
+// spend a whole second stream on.
 //
 // The span outlives its own Flush on purpose - that is what RedrawLastFlush
 // draws from. It stays good until the chain is rewound, which is why the claim
@@ -271,11 +274,25 @@ public:
     // RedrawLastFlush emits another set over the same data and must not be the
     // thing that overflows. An overflow between the two would rewind the chain
     // out from under the span the redraw exists to reference.
-    static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::LerpChunk>(kMaxChunks)
+    static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::LerpPosChunk>(kMaxChunks)
                                       + (2 * vu1::DrawLerpedTrianglesChainCost(MaxVerts));
 
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
     Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
+
+    // Names the per-vertex attribute array the gather about to start reads its
+    // positions out of - the model's baked vertices, in draw order. Every push
+    // from here on consumes one entry of it, and each Flush hands the draw the
+    // run it just covered and steps past it, so a model too large for one batch
+    // splits its attributes at exactly the same place as its positions.
+    //
+    // Call once before the first push of a model. It is the only thing the batch
+    // needs to know about where the attributes live, because it never writes them.
+    void SetAttribSource(const vu1::LerpDrawAttrib * const attribs)
+    {
+        PS2_AssertMsg(m_vertCount == 0, "SetAttribSource in the middle of a gather!");
+        m_attribs = attribs;
+    }
 
     // The VU-lerp equivalent of TriangleBatch::Flush, submitting the gathered
     // groups. Does nothing when the buffer is empty.
@@ -286,18 +303,25 @@ public:
     {
         // Recorded even when there is nothing to send, so RedrawLastFlush after
         // an empty flush draws nothing rather than the previous caller's model.
-        m_lastFlushed      = m_chunks;
-        m_lastFlushedCount = m_vertCount;
+        m_lastFlushed        = m_chunks;
+        m_lastFlushedAttribs = m_attribs;
+        m_lastFlushedCount   = m_vertCount;
 
         if (m_vertCount > 0)
         {
+            PS2_AssertMsg(m_attribs != nullptr, "VULerpTriangleBatch::Flush with no attribute source!");
+
             // Whole groups: the tail of a partly filled last group is the only
             // thing a flush cycle wastes, and it is bounded by one group.
             chain::Commit(m_chunks, vu1::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
-                                     m_chunks, m_vertCount, faceCull, flags);
+                                     m_chunks, m_attribs, m_vertCount, faceCull, flags);
+
+            // Past what this cycle submitted, so a model that needed more than one
+            // batch carries on where it left off.
+            m_attribs  += m_vertCount;
             m_vertCount = 0;
         }
 
@@ -330,7 +354,8 @@ public:
         {
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
-                                     m_lastFlushed, m_lastFlushedCount, faceCull, flags);
+                                     m_lastFlushed, m_lastFlushedAttribs, m_lastFlushedCount,
+                                     faceCull, flags);
         }
     }
 
@@ -339,13 +364,15 @@ public:
     // IsFull() is answered once instead of three times. The caller must check
     // IsFull() (and flush) first, which is enough because capacity is a
     // triangle multiple.
-    struct Tri
-    {
-        vu1::LerpVertexBytes * pos;    // [3]
-        vu1::LerpDrawAttrib  * attrib; // [3]
-    };
-
-    Q_ALWAYS_INLINE Tri PushTriangle()
+    // Three consecutive position slots, for a caller filling a whole triangle at
+    // once - the count then moves once instead of three times, and IsFull() is
+    // answered once instead of three times. The caller must check IsFull() (and
+    // flush) first, which is enough because capacity is a triangle multiple.
+    //
+    // Only positions come back. There is nothing to hand out for the attributes:
+    // the caller named them once with SetAttribSource and the triangle it is
+    // filling reads from them at the same index, which is the whole point.
+    Q_ALWAYS_INLINE vu1::LerpVertexBytes * PushTriangle()
     {
         PS2_AssertMsg((m_vertCount + 3) <= MaxVerts, "VULerpTriangleBatch is full!");
 
@@ -357,12 +384,11 @@ public:
             NextChunk();
         }
 
-        const Tri t = { m_pos, m_attrib };
+        vu1::LerpVertexBytes * const pos = m_pos;
         m_pos        += 3;
-        m_attrib     += 3;
         m_chunkVerts += 3;
         m_vertCount  += 3;
-        return t;
+        return pos;
     }
 
 private:
@@ -377,7 +403,7 @@ private:
         {
             gs::FlushPending2D();
             chain::Reserve(kClaimQwords);
-            m_chunks = chain::AllocMax<vu1::LerpChunk>(kMaxChunks);
+            m_chunks = chain::AllocMax<vu1::LerpPosChunk>(kMaxChunks);
             m_chunk  = m_chunks;
         }
         else
@@ -385,27 +411,30 @@ private:
             ++m_chunk;
         }
         m_pos        = m_chunk->pos;
-        m_attrib     = m_chunk->attrib;
         m_chunkVerts = 0;
     }
 
     int m_vertCount = 0;
 
-    // Vertices the last Flush submitted, and where they are; see RedrawLastFlush.
-    int               m_lastFlushedCount = 0;
-    vu1::LerpChunk *  m_lastFlushed      = nullptr;
+    // The model's baked attributes, at the vertex the next push will fill.
+    const vu1::LerpDrawAttrib * m_attribs = nullptr;
+
+    // Vertices the last Flush submitted, and where both of its streams are; see
+    // RedrawLastFlush.
+    int                         m_lastFlushedCount   = 0;
+    vu1::LerpPosChunk *         m_lastFlushed        = nullptr;
+    const vu1::LerpDrawAttrib * m_lastFlushedAttribs = nullptr;
 
     // The claim, the group being filled and how much of it is spoken for.
-    vu1::LerpChunk * m_chunks     = nullptr; // into the frame chain; null between flush cycles
-    vu1::LerpChunk * m_chunk      = nullptr;
-    int              m_chunkVerts = vu1::kMaxLerpVertsPerBatch;
+    vu1::LerpPosChunk * m_chunks = nullptr; // into the frame chain; null between flush cycles
+    vu1::LerpPosChunk * m_chunk  = nullptr;
+    int m_chunkVerts = vu1::kMaxLerpVertsPerBatch;
 
     // Cursors rather than an index off m_chunk: the gather loop's stores are ones
     // the compiler cannot prove disjoint from anything under -fno-strict-aliasing,
     // so a base plus an index it has to redo per push costs more than two pointers
     // it can bump.
-    vu1::LerpVertexBytes * m_pos    = nullptr;
-    vu1::LerpDrawAttrib  * m_attrib = nullptr;
+    vu1::LerpVertexBytes * m_pos = nullptr;
 };
 
 } // namespace ps2::batch

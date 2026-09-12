@@ -77,17 +77,49 @@ static const float s_vertexNormals[kNumVertexNormals][3] = {
 };
 #pragma GCC diagnostic pop
 
+// The same 16 rows quantized to bytes: shade * 128, which lands inside 0..255
+// exactly because the dots run [0.70, 1.99]. Built once by InitEntityRendering
+// rather than per entity, since neither input changes at runtime.
+//
+// This is what the VU-lerp gather writes into each vertex's position stream, and
+// it is a byte rather than the float for two reasons: it has to fit the spare
+// lane of a word the gather was storing anyway (see vu1::LerpVertexBytes), and a
+// byte load is one memory op where the float table was a load and a store into a
+// second stream. The step is 1/128 of a shade unit, which against the 5-bit
+// framebuffer channel it eventually lands in is eight times finer than anything
+// that can be displayed.
+static u8 s_shadeDotBytes[kShadeDotQuant][kNumVertexNormals];
+
 // The shade-dot row for the entity's yaw.
+Q_ALWAYS_INLINE u32 ShadeDotRowForEntity(const entity_t & entity)
+{
+    return static_cast<u32>(static_cast<int>(
+        entity.angles[YAW] * (kShadeDotQuant / 360.0f))) & (kShadeDotQuant - 1);
+}
+
 Q_ALWAYS_INLINE const float * GetShadeDotsForEntity(const entity_t & entity)
 {
-    const u32 row = static_cast<u32>(static_cast<int>(
-        entity.angles[YAW] * (kShadeDotQuant / 360.0f))) & (kShadeDotQuant - 1);
-    return s_vertexNormalDots[row];
+    return s_vertexNormalDots[ShadeDotRowForEntity(entity)];
+}
+
+Q_ALWAYS_INLINE const u8 * GetShadeDotBytesForEntity(const entity_t & entity)
+{
+    return s_shadeDotBytes[ShadeDotRowForEntity(entity)];
 }
 
 // ------------------------------------------------------------------------------------------------
 // Converted mesh accessors
 // ------------------------------------------------------------------------------------------------
+
+// The model's baked per-vertex attributes, which are a vu1::LerpDrawAttrib in
+// everything but the name - mod::AliasVertex is laid out to be exactly one (see
+// the static_assert on it). Only ever handed to the DMA, never read back through
+// this type; through void* because -Wcast-align will not take the direct cast,
+// and both types are qword aligned by declaration.
+Q_ALWAYS_INLINE const vu1::LerpDrawAttrib * AttribsOf(const mod::AliasVertex * const verts)
+{
+    return static_cast<const vu1::LerpDrawAttrib *>(static_cast<const void *>(verts));
+}
 
 Q_ALWAYS_INLINE const mod::ModelInstance::AliasData & GetAliasMesh(const mod::ModelInstance & model)
 {
@@ -381,7 +413,11 @@ Q_ALWAYS_INLINE float ScaledEntityAlpha(const float alpha)
 // of what the VU path needs; no per-entity table at all.
 Q_ALWAYS_INLINE math::Vec4 VertexShadeLight(const math::Vec3 & shadeLight, const float alpha)
 {
-    return { shadeLight.x * 128.0f, shadeLight.y * 128.0f, shadeLight.z * 128.0f, ScaledEntityAlpha(alpha) };
+    // No *128 here any more, and for a reason worth stating: the microprogram
+    // multiplies this by the vertex's shade term, and that term now arrives
+    // quantized as shade * 128. The scale that used to sit on the light is
+    // carried by every vertex instead, so the product is the same colour.
+    return { shadeLight.x, shadeLight.y, shadeLight.z, ScaledEntityAlpha(alpha) };
 }
 
 // Per-entity packed vertex colours, indexed by the current frame's
@@ -598,12 +634,10 @@ Q_ALWAYS_INLINE void GatherClippedTriangle(AliasBatch & batch, clip::ClipVertex 
 // multiplies out to black and only the alpha in that vector matters) and neither
 // is the ST, since the draw is untextured and the GS never samples.
 //
-// Which is why the shadow that redraws the model's own stream does not need this
-// at all - that stream's real attributes multiply out to exactly the same black,
-// so there is no override and no repeating block. It exists only for the rebuild
-// path below, which writes it per vertex rather than leave chain memory the last
-// frame put something else in for the DMA to carry.
-constexpr vu1::LerpDrawAttrib kShadowAttrib = { 0.0f, 0.0f, 0.0f, 1.0f };
+// Which is why neither shadow path needs an attribute of its own: both hand the
+// DMA the model's own baked attributes, and both multiply out to the same black.
+// The rebuild path used to write a constant qword per vertex instead; there is no
+// attribute stream to write into any more.
 
 // Draws the entity's planar projected shadow: the same keyframe byte streams
 // the model just drew, run through the same VU1 lerp, with the flattening
@@ -647,10 +681,11 @@ math::Mat4 ShadowMatrix(const entity_t & entity, const LerpConsts & lc,
 // The flags a shadow batch draws with: flat, blended, and never textured.
 constexpr vu1::DrawFlags kShadowFlags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured;
 
-// A shadow's light: no colour at all, so whatever shade term the attribute
-// stream carries multiplies out to black, at the half alpha in .w. This is what
-// lets the shadow reuse the model's own position stream with a constant
-// attribute block - the colour never depended on the vertex to begin with.
+// A shadow's light: no colour at all, so whatever shade term the vertex carries
+// multiplies out to black, at the half alpha in .w. That is what lets both shadow
+// paths reuse the model's own streams untouched - the colour never depended on
+// the vertex to begin with, and .xyz being zero makes the 1/128 scale the rest of
+// the file carries irrelevant here.
 constexpr math::Vec4 kShadowShadeLight = { 0.0f, 0.0f, 0.0f, 64.0f };
 
 // Rebuilds the model's position stream and draws it squashed. The slow path -
@@ -678,6 +713,10 @@ void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
     const mod::AliasVertex * src = mesh.vertexes;
     const int numTris = mesh.numTris;
 
+    // Back to the top of the mesh: the main pass left the batch's attribute cursor
+    // past the model it just drew, and this walk starts over from the beginning.
+    batch.SetAttribSource(AttribsOf(mesh.vertexes));
+
     for (int t = 0; t < numTris; ++t, src += 3)
     {
         if (batch.IsFull())
@@ -686,9 +725,7 @@ void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
         }
 
         // __restrict for the reason the main gather loop gives.
-        const auto tri = batch.PushTriangle();
-        vu1::LerpVertexBytes * const __restrict triPos    = tri.pos;
-        vu1::LerpDrawAttrib  * const __restrict triAttrib = tri.attrib;
+        vu1::LerpVertexBytes * const __restrict triPos = batch.PushTriangle();
 
         for (int i = 0; i < 3; ++i)
         {
@@ -696,13 +733,12 @@ void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
             // does not want the whole qword. Bounds were settled at load.
             const u32 index = src[i].index;
 
+            // Verbatim, shade byte and all. kShadowShadeLight is zero, so whatever
+            // the old frame's lightnormalindex happens to be multiplies out to
+            // black - the shadow does not care what is in that lane, only that it
+            // is a finite number, which every byte is.
             triPos[i].cur = curVerts[index];
             triPos[i].old = oldVerts[index];
-
-            // The attribute is the same qword for every shadow vertex, but it
-            // still has to be written: the slot is chain memory the last frame
-            // left something else in, and the DMA transfers it either way.
-            triAttrib[i] = kShadowAttrib;
         }
     }
     flushShadowVerts();
@@ -753,6 +789,19 @@ void InitEntityRendering()
     for (u32 & color : s_colorLUT)
     {
         color = vu1::PackColorRGBA(0, 0, 0, 0x80);
+    }
+
+    // Quantize the shade-dot rows once. Rounded rather than truncated, so the
+    // error is +/- half a step instead of a systematic darkening, and clamped
+    // for the sake of the assert rather than because the data can reach it.
+    for (int row = 0; row < kShadeDotQuant; ++row)
+    {
+        for (int n = 0; n < kNumVertexNormals; ++n)
+        {
+            const float scaled = s_vertexNormalDots[row][n] * 128.0f;
+            PS2_Assert(scaled >= 0.0f && scaled <= 255.0f);
+            s_shadeDotBytes[row][n] = static_cast<u8>(scaled + 0.5f);
+        }
     }
 }
 
@@ -897,7 +946,12 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // all of them every iteration.
             const u32 * const curVerts = KeyframeVertWords(frame);
             const u32 * const oldVerts = KeyframeVertWords(oldFrame);
-            const float * const dots = GetShadeDotsForEntity(entity);
+            const u8  * const dots = GetShadeDotBytesForEntity(entity);
+
+            // The other half of what the microprogram reads, named once: the
+            // gather below walks the mesh in order, so the batch can slice this
+            // at the same boundaries and the DMA references it where it lies.
+            lerpBatch.SetAttribSource(AttribsOf(mesh.vertexes));
 
             const mod::AliasVertex * src = mesh.vertexes;
             const int numTris = mesh.numTris;
@@ -910,22 +964,17 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                                     faceCull, batchFlags);
                 }
 
-                // __restrict, and it earns its keep: the two cursors live in the
+                // __restrict, and it earns its keep: the cursor lives in the
                 // batch, the batch is a local whose address escapes, and every
                 // store below is one gcc cannot prove disjoint from it under
-                // -fno-strict-aliasing - so without this it spills both and
-                // reloads them before each of the six stores. Worth 7 of the 16
-                // instructions per triangle this loop gained when the gather
-                // target stopped being a static.
+                // -fno-strict-aliasing - so without this it spills the cursor and
+                // reloads it before each store.
                 //
-                // The promise holds: pos and attrib are disjoint sub-arrays of one
-                // LerpChunk, and everything read here (the mesh, the keyframes,
-                // the shade table) is model or .rodata, never chain. Note they are
-                // declared *after* the flush above, so Flush - which does reach
-                // the chain through the batch - is never in scope with them.
-                const auto tri = lerpBatch.PushTriangle();
-                vu1::LerpVertexBytes * const __restrict triPos    = tri.pos;
-                vu1::LerpDrawAttrib  * const __restrict triAttrib = tri.attrib;
+                // The promise holds: everything read here (the mesh, the
+                // keyframes, the shade table) is model or .bss, never chain. Note
+                // it is declared *after* the flush above, so Flush - which does
+                // reach the chain through the batch - is never in scope with it.
+                vu1::LerpVertexBytes * const __restrict triPos = lerpBatch.PushTriangle();
 
                 for (int i = 0; i < 3; ++i)
                 {
@@ -935,13 +984,6 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     // becomes a reload of the same address.
                     const u32 index = src[i].index;
 
-                    // The baked vertex is already a LerpDrawAttrib in everything
-                    // but lane 0, which holds that index rather than the color:
-                    // copy the qword whole, then write the shade over lane 0. ST
-                    // needs no scaling here - the microprogram applies the skin's
-                    // power-of-two correction.
-                    vu1::CopyLerpAttrib(triAttrib[i], src[i]);
-
                     // One load of the keyframe vertex rather than two: the normal
                     // index is the top byte of the word already in hand, so
                     // reading it through the struct member would be a second trip
@@ -949,12 +991,16 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     const u32 curBits = curVerts[index];
 
                     triPos[i].cur = curBits;
-                    triPos[i].old = oldVerts[index];
 
-                    // The raw shade dot, not a packed color: the microprogram
-                    // multiplies the batch's shadeLight by it and converts. Same
-                    // indexed load and store the color LUT cost, minus the table.
-                    triAttrib[i].shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
+                    // The old frame's word, with its own lightnormalindex - which
+                    // nothing reads - replaced by this vertex's quantized shade.
+                    // That is the whole of the per-vertex work the attribute
+                    // stream used to exist for: the model's baked attributes go
+                    // to the DMA untouched (see LerpBatch::SetAttribSource) and
+                    // this byte carries what they cannot.
+                    const u32 shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
+                    triPos[i].old = (oldVerts[index] & 0x00FFFFFFu)
+                                  | (shade << (DTRIVERTX_LNI * 8));
                 }
                 emittedVerts += 3;
             }

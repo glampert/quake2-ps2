@@ -59,10 +59,11 @@ constexpr int kMaxFaceVerts = kMaxTess * kMaxTess * 6;
 // plain path emits straight into a span of the chain instead.
 static vu1::DrawVertex s_faceVerts[kMaxFaceVerts];
 
-// Requantizes s_faceVerts[0..numVerts) into 'chunks', the chunk groups'
-// byte-position/attribute streams: byte = (coord + H) * 255 / (2H) - the exact inverse of the
-// frontv/backv scale and row-3 offset the vulerp draw sets up. Both
-// keyframes get the same bytes.
+// Requantizes s_faceVerts[0..numVerts) into the two streams the vulerp draw takes:
+// 'chunks' gets the byte positions - byte = (coord + H) * 255 / (2H), the exact inverse of the
+// frontv/backv scale and row-3 offset the draw sets up, both keyframes the same - and
+// 'attribs' the per-vertex ST. Unlike an MD2 the cube has no baked attribute array to
+// reference, so it builds one; both live in the chain.
 //
 // The lerped program computes its colour from a scalar shade term times a
 // per-batch light, so the cube's per-vertex colour gradient cannot survive the
@@ -70,7 +71,8 @@ static vu1::DrawVertex s_faceVerts[kMaxFaceVerts];
 // batch light, which leaves the six faces differently coloured but flat. This
 // is a bring-up scene for the transform and texturing, so that is enough -
 // returns the light for the caller to hand to the draw.
-math::Vec4 QuantizeFaceForVuLerp(vu1::LerpChunk * const chunks, int numVerts)
+math::Vec4 QuantizeFaceForVuLerp(vu1::LerpPosChunk * const chunks,
+                                 vu1::LerpDrawAttrib * const attribs, int numVerts)
 {
     constexpr float kQuant = 255.0f / (2.0f * kCubeHalfSize);
 
@@ -82,20 +84,29 @@ math::Vec4 QuantizeFaceForVuLerp(vu1::LerpChunk * const chunks, int numVerts)
         const u32 by = static_cast<u32>((src.y + kCubeHalfSize) * kQuant + 0.5f);
         const u32 bz = static_cast<u32>((src.z + kCubeHalfSize) * kQuant + 0.5f);
 
-        const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte (the MD2 normal index) unused
+        const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte free for the shade
 
-        vu1::LerpChunk & chunk = chunks[v / vu1::kMaxLerpVertsPerBatch];
+        vu1::LerpPosChunk & chunk = chunks[v / vu1::kMaxLerpVertsPerBatch];
         const int i = v % vu1::kMaxLerpVertsPerBatch;
 
+        // The old frame's 4th byte carries the quantized shade term (shade * 128),
+        // which the microprogram reads instead of an attribute lane - so 128 is a
+        // shade of exactly 1.0 and the cube lights at face value. The current
+        // frame's stays the MD2 normal index the VU never reads.
         chunk.pos[i].cur = packed;
-        chunk.pos[i].old = packed;
-        chunk.attrib[i]  = { 1.0f, src.s, src.t, src.q };
+        chunk.pos[i].old = packed | (128u << 24);
+
+        attribs[v] = { 0u, src.s, src.t, src.q };
     }
 
+    // Divided by 128 to match the shade byte above: the microprogram multiplies
+    // this by shade * 128, so the light it wants is the GS colour over that scale.
+    constexpr float kPerShadeUnit = 1.0f / 128.0f;
+
     const u32 rgba = s_faceVerts[0].rgba;
-    return { static_cast<float>(rgba & 0xFFu),
-             static_cast<float>((rgba >> 8) & 0xFFu),
-             static_cast<float>((rgba >> 16) & 0xFFu),
+    return { static_cast<float>(rgba & 0xFFu)         * kPerShadeUnit,
+             static_cast<float>((rgba >> 8) & 0xFFu)  * kPerShadeUnit,
+             static_cast<float>((rgba >> 16) & 0xFFu) * kPerShadeUnit,
              static_cast<float>((rgba >> 24) & 0xFFu) };
 }
 
@@ -267,14 +278,19 @@ void DrawRotatingCube()
             EmitFace(s_faceVerts, kFaces[face], tess);
 
             const int numChunks = vu1::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
-            chain::Reserve(chain::CalcAllocCost<vu1::LerpChunk>(numChunks)
+            chain::Reserve(chain::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
+                         + chain::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
                          + vu1::DrawLerpedTrianglesChainCost(numVerts));
 
-            vu1::LerpChunk * const chunks = chain::Alloc<vu1::LerpChunk>(numChunks);
-            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, numVerts);
+            // Two exact allocations rather than one committable block: both sizes are
+            // known before anything is written, so neither has to be cut back.
+            vu1::LerpPosChunk   * const chunks  = chain::Alloc<vu1::LerpPosChunk>(numChunks);
+            vu1::LerpDrawAttrib * const attribs = chain::Alloc<vu1::LerpDrawAttrib>(numVerts);
+
+            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, attribs, numVerts);
 
             vu1::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
-                                     shadeLight, chunks, numVerts);
+                                     shadeLight, chunks, attribs, numVerts);
         }
         else
         {

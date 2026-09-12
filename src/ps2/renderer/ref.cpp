@@ -672,11 +672,13 @@ void PS2_BeginFrame(float cameraSeparation)
     (void)cameraSeparation;
 
     // Close the frame the profile probes have been charging into, before any of
-    // this frame's work is measured. This has to happen here rather than at the
-    // end of PS2_EndFrame: the probes that close last - gs::EndFrame's vsync
-    // wait, and the Frame scope around Qcommon_Frame - would otherwise be
-    // charged to the frame after the one they measured, pairing each frame's
-    // view cost with the previous frame's wait.
+    // this frame's work is measured, and before gs::BeginFrame below opens the
+    // vsync probe. This has to happen here rather than at the end of
+    // PS2_EndFrame: the Frame scope around Qcommon_Frame closes after it, and
+    // would otherwise be charged to the frame after the one it measured,
+    // pairing each frame's view cost with the previous frame's wait. Rolling
+    // over here keeps that scope and the vsync spin it contains in the same
+    // bucket, which is what makes "EE work = Frame - VSync" hold.
     ps2::debug::ProfileNewFrame();
 
     // Snapshot that finished frame for the CSV log. Must sit between the

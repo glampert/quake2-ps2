@@ -20,7 +20,7 @@
  *      |-- MSCAL         -- run the microprogram                /
  *      |-- ... ~130 more chunks ...
  *      |-- DIRECT block  -- the 2D/HUD overlay
- *      `-- FLUSH + END   -- appended by the one kick at gs::EndFrame
+ *      `-- FLUSH + FINISH + END -- the terminator, appended by the one kick at gs::EndFrame
  *
  *  Where the memory comes from: both halves live inside the world loader's lump scratch
  *  (mod::WorldScratchBlock), which is claimed only while a .bsp is being parsed and is dead
@@ -52,9 +52,10 @@ constexpr u32 kFrameChainBytes  = 512u * 1024u;
 constexpr u32 kFrameChainQwords = kFrameChainBytes / 16u;
 
 // Worst case a Kick() appends past whatever the caller has already written: the trailing FLUSH
-// block and the END tag. Public because it is part of the capacity arithmetic - a caller
-// reserving a sequence that ends in a kick (every draw does) has to count it, or the terminator
-// comes out of the next caller's budget.
+// and the GS fence it carries (1 qword of tag and VIFcodes, 2 of DIRECT payload) plus the END
+// tag. Public because it is part of the capacity arithmetic - a caller reserving a sequence that
+// ends in a kick (every draw does) has to count it, or the terminator comes out of the next
+// caller's budget.
 constexpr int kTerminatorQwords = 4;
 
 // Points the two halves at the loader scratch and opens the first one. Call once at renderer
@@ -207,8 +208,13 @@ void Commit(T * const base, const int usedCount)
 // --------------------------------------------------------------------------------------------
 
 // Submits everything built since the last Kick() as a chain of its own: terminates that segment
-// with a trailing FLUSH so a DMA wait covers the VU runs and their XGKICKs, writes the data cache
-// back, and kicks it at VIF1. Does nothing when nothing new has been built.
+// with a trailing FLUSH so a DMA wait covers the VU runs and their XGKICKs, arms the GS fence
+// behind it, writes the data cache back, and kicks it at VIF1. Does nothing when nothing new has
+// been built.
+//
+// **Fire and forget.** Nothing here waits, which is what lets gs::EndFrame leave a frame drawing
+// while the EE builds the next one. What it does wait for is an *earlier* kick that nothing has
+// fenced yet - one chain at a time on the channel, and one frame at a time at the GS.
 //
 // Segment-at-a-time rather than whole-buffer, because the write cursor never goes back: a half
 // holds one frame's worth of chain built front to back, and each kick sends the slice the last
@@ -216,17 +222,33 @@ void Commit(T * const base, const int usedCount)
 // after it, which is what kTerminatorQwords costs.
 void Kick();
 
-// Blocks until the chain the last Kick() sent has been fully consumed.
+// Blocks until the chain the last Kick() sent has been drawn: the DMA transfer complete, the
+// microprograms finished and their XGKICKs delivered (the terminator's FLUSH), and the GS done
+// rasterising all of it (the FINISH the terminator arms). Returns immediately when nothing is
+// outstanding.
+//
+// This is the frame fence. The GS raises a single CSR bit and so can only carry one of these at a
+// time, which is all one frame of latency needs: Kick waits any earlier chain before submitting,
+// and gs::EndFrame retires the previous frame before kicking the next, so the bit is armed and
+// consumed in strict alternation. (ps2gl's SIGNAL + INTC_GS handler can carry a frame id and so
+// express several at once. It would be needed for two frames of latency; it is not needed for
+// one, and it is not free - a semaphore and an interrupt where this is a load, plus an
+// undocumented IMR re-arm quirk to work around.)
 void WaitIdle();
+
+// True while a Kick has gone out that nothing has fenced yet - the GS is still drawing an earlier
+// frame. What it means for a caller is that anything about to overwrite what that frame reads -
+// VRAM a draw samples, a CLUT, a texture's pixels, the half it was built in - has to WaitIdle()
+// first.
+bool KickInFlight();
 
 // Kick + WaitIdle, for a caller that needs what the frame has built so far to have reached the
 // GS before it changes something those draws depend on - an upload into evicted VRAM, a
 // lightmap atlas rewrite, a CLUT refresh - and for the one kick at the end of the frame.
 // Returns false if there was nothing to drain.
 //
-// Waiting on the DMA covers the VU runs and their XGKICKs, because of the FLUSH the terminator
-// carries, but not the GS finishing what it was handed. A caller that needs *that* wants
-// gs::FenceGs, which is this plus a FINISH event.
+// The wait covers the GS as well as the transfer - see WaitIdle - so on return the GS is idle and
+// every side effect the frame asked for has landed.
 //
 // Does **not** rewind: the pipeline empties, but everything built stays where it is and every
 // pointer into it stays good. That is what lets a draw's vertex data outlive its own submission,
@@ -235,8 +257,9 @@ void WaitIdle();
 bool Drain();
 
 // The interlock that lets the halves live in the loader's lump scratch: waits for anything in
-// flight and abandons whatever is half-built, because the memory underneath is about to become
-// the .bsp lump staging buffer. Called from LoadBrushModel before it claims the scratch.
+// flight - the GS included, since a frame left drawing is still reading out of a half - and
+// abandons whatever is half-built, because the memory underneath is about to become the .bsp lump
+// staging buffer. Called from LoadBrushModel before it claims the scratch.
 void DrainBeforeWorldLoad();
 
 // --------------------------------------------------------------------------------------------

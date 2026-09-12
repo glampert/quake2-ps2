@@ -80,9 +80,10 @@ constexpr int kRenderHeight = 448;
 // else the GS is told to do now goes through the frame chain.
 constexpr int kTexUploadQwords = 128;
 
-// Room every GIF block keeps back for its own tail: the FINISH a flush appends (2 qwords)
-// and the EOP terminator CloseGifBlock always writes (1).
-constexpr int kBlockTailQwords = 3;
+// Room every GIF block keeps back for its own tail: the EOP terminator CloseGifBlock always
+// writes. It used to hold a FINISH as well, for the fence FenceGs emitted into the open block;
+// the chain's own terminator carries that now.
+constexpr int kBlockTailQwords = 1;
 
 // What a GIF block opened in the frame chain must be able to take before it may be split,
 // which is what the chain is asked to reserve when one opens.
@@ -108,6 +109,18 @@ static RenderPacket s_gifBlock;
 static bool s_gifBlockOpen = false;
 
 static int s_drawCtx = 1; // which framebuffer/context we render into this frame
+
+// The framebuffer the chain in flight is drawing into - what DISPFB is pointed at once it has
+// been fenced. Not the same as s_drawCtx once a frame is left drawing while the next one is
+// built: that is the whole of what "one frame of latency" means here. -1 until the first frame
+// has been kicked, which is the one frame with nothing finished to show.
+static int s_inFlightCtx = -1;
+
+// ps2_gs_latency: leave the frame's chain drawing at EndFrame and show it at the *next* one,
+// so the GS rasterises frame N while the EE builds N+1, instead of the EE standing at the
+// fence waiting for it. Costs one frame of input lag, which is why it is a cvar and not a
+// constant - sampled each EndFrame so it can be flipped live and judged on hardware.
+static const cvar_t * s_gsLatency = nullptr;
 
 static bool s_frameStarted = false;
 static bool s_in2D         = false;
@@ -170,8 +183,8 @@ static tex::Clut s_litPaletteClut;
 static tex::Clut s_alphaRampClut;
 
 // ref_gl's 'intensity': how much every lit image is brightened before anything
-// multiplies it back down. Read each frame so it can be dialled in on hardware;
-// changing it rebuilds and re-uploads s_litPaletteClut (see RefreshLitPalette).
+// multiplies it back down. Latched at boot - see BuildLitPalette - so a change
+// takes effect on the next run, the same restart ref_gl needs for a .tga.
 static const cvar_t * s_intensity = nullptr;
 static float s_litPaletteScale = 0.0f; // what s_litPaletteClut currently holds
 
@@ -284,8 +297,9 @@ int Gif2DPeakQwords()
 }
 
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
-// transfer. Only ever called between frames, so it can take the shared upload
-// packet without fighting the streamed texture uploads for it.
+// transfer. Only ever called from Init now, before a frame has ever started, so
+// it can take the shared upload packet without fighting the streamed texture
+// uploads for it and without having to fence anything.
 static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 {
     RenderPacket & upload = s_texUploadPacket;
@@ -306,23 +320,24 @@ static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
     upload.Wait();
 }
 
-// Rebuilds the lit palette when ps2_intensity has changed, so the value can be
-// dialled in on hardware without a restart. A no-op on every frame that did not
-// change it, which is all but a handful.
+// Builds the lit palette and uploads it. Called once, from Init.
+//
+// This used to run at the top of every frame so ps2_intensity could be dialled
+// in on hardware without a restart. The value is settled now, and a CLUT the GS
+// samples may only be rewritten when the GS is idle - which stopped being true
+// of the top of a frame the moment the previous frame was left drawing into it.
+// Keeping the knob would have meant fencing the GS to turn it, every frame, to
+// re-upload nothing.
 //
 // Note this reaches Palette8 images only, which is every image the retail game
 // ships. A PixelFormat::RGBA32 texture (a .tga replacement) carries the scale in
 // its own texels instead and picks up a new value when it is next loaded - the
 // same restart ref_gl needs for all of them.
-static void RefreshLitPalette()
+static void BuildLitPalette()
 {
     // Below 1 would darken rather than brighten, which is not what the knob is
     // for and is what ref_gl's own floor at 1 says too.
     const float scale = (s_intensity->value < 1.0f) ? 1.0f : s_intensity->value;
-    if (scale == s_litPaletteScale)
-    {
-        return;
-    }
 
     s_litPaletteScale = scale;
     s_litPaletteClut.BuildFromPaletteScaled(global_palette, scale);
@@ -419,16 +434,16 @@ void Init()
     pkt.Wait();
     pkt.WaitFinish();
 
-    // Build and upload the CLUTs. The two below never change again; the lit
-    // palette is built by RefreshLitPalette, which also uploads it and runs
-    // once here before anything can sample it.
+    // Build and upload the CLUTs. None of the three ever changes again.
     s_globalPaletteClut.BuildFromPalette(global_palette);
     s_alphaRampClut.BuildAlphaRamp();
 
     UploadCluts(&s_globalPaletteClut, &s_alphaRampClut);
 
     s_intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
-    RefreshLitPalette();
+    BuildLitPalette();
+
+    s_gsLatency = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
 
     s_drawCtx = 1;
 }
@@ -451,13 +466,56 @@ vram::Address ClutAddressFor(const tex::Texture & texture)
     }
 }
 
+// Waits for the chain in flight to have been drawn, then puts its framebuffer on screen.
+// A no-op when there is nothing outstanding, which is how the two ps2_gs_latency paths share it.
+//
+// **Why this is the top of a frame and not the bottom of the previous one.** There are two
+// framebuffers, so the one the GS may be drawing into and the one being scanned out have to be
+// the two different ones - which means the flip to the frame just finished has to happen before
+// anything of the next frame reaches the GS, not after. Doing it here, ahead of the clear,
+// leaves the whole of the frame's build with the display parked on the previous image and the
+// other buffer free: a mid-frame kick - an overflow rewind, a texture fence - then lands
+// somewhere nobody is looking. Doing it at EndFrame instead would have put the flip *after* a
+// frame's worth of drawing into the buffer still on screen.
+//
+// The vsync earns its place twice over here: DISPFB has to be rewritten inside the blanking
+// interval or the change tears, and the spin is the frame's pacing. It costs nothing to move it
+// - the loop still turns once per field - and the wait above it is the one this stage exists to
+// make free, because by now the GS has had the engine's whole frame of C code to finish in.
+static void PresentFrameInFlight()
+{
+    // Nothing waiting to be shown: either EndFrame already presented this frame (ps2_gs_latency
+    // off, where this is then the no-op at the next BeginFrame) or none has been kicked yet.
+    // The early out has to come before the vsync, not after - falling through to it would spend
+    // a whole field here and a second one at the frame's real present, halving the frame rate.
+    if (s_inFlightCtx < 0)
+    {
+        return;
+    }
+
+    chain::WaitIdle(); // the GS fence; marks its own GsWait
+
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
+        graph_wait_vsync();
+    }
+
+    graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[s_inFlightCtx].address),
+                                   static_cast<int>(s_frameBuffer[s_inFlightCtx].width),
+                                   static_cast<int>(s_frameBuffer[s_inFlightCtx].psm), 0, 0);
+
+    s_inFlightCtx = -1; // shown; EndFrame is what puts the next one up
+}
+
 void BeginFrame()
 {
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
 
-    // Between frames is the only safe moment to rewrite a CLUT the GS samples.
-    RefreshLitPalette();
+    // Retires and shows the previous frame when ps2_gs_latency left it drawing. Already done -
+    // by EndFrame itself - when the cvar is off, and this is then the no-op that lets the two
+    // paths share everything below.
+    PresentFrameInFlight();
 
     chain::BeginFrame();
 
@@ -493,9 +551,12 @@ void BeginFrame()
     // of the frame at EndFrame - which is the whole point of the stage, and is safe precisely
     // because the chain is ordered: the VU1 world that follows it cannot reach the GS first.
     //
-    // The two lines below still need the GS to be idle, and it is: EndFrame fenced it before
-    // returning and nothing has been submitted since. That is also what makes the CLUT rewrite
-    // in RefreshLitPalette above safe.
+    // The two lines below still need the GS to be idle, and it still is: whether the previous
+    // frame was fenced at its own EndFrame or left drawing until PresentFrameInFlight above, it
+    // has been fenced by the time the clear is built. That is the property the present being at
+    // the *top* of a frame buys, and it is what keeps everything from here down - the eviction
+    // pins, the reuse hazard, the one-frame LRU stamp - reading exactly as it did before.
+    PS2_AssertMsg(!chain::KickInFlight(), "BeginFrame with a frame still drawing!");
     s_vramReuseHazard = false;
     vram::BeginFrame();
 }
@@ -618,18 +679,20 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
 }
 
 // Empties the whole pipeline: sends the frame's chain as far as it has been built and blocks
-// until the GS has finished drawing every bit of it. The frame then carries on building where
-// it left off - this is a stall, not a reset, and no pointer into the chain moves.
+// until the GS has finished drawing every bit of it - and anything left over from the frame
+// before, which under ps2_gs_latency may still be rasterising. The frame then carries on
+// building where it left off: this is a stall, not a reset, and no pointer into the chain moves.
 //
 // It replaces the old SyncGsBeforeVramReuse, and the difference is the first step. Draining
 // the GS was enough while every batch was kicked and waited on as it was built, because then
 // everything that existed had been sent. Now the draws this is protecting are sitting in the
 // chain unsent, so the chain has to go out before the wait means anything.
 //
-// The FINISH is GIF data and so needs a path. Inside a 2D section the open block carries it
-// and the section resumes in a fresh one afterwards - GS registers are the GS's, so it picks
-// up exactly where it was. Outside one, a bare FINISH rides the scratch packet over PATH3
-// *after* the chain has landed, which is what puts it last in the GS's queue.
+// The FINISH used to be this function's own business - emitted into the open 2D block, or sent
+// on the scratch packet over PATH3 when there was no block to put it in. The chain's terminator
+// carries one now, so a Drain *is* a GS fence and all that is left here is closing the 2D block
+// around it. The section resumes in a fresh one afterwards, which costs nothing: the state it
+// programmed lives in the GS's registers, not in the chain.
 //
 // Its chain cost is the terminator the kick writes, which every draw already reserves - see
 // the note on chain::kTerminatorQwords in vu1.h. It must not reserve anything itself: this
@@ -639,27 +702,10 @@ static void FenceGs()
 {
     if (s_in2D)
     {
-        s_gifBlock.Finish();
         CloseGifBlock();
     }
 
     chain::Drain(); // marks its own DmaSend/DmaFlush/GsWait
-
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-
-        if (!s_in2D)
-        {
-            RenderPacket & pkt = s_texUploadPacket;
-            pkt.Reset();
-            pkt.Finish();
-
-            pkt.Wait();
-            pkt.SendNormal();
-        }
-
-        RenderPacket::WaitFinish();
-    }
 
     if (s_in2D)
     {
@@ -806,6 +852,15 @@ void EnsureTextureResident(const tex::Texture & texture)
     pkt.Reset();
     pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
     pkt.TextureFlush();
+
+    // Nothing may reach the GS over PATH3 while a chain is still being fed to it over PATH1 and
+    // PATH2: the two would interleave at the GIF, and an image transfer cut in half is the one
+    // thing it does not put back together. Nothing is outstanding here today - every mid-frame
+    // kick drains, and the frame ps2_gs_latency leaves drawing is retired at the next BeginFrame,
+    // before any of this frame's binds - so this reads as free. It is the guard that keeps that
+    // true: a kick left in flight anywhere upstream would otherwise surface as a corrupt texture
+    // on 5% of frames, which is the kind of bug that takes a week.
+    chain::WaitIdle();
 
     pkt.SendChain();
     {
@@ -977,29 +1032,29 @@ void EndFrame()
     // common case) so it lands on top before the buffer is displayed.
     FlushPending2D();
 
-    // The frame's one kick. Everything the frame told the GS to do has been sitting in the
-    // chain since BeginFrame - the clear, every VU1 batch, every 2D block - and this is where
-    // all of it goes out: one FlushCache(0), one chain, one wait, against the fifty-odd of
-    // them a frame used to take.
+    // Everything the frame told the GS to do has been sitting in the chain since BeginFrame -
+    // the clear, every VU1 batch, every 2D block - and this is where all of it goes out, in one
+    // kick, with one FlushCache(0), against the fifty-odd a frame used to take.
+    s_inFlightCtx = s_drawCtx;
+    chain::Kick();
+
+    // ps2_gs_latency is only about who waits for that kick. Off, this frame is fenced and shown
+    // before EndFrame returns, which is what the renderer did before the cvar existed. On, it is
+    // left drawing and PresentFrameInFlight at the next BeginFrame picks it up - so the GS
+    // rasterises it across the engine's own frame work instead of the EE standing at the fence.
     //
-    // The wait is still here, so this is not yet a pipelined frame; what it buys is the EE's
-    // time back, not the GS's. Overlapping frame N's GS with frame N+1's EE is Stage 8, and
-    // needs a fence that can express two frames in flight rather than one FINISH bit.
-    FenceGs();
+    // Turning it off mid-run costs one frame: the one left drawing is fenced by the Kick above
+    // and then never shown, because the line above it has already claimed s_inFlightCtx. That is
+    // a duplicated field on screen, not a corrupt one, and it is not worth code to avoid.
+    if (s_gsLatency->value == 0.0f)
+    {
+        PresentFrameInFlight();
+    }
 
     // Rolls the frame chain's high-water and latches its counters for the overlay. Everything
     // the frame told the GS to do went through it, so from here those counters measure the
-    // whole frame - and ChainKck is now the number this stage exists to move.
+    // whole frame.
     chain::EndFrame();
-
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
-        graph_wait_vsync();
-    }
-
-    graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[s_drawCtx].address),
-                                   static_cast<int>(s_frameBuffer[s_drawCtx].width),
-                                   static_cast<int>(s_frameBuffer[s_drawCtx].psm), 0, 0);
 
     s_drawCtx ^= 1; // draw into the other buffer next frame
 

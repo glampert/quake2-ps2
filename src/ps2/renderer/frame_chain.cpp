@@ -17,6 +17,9 @@
 #include <packet2_chain.h>
 #include <packet2_utils.h>
 #include <packet2_vif.h>
+#include <gif_tags.h>       // PACK_GIFTAG, GIF_SET_TAG
+#include <gs_gp.h>          // GS_REG_FINISH
+#include <gs_privileged.h>  // GS_REG_CSR
 
 namespace ps2::chain {
 namespace {
@@ -50,6 +53,10 @@ static int s_reserveEnd = 0;
 // True once a Kick has gone out that nothing has waited on yet. Kept rather than polling the
 // DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
 // reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
+//
+// It now outlives the frame that set it: under gs::EndFrame's deferred path a frame is kicked
+// and left to draw while the EE builds the next one, so this is the flag that says "the GS is
+// still working on an earlier frame" to everything that has to care - see WaitIdle.
 static bool s_kickInFlight = false;
 
 // How much of the current half has already been submitted. The write cursor never goes back
@@ -175,19 +182,16 @@ void BeginFrame()
 {
     PS2_AssertMsg(s_initialized, "chain::Init not called!");
 
-    // Conservative: s_kickInFlight is one flag for the channel rather than one per half, so this
-    // waits even when the outstanding chain is the half we are *not* about to overwrite. That
-    // costs nothing while submission is serial - the frame is drained before EndFrame returns
-    // anyway - and it is the thing that has to become per-half, keyed off the GS fence, for one
-    // frame of GS latency to buy anything. Until then, correctness before cleverness.
-    WaitIdle();
-
     // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
     // frames from now and whatever was built and never submitted would simply not have drawn.
-    // Harmless today, since every draw ends in a Drain - and exactly the thing that has to keep
-    // holding once one kick per frame moves that Drain out to EndFrame.
     PS2_AssertMsg(QwordCount() == s_kickedQwords,
                   "chain::BeginFrame with work in the half nothing ever kicked!");
+
+    // A no-op in practice, and deliberately not relied on to be: gs::BeginFrame fences the
+    // previous frame before it gets here, because the framebuffer flip has to happen before
+    // anything of this frame reaches the GS. This is the backstop for that - the half about to
+    // be rewound must not be one the DMAC is still walking.
+    WaitIdle();
 
     s_half ^= 1;
     Rewind();
@@ -373,11 +377,28 @@ void Kick()
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
                   "chain::Kick with a tag still open - the segment has no valid end!");
 
-    // Trailing FLUSH: stalls VIF1 until the last microprogram ends and its XGKICKs drain to the
-    // GS, so waiting on this chain's DMA covers the VU work too.
+    // The terminator, and the two halves of what it means for a chain to be "done".
+    //
+    // The FLUSH stalls VIF1 until the last microprogram has ended and its XGKICKs have drained to
+    // the GS, so waiting on this chain's DMA covers the VU work. It does not cover the GS: the
+    // rasteriser can still be most of a frame behind when the transfer reports complete. So the
+    // FLUSH is followed by a DIRECT block of two qwords - a PACKED A+D giftag and a write of 1 to
+    // the FINISH register, byte for byte what draw_finish emits - and the GS raises CSR's FINISH
+    // bit once it has drawn everything ahead of it. That is the fence WaitIdle waits on.
+    //
+    // FLUSH and DIRECT are the two VIFcodes riding the CNT tag's own qword (tte=1), so the opening
+    // is one qword and the payload starts on the next - the same shape VifPacket::OpenDirect
+    // builds, and what makes the manual qword count of 2 below come out right.
     packet2_chain_open_cnt(pkt, 0, 0, 0);
     packet2_vif_flush(pkt, 0);
-    packet2_vif_nop(pkt, 0); // pad the CNT block to a whole qword
+    packet2_vif_open_direct(pkt, 0);
+
+    PACK_GIFTAG(pkt->next, GIF_SET_TAG(1, 1, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
+    ++pkt->next;
+    PACK_GIFTAG(pkt->next, 1, GS_REG_FINISH);
+    ++pkt->next;
+
+    packet2_vif_close_direct_manual(pkt, 2);
     packet2_chain_close_tag(pkt);
     packet2_utils_vu_add_end_tag(pkt);
 
@@ -402,6 +423,14 @@ void Kick()
         void * const segment = reinterpret_cast<void *>(
             reinterpret_cast<std::uintptr_t>(pkt->base + s_kickedQwords) & 0x0FFFFFFFu);
 
+        // Arm the fence: clear CSR's FINISH so the bit WaitIdle looks for can only have been
+        // raised by the terminator above. A stale one - a chain armed and then abandoned, which
+        // any Sys_Error path between here and the wait can leave behind - would make the next
+        // wait return immediately and hand out a frame the GS has not drawn. Written rather than
+        // OR'd so only FINISH is cleared: the other event bits are write-1-to-clear too, and
+        // graph_wait_vsync is watching one of them.
+        *GS_REG_CSR = 2;
+
         dma_channel_send_chain(DMA_CHANNEL_VIF1, segment, 0,
                                pkt->tte ? DMA_FLAG_TRANSFERTAG : 0, 0);
 
@@ -420,10 +449,24 @@ void WaitIdle()
 
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+
+        // The transfer first: VIF1 has swallowed the whole chain, and the FLUSH in its terminator
+        // has let the microprograms finish and their XGKICKs reach the GIF.
         dma_channel_wait(DMA_CHANNEL_VIF1, 0);
+
+        // Then the GS. Everything above only says the work was *handed over*; this is where it has
+        // actually been drawn, which is what the framebuffer flip needs before it shows the buffer
+        // and what keeps two frames from meeting in the one z-buffer they share.
+        while ((*GS_REG_CSR & 2) == 0) { }
+        *GS_REG_CSR = 2; // write 1 to clear, leaving the other event bits alone
     }
 
     s_kickInFlight = false;
+}
+
+bool KickInFlight()
+{
+    return s_kickInFlight;
 }
 
 bool Drain()

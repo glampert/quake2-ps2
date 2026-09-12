@@ -69,6 +69,7 @@ constexpr int kFramesToConfirm = 2;
 static State  s_state         = State::Idle;
 static int    s_nextMap       = 0;
 static bool   s_done          = false;
+static bool   s_quitOnFinish  = true;
 static int    s_issuedAtMs    = 0;
 static int    s_dwellUntilMs  = 0;
 static int    s_confirmFrames = 0;
@@ -211,6 +212,12 @@ void Finish()
     // passes and makes drift between them obvious.
     static int s_passesRun = 0;
     ReportHeap(++s_passesRun);
+
+    if (s_quitOnFinish)
+    {
+        Com_Printf("MapCycle test completed - quitting now...\n");
+        Cbuf_AddText("quit\n");
+    }
 
     s_done = true;
 }

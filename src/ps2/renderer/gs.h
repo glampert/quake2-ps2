@@ -79,9 +79,6 @@ void EndFrame();
 // drawing so its triangles land under any 2D issued afterwards.
 void FlushPending2D();
 
-// True while a pending 2D batch is open (a 2D primitive has drawn since the last flush).
-bool In2DMode();
-
 // Adds a solid rectangle to the current frame. Alpha below 255 blends with the
 // framebuffer (255 = fully opaque, unblended).
 void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a);

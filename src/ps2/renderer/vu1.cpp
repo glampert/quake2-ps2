@@ -524,7 +524,6 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::FlushPending2D();
 
     gs::EnsureTextureResident(texture);
-    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
     const int ctx = gs::CurrentContext();
     VifPacket pkt = chain::Packet();
@@ -647,7 +646,6 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::FlushPending2D();
 
     gs::EnsureTextureResident(texture);
-    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
     // A property of the texture, so it is resolved here rather than threaded
     // down from every caller; StScaleFor is pure arithmetic on its dimensions.
@@ -779,7 +777,6 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::FlushPending2D();
 
     gs::EnsureTextureResident(texture);
-    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 
     // The corner offset transforms once for the whole call, as a direction
     // (w = 0). Because it is orthogonal to the view axis its clip z and w both

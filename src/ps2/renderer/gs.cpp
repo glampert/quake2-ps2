@@ -627,11 +627,6 @@ void FlushPending2D()
     // evict anything bound this frame is what keeps that rare.
 }
 
-bool In2DMode()
-{
-    return s_in2D;
-}
-
 void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
 {
     Ensure2D();
@@ -869,6 +864,9 @@ void EnsureTextureResident(const tex::Texture & texture)
     }
 
     vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count
+
+    // Sanity check.
+    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 }
 
 void ReleaseTexture(const tex::Texture & texture)

@@ -21,6 +21,10 @@
 namespace ps2::chain {
 namespace {
 
+// ------------------------------------------------------------------------------------------------
+// Internal state
+// ------------------------------------------------------------------------------------------------
+
 static bool s_initialized = false;
 
 // The most recent *committable* allocation - what AllocMax handed out - and the NEXT tag that
@@ -36,7 +40,7 @@ static void *      s_lastAlloc    = nullptr;
 
 // Where the last Reserve said the chain may be built up to. Alloc must stay inside it: the
 // contract is that a caller reserves its whole sequence up front, precisely so no allocation
-// can rewind, and until now that was a comment rather than something the code checked.
+// can rewind.
 //
 // Survives a Drain, because a reservation does: a drain empties the pipeline without moving the
 // chain, so what was reserved is still reserved and still where it was. Only a rewind clears it,
@@ -63,12 +67,16 @@ static int s_half = 0;
 // High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
 // copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
 static u32 s_peakQwords = 0;
-static u32 s_frameQwords = 0;          // built this frame, across any rewind
+static u32 s_frameQwords = 0; // built this frame, across any rewind
 static u32 s_frameQwordsLastFrame = 0;
 static int s_kicks = 0;
 static int s_kicksLastFrame = 0;
 static int s_emergencyDrains = 0;
 static int s_emergencyDrainsLasFrame = 0;
+
+// ------------------------------------------------------------------------------------------------
+// Local helpers
+// ------------------------------------------------------------------------------------------------
 
 Q_ALWAYS_INLINE packet2_t * Current()
 {

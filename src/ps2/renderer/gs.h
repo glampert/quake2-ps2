@@ -59,7 +59,7 @@ void SetClearColor(u8 r, u8 g, u8 b);
 // The most qwords one GIF block in the frame chain has ever held - in practice the 2D
 // overlay, which is much the larger of the two and the only one whose size varies.
 // Shown as "Gif2DPk" in the draw-stats overlay; what it measures against is the chain
-// half it has to fit inside (chain::kFrameChainBytes), not a packet of its own.
+// half it has to fit inside (cmdbuf::kHalfBytes), not a packet of its own.
 int Gif2DPeakQwords();
 
 // Per-frame lifecycle: BeginFrame() opens the frame's DMA chain and clears the back

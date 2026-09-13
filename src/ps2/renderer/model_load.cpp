@@ -25,7 +25,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/model_load.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/lightmap.h"
 
@@ -76,11 +76,11 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // The scratch has a second owner, and that - not bspinfo - is what actually sets its
 // size now. It is claimed only while a .bsp is being parsed and is dead for the whole
 // of gameplay, so the renderer keeps both halves of its frame DMA chain in it (see
-// frame_chain.h). No rendering happens during a load and no load happens during a
+// cmd_buffer.h). No rendering happens during a load and no load happens during a
 // frame, so the two never overlap; LoadBrushModel::Open drains the chain before it
 // takes the memory back. Read kWorldScratchCapacity as
 //
-//     max(worst load requirement + margin, 2 * chain::kFrameChainBytes)
+//     max(worst load requirement + margin, 2 * cmdbuf::kHalfBytes)
 //
 // and note that the second term currently wins. Deriving it from bspinfo alone would
 // shrink it back to 0.95 MB and silently corrupt the renderer's second buffer, which
@@ -108,10 +108,10 @@ constexpr u32 kArenaAlign = 64;
 // to leave lab.bsp 9.9% of headroom rather than the 4.3% it had when the loader was its
 // only user. See the note above before changing it.
 constexpr u32 kWorldHunkCapacity    = 7000u * 1024u; // 6.83 MB, power2.bsp + some slack
-constexpr u32 kWorldScratchCapacity = 1024u * 1024u; // 1.00 MB, 2 x chain::kFrameChainBytes
+constexpr u32 kWorldScratchCapacity = 1024u * 1024u; // 1.00 MB, 2 x cmdbuf::kHalfBytes
 constexpr u32 kWorldArenaBytes      = kWorldHunkCapacity + kWorldScratchCapacity;
 
-static_assert(2u * chain::kFrameChainBytes <= kWorldScratchCapacity,
+static_assert(2u * cmdbuf::kHalfBytes <= kWorldScratchCapacity,
               "Both frame chain halves must fit in the world lump scratch - raise kWorldScratchCapacity!");
 static_assert((kWorldHunkCapacity % kArenaAlign) == 0,
               "The scratch base inherits the arena's alignment only if the hunk is a whole number of cache lines");
@@ -372,7 +372,7 @@ public:
         // to be told the memory is changing hands before a single lump lands on top of it. This
         // is the interlock the sharing rests on: without it a level change scribbles a buffer
         // the DMAC may still be reading, and the failure has no message attached to it.
-        chain::DrainBeforeWorldLoad();
+        cmdbuf::DrainBeforeWorldLoad();
 
         m_scratchSize = RequiredScratchBytes();
         if (m_scratchSize > kWorldScratchCapacity) [[unlikely]]
@@ -380,7 +380,7 @@ public:
             Com_Printf("ERROR: LoadBrushModel: '%s' needs a %u KB lump scratch but the reserved\n"
                        "       arena is only %u KB. Re-run build/tools/bspinfo over this map set\n"
                        "       and raise kWorldScratchCapacity in model_load.cpp - keeping it at\n"
-                       "       least 2 * chain::kFrameChainBytes, which is what sizes it today.\n",
+                       "       least 2 * cmdbuf::kHalfBytes, which is what sizes it today.\n",
                        name, m_scratchSize / 1024u, kWorldScratchCapacity / 1024u);
             Close();
             return false;
@@ -1663,7 +1663,7 @@ bool IsWorldArenaBlock(const void * const ptr)
 
 ScratchBlock WorldScratchBlock()
 {
-    // Null before ReserveWorldArena has run, which is how chain::Init detects that it was
+    // Null before ReserveWorldArena has run, which is how cmdbuf::Init detects that it was
     // called too early rather than handing the DMAC an offset from a null pointer.
     if (s_worldArena == nullptr)
     {

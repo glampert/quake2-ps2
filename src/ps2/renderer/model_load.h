@@ -25,7 +25,7 @@ void ReserveWorldArena();
 bool IsWorldArenaBlock(const void * ptr);
 
 // The lump scratch half of the reserved arena, handed out so the renderer can keep its
-// frame DMA chain there (see frame_chain.h).
+// frame DMA chain there (see cmd_buffer.h).
 //
 // The two owners never overlap in time: the loader claims this only while it is parsing
 // a .bsp, and no frame is being built then. LoadBrushModel drains the chain before it

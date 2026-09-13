@@ -8,7 +8,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/draw_stats.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
@@ -84,7 +84,7 @@ struct FrameSample
     int vramUploads, vramOomSyncs, vramResident;
 
     // chain counters. The chain is built front to back across a whole frame and
-    // only rewound when it runs out, so chainKB against chain::kFrameChainBytes
+    // only rewound when it runs out, so chainKB against cmdbuf::kHalfBytes
     // is what says whether the capacity is right - and chainDrains is what says
     // it was not: every one of those is a full pipeline stall the frame did not
     // ask for. chainKicks is the number this refactor exists to bring down.
@@ -246,11 +246,11 @@ void FrameLogCapture()
     s.vramOomSyncs = v.oomSyncsThisFrame;
     s.vramResident = v.residentTextures;
 
-    // chain::EndFrame has not run for the new frame either, so these are still the finished
+    // cmdbuf::EndFrame has not run for the new frame either, so these are still the finished
     // frame's. Rounded to KB because the interesting comparison is against a 512 KB half.
-    s.chainKB     = static_cast<int>(chain::BytesLastFrame() / 1024u);
-    s.chainKicks  = chain::KicksLastFrame();
-    s.chainDrains = chain::EmergencyDrainsLastFrame();
+    s.chainKB     = static_cast<int>(cmdbuf::BytesLastFrame() / 1024u);
+    s.chainKicks  = cmdbuf::KicksLastFrame();
+    s.chainDrains = cmdbuf::EmergencyDrainsLastFrame();
 }
 
 void FrameLogFlush()

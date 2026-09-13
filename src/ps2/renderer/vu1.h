@@ -9,7 +9,7 @@
  * ================================================================================================ */
 
 #include "ps2/math/vec_mat.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/vif_packet.h"
 
 namespace ps2::tex { struct Texture; }
@@ -134,7 +134,7 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 // What a draw costs the frame chain besides its vertex data, so a caller whose vertex data is
 // *itself* in the chain can reserve the pair together.
 //
-// It has to reserve the pair. The chunk loop reserves as it goes, and chain::Reserve rewinds when
+// It has to reserve the pair. The chunk loop reserves as it goes, and cmdbuf::Reserve rewinds when
 // it comes up short - which would pull the chain out from under the very span the chunks being
 // emitted reference. Reserving the whole draw up front means that reservation can never fire half
 // way through one.
@@ -151,7 +151,7 @@ constexpr int kChunkChainQwords = 16;
 
 // Chain qwords a draw's opening costs: the transform block and the dynamic-light block, both
 // built in the chain rather than referenced out of a static. 8 and 12 qwords of payload, each
-// fronted by the skip tag chain::Alloc needs and followed by the REF tag that sends it, plus
+// fronted by the skip tag cmdbuf::Alloc needs and followed by the REF tag that sends it, plus
 // the VIF FLUSH in front of the pair.
 //
 // That FLUSH is what stops the two unpacks landing on VU memory a microprogram is still
@@ -197,19 +197,19 @@ constexpr int ChunkCount(const int items, const int perChunk)
 // about to reference.
 constexpr int DrawTrianglesChainCost(const int vertCount)
 {
-    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
          + (ChunkCount(vertCount, kMaxVertsPerBatch) * kChunkChainQwords);
 }
 
 constexpr int DrawLerpedTrianglesChainCost(const int vertCount)
 {
-    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
          + (ChunkCount(vertCount, kMaxLerpVertsPerBatch) * kLerpChunkChainQwords);
 }
 
 constexpr int DrawParticlesChainCost(const int count)
 {
-    return chain::kTerminatorQwords + (2 * kDrawSetupQwords)
+    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
          + (ChunkCount(count, kMaxParticlesPerBatch) * kParticleChunkQwords);
 }
 
@@ -265,7 +265,7 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // **Not synchronous.** This appends to the frame's chain and returns; nothing is
 // sent until gs::EndFrame kicks it. So the vertex data has to stay valid for the
 // rest of the frame, not for the duration of the call - which is why 'verts' is a
-// span of the frame chain itself (chain::Alloc) rather than a gather static, and
+// span of the frame chain itself (cmdbuf::Alloc) rather than a gather static, and
 // why a static is no longer a thing a caller can hand over.
 //
 // Such a caller must have reserved DrawTrianglesChainCost(vertCount) on top of the

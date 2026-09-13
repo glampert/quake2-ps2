@@ -1,13 +1,13 @@
 /* ================================================================================================
- * File: frame_chain.cpp
- * Brief: The frame's single DMA source chain. See frame_chain.h for the layout and for why the
+ * File: cmd_buffer.cpp
+ * Brief: The frame's single DMA source chain. See cmd_buffer.h for the layout and for why the
  *        two halves live inside the world loader's lump scratch.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/common.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/model_load.h"
 #include "ps2/renderer/render_profile.h"
 
@@ -21,7 +21,7 @@
 #include <gs_gp.h>          // GS_REG_FINISH
 #include <gs_privileged.h>  // GS_REG_CSR
 
-namespace ps2::chain {
+namespace ps2::cmdbuf {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
@@ -87,7 +87,7 @@ static int s_emergencyDrainsLasFrame = 0;
 
 Q_ALWAYS_INLINE packet2_t * Current()
 {
-    PS2_AssertMsg(s_initialized, "chain::Init not called!");
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
     return s_packets[s_half];
 }
 
@@ -138,18 +138,18 @@ void Rewind()
 
 void Init()
 {
-    PS2_AssertMsg(!s_initialized, "chain::Init called twice!");
+    PS2_AssertMsg(!s_initialized, "cmdbuf::Init called twice!");
 
     const mod::ScratchBlock scratch = mod::WorldScratchBlock();
-    PS2_AssertMsg(scratch.base != nullptr, "chain::Init before the world arena was reserved!");
-    PS2_AssertMsg(scratch.sizeBytes >= 2u * kFrameChainBytes, "World scratch cannot hold both chain halves!");
+    PS2_AssertMsg(scratch.base != nullptr, "cmdbuf::Init before the world arena was reserved!");
+    PS2_AssertMsg(scratch.sizeBytes >= 2u * kHalfBytes, "World scratch cannot hold both chain halves!");
 
     // 64-byte aligned because that is a cache line: the whole buffer is written by the EE and
     // read by the DMAC, and a half that started mid-line would share its first line with the
     // other half. ReserveWorldArena aligns the arena and kWorldHunkCapacity is a multiple of 64,
     // so the scratch base inherits it - assert rather than assume, since both are easy to change.
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(scratch.base) & 63u) == 0, "World scratch must be 64-byte aligned for the frame chain!");
-    static_assert((kFrameChainBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
+    static_assert((kHalfBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
 
     u8 * const base = static_cast<u8 *>(scratch.base);
 
@@ -158,12 +158,12 @@ void Init()
         // Through void*: the compiler cannot see that 'base' is 64-byte aligned, and
         // -Wcast-align refuses a straight u8* -> qword_t* on that basis. The alignment is
         // asserted above instead.
-        void * const halfMem = base + (static_cast<size_t>(i) * kFrameChainBytes);
+        void * const halfMem = base + (static_cast<size_t>(i) * kHalfBytes);
         qword_t * const half = static_cast<qword_t *>(halfMem);
 
         // Source-chain mode with tags transferred inline (tte=1), matching VifPacket: the VIFcode
         // for each transfer rides in the upper 64 bits of its own DMA tag.
-        s_packets[i] = packet2_create_from(half, half, static_cast<u16>(kFrameChainQwords),
+        s_packets[i] = packet2_create_from(half, half, static_cast<u16>(kHalfQwords),
                                            P2_TYPE_NORMAL, P2_MODE_CHAIN, /*tte=*/1);
         PS2_AssertMsg(s_packets[i] != nullptr, "packet2_create_from failed!");
     }
@@ -175,17 +175,17 @@ void Init()
     s_initialized = true;
 
     Com_DPrintf("Frame chain: 2 x %u KB inside the world lump scratch (%u KB), no heap of its own.\n",
-                kFrameChainBytes / 1024u, scratch.sizeBytes / 1024u);
+                kHalfBytes / 1024u, scratch.sizeBytes / 1024u);
 }
 
 void BeginFrame()
 {
-    PS2_AssertMsg(s_initialized, "chain::Init not called!");
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
 
     // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
     // frames from now and whatever was built and never submitted would simply not have drawn.
     PS2_AssertMsg(QwordCount() == s_kickedQwords,
-                  "chain::BeginFrame with work in the half nothing ever kicked!");
+                  "cmdbuf::BeginFrame with work in the half nothing ever kicked!");
 
     // A no-op in practice, and deliberately not relied on to be: gs::BeginFrame fences the
     // previous frame before it gets here, because the framebuffer flip has to happen before
@@ -203,7 +203,7 @@ void BeginFrame()
 
 void EndFrame()
 {
-    PS2_AssertMsg(s_initialized, "chain::Init not called!");
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
 
     const u32 used = packet2_get_qw_count(Current());
     if (used > s_peakQwords)
@@ -232,7 +232,7 @@ int QwordCount()
 
 int QwordCapacity()
 {
-    return static_cast<int>(kFrameChainQwords) - kTerminatorQwords;
+    return static_cast<int>(kHalfQwords) - kTerminatorQwords;
 }
 
 bool Reserve(const int qwords)
@@ -252,7 +252,7 @@ bool Reserve(const int qwords)
     if (qwords > capacity) [[unlikely]]
     {
         Sys_Error("Frame chain: a single %d qword reservation does not fit the %d qwords a half "
-                  "can hold. Raise chain::kFrameChainBytes (and kWorldScratchCapacity with it).",
+                  "can hold. Raise cmdbuf::kHalfBytes (and kWorldScratchCapacity with it).",
                   qwords, capacity);
     }
 
@@ -282,14 +282,14 @@ void * detail::AllocQwords(const int qwords, const bool committable)
     // check below is the one that has to be live - but it is the check that catches the real
     // mistake, which is reserving for the payload and forgetting the tags that follow it.
     PS2_AssertMsg(QwordCount() + qwords + kAllocOverheadQwords <= s_reserveEnd,
-                  "chain::Alloc outside a reservation that covers it!");
+                  "cmdbuf::Alloc outside a reservation that covers it!");
 
     // An allocation fronts itself with a NEXT tag, which has to be part of the tag stream
     // rather than of somebody else's payload - so nothing may have a tag open here. In practice
     // that means a pending 2D batch: gs::FlushPending2D closes it, and the rule is that whoever
     // claims the chain calls it first (see batch.h), not that the draw eventually will.
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
-                  "chain::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
+                  "cmdbuf::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
 
     // Live in release for the same reason VifPacket::EnsureSpace is: the overrun would run off
     // the end of this half and into the other one, and the failure would surface a frame or two
@@ -339,16 +339,16 @@ void detail::CommitQwords(void * const base, const int usedQwords)
     // or the chain was rewound underneath the allocation (so the pointer is stale and the gather
     // wrote into memory that has since been handed to somebody else).
     PS2_AssertMsg(mem >= pkt->base && (mem + usedQwords) <= pkt->next,
-                  "chain::Commit on a stale allocation - the chain moved underneath it!");
+                  "cmdbuf::Commit on a stale allocation - the chain moved underneath it!");
     PS2_AssertMsg(base == s_lastAlloc,
-                  "chain::Commit on a block that was not the last AllocMax - committing an "
+                  "cmdbuf::Commit on a block that was not the last AllocMax - committing an "
                   "exact Alloc, or two gathers open at once?");
 
     // The cursor is about to move down, and it may not move down past work the DMAC has already
     // been pointed at: the terminator a kick writes sits at the cursor, so a commit that reached
     // back over one would rewrite a tag in a segment already submitted.
     PS2_AssertMsg(static_cast<int>(mem - pkt->base) >= s_kickedQwords,
-                  "chain::Commit on a block that has already been kicked!");
+                  "cmdbuf::Commit on a block that has already been kicked!");
 
     pkt->next = mem + usedQwords;
     AimSkipTag(s_allocSkipTag, pkt->next);
@@ -375,7 +375,7 @@ void Kick()
     WaitIdle();
 
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
-                  "chain::Kick with a tag still open - the segment has no valid end!");
+                  "cmdbuf::Kick with a tag still open - the segment has no valid end!");
 
     // The terminator, and the two halves of what it means for a chain to be "done".
     //
@@ -516,4 +516,4 @@ int EmergencyDrainsLastFrame()
     return s_emergencyDrainsLasFrame;
 }
 
-} // namespace ps2::chain
+} // namespace ps2::cmdbuf

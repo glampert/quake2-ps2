@@ -7,8 +7,8 @@
  *        data for the clear and the 2D overlay. Thin wrappers only: what goes into VU memory
  *        stays with the caller.
  *
- *  Non-owning, and deliberately so. The chain being built belongs to ps2::chain
- *  (frame_chain.h), which owns the memory, the rewind, the terminator and the kick - a
+ *  Non-owning, and deliberately so. The chain being built belongs to ps2::cmdbuf
+ *  (cmd_buffer.h), which owns the memory, the rewind, the terminator and the kick - a
  *  VifPacket is two words of stack naming a packet2_t and how much of it the caller may
  *  write, so a draw call makes one, builds with it and throws it away. That is why there is
  *  no Send(), no Wait() and no Reset(): submission is a property of the frame, not of a packet.
@@ -36,7 +36,7 @@ class VifPacket final
 {
 public:
     // 'maxQwords' is what the caller may write, which is not the buffer's size: the chain holds
-    // back room for the terminator it must always be able to append, so pass chain::Capacity().
+    // back room for the terminator it must always be able to append, so pass cmdbuf::QwordCapacity().
     VifPacket(packet2_t * const packet, const int maxQwords)
         : m_packet{ packet }
         , m_maxQwords{ maxQwords }
@@ -59,7 +59,7 @@ public:
     // 'qwords' is a safe upper bound for what comes next (DEBUG ONLY).
     //
     // This is the backstop, not the mechanism: a draw too large for one chain is
-    // chain::Reserve's job, and it rewinds rather than failing. What is left for
+    // cmdbuf::Reserve's job, and it rewinds rather than failing. What is left for
     // this to catch is a chunk emitter writing more than the footprint constant
     // it declares - a code bug, but one whose symptom is DMA tags written over
     // the other chain half, which then fails somewhere unrelated.

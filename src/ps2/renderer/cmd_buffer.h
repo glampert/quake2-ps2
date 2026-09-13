@@ -1,6 +1,6 @@
 #pragma once
 /* ================================================================================================
- * File: frame_chain.h
+ * File: cmd_buffer.h
  * Brief: The frame's single DMA source chain: one double-buffered block that holds everything
  *        the GS is told to do this frame - DMA tags, VIF codes, GIF tags, the clear, the 2D
  *        overlay and every vertex - written straight into it by the gather loops.
@@ -12,7 +12,7 @@
  *
  *  Layout of one half:
  *
- *      FrameChain half (kFrameChainBytes)
+ *      Command buffer half (kHalfBytes)
  *      |-- DIRECT block  -- the frame clear
  *      |-- REF unpack    -- FrameConstants + LightConstants (once, not per batch)
  *      |-- CNT unpack    -- batch header + 7 GIF tag qwords     \  one chunk,
@@ -36,7 +36,7 @@
 
 #include <cstdint>
 
-namespace ps2::chain {
+namespace ps2::cmdbuf {
 
 // Bytes in each of the two halves. Both live in the world loader's lump scratch, so this is
 // bounded by kWorldScratchCapacity / 2 - model_load.cpp static_asserts the pair against each
@@ -48,8 +48,8 @@ namespace ps2::chain {
 // BytesLastFrame() - which counts what a rewind threw away, so it is the one that says whether
 // a frame *fits* - and EmergencyDrainsLastFrame(). Raising this to hold p95 whole would mean
 // raising kWorldScratchCapacity with it, and the halves already fill the loader's scratch.
-constexpr u32 kFrameChainBytes  = 512u * 1024u;
-constexpr u32 kFrameChainQwords = kFrameChainBytes / 16u;
+constexpr u32 kHalfBytes  = 512u * 1024u;
+constexpr u32 kHalfQwords = kHalfBytes / 16u;
 
 // Worst case a Kick() appends past whatever the caller has already written: the trailing FLUSH
 // and the GS fence it carries (1 qword of tag and VIFcodes, 2 of DIRECT payload) plus the END
@@ -75,7 +75,7 @@ vu1::VifPacket Packet();
 // Qwords written into the current half so far.
 int QwordCount();
 
-// Qwords a caller may write into a half. Not kFrameChainQwords: the chain always holds back
+// Qwords a caller may write into a half. Not kHalfQwords: the chain always holds back
 // room for the terminator Kick() appends, because a half with no room left for its own END tag
 // could not be drained. Reserve() measures against exactly this, and it is the capacity to hand
 // any helper that range-checks its own writes.
@@ -149,13 +149,13 @@ T * TypedAlloc(const int count, const bool committable)
     // The chain hands out qword-aligned blocks and nothing more: the base is 64-byte aligned
     // and every allocation is a whole number of qwords, so a type wanting more alignment than
     // a qword is one the chain cannot place. Caught here rather than as a DMA fault later.
-    static_assert(alignof(T) <= 16, "chain::Alloc cannot align this type");
+    static_assert(alignof(T) <= 16, "cmdbuf::Alloc cannot align this type");
 
     PS2_Assert(count > 0);
     void * const mem = AllocQwords(QwordsFor<T>(count), committable);
 
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(mem) & (alignof(T) - 1u)) == 0,
-                  "chain::Alloc handed back a block this type cannot use!");
+                  "cmdbuf::Alloc handed back a block this type cannot use!");
     return static_cast<T *>(mem);
 }
 } // namespace detail
@@ -266,12 +266,12 @@ void DrainBeforeWorldLoad();
 // Debug counters
 // --------------------------------------------------------------------------------------------
 
-// Most bytes either half has ever held, against kFrameChainBytes. The two together are what
+// Most bytes either half has ever held, against kHalfBytes. The two together are what
 // says whether the capacity is right.
 u32 PeakBytes();
 
 // Bytes the frame just finished built, counting what an overflow rewind threw away. Against
-// kFrameChainBytes this is the number that says whether a frame fits a half - PeakBytes() only
+// kHalfBytes this is the number that says whether a frame fits a half - PeakBytes() only
 // ever reports what one half held at once, which is the same thing until the day it overflows.
 u32 BytesLastFrame();
 
@@ -280,4 +280,4 @@ u32 BytesLastFrame();
 int KicksLastFrame();
 int EmergencyDrainsLastFrame();
 
-} // namespace ps2::chain
+} // namespace ps2::cmdbuf

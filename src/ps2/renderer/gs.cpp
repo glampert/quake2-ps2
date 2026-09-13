@@ -52,7 +52,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
@@ -229,12 +229,12 @@ RenderPacket & OpenGifBlock(const int minQwords)
 {
     PS2_AssertMsg(!s_gifBlockOpen, "A GIF block is already open in the frame chain!");
 
-    chain::Reserve(minQwords + vu1::VifPacket::kDirectOverheadQwords);
+    cmdbuf::Reserve(minQwords + vu1::VifPacket::kDirectOverheadQwords);
 
-    vu1::VifPacket packet = chain::Packet();
+    vu1::VifPacket packet = cmdbuf::Packet();
     packet.OpenDirect();
 
-    const int capacity = chain::QwordCapacity() - chain::QwordCount();
+    const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
     PS2_Assert(capacity >= minQwords);
 
     s_gifBlock.Attach(packet.DirectCursor(), capacity);
@@ -252,7 +252,7 @@ void CloseGifBlock()
 
     s_gifBlock.EndGifPacket();
 
-    vu1::VifPacket packet = chain::Packet();
+    vu1::VifPacket packet = cmdbuf::Packet();
     packet.SetDirectCursor(s_gifBlock.Cursor());
     packet.CloseDirect();
 
@@ -493,7 +493,7 @@ static void PresentFrameInFlight()
         return;
     }
 
-    chain::WaitIdle(); // the GS fence; marks its own GsWait
+    cmdbuf::WaitIdle(); // the GS fence; marks its own GsWait
 
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
@@ -517,7 +517,7 @@ void BeginFrame()
     // paths share everything below.
     PresentFrameInFlight();
 
-    chain::BeginFrame();
+    cmdbuf::BeginFrame();
 
     // The clear is the first thing in the frame's chain - a DIRECT block of GIF data at the
     // head of it - so the VU1 3D world that follows in the same chain cannot land on an
@@ -556,7 +556,7 @@ void BeginFrame()
     // has been fenced by the time the clear is built. That is the property the present being at
     // the *top* of a frame buys, and it is what keeps everything from here down - the eviction
     // pins, the reuse hazard, the one-frame LRU stamp - reading exactly as it did before.
-    PS2_AssertMsg(!chain::KickInFlight(), "BeginFrame with a frame still drawing!");
+    PS2_AssertMsg(!cmdbuf::KickInFlight(), "BeginFrame with a frame still drawing!");
     s_vramReuseHazard = false;
     vram::BeginFrame();
 }
@@ -690,7 +690,7 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
 // programmed lives in the GS's registers, not in the chain.
 //
 // Its chain cost is the terminator the kick writes, which every draw already reserves - see
-// the note on chain::kTerminatorQwords in vu1.h. It must not reserve anything itself: this
+// the note on cmdbuf::kTerminatorQwords in vu1.h. It must not reserve anything itself: this
 // fires in the middle of a draw, with the gather it is about to reference already in the
 // chain, and a reservation that overflowed would rewind that away.
 static void FenceGs()
@@ -700,7 +700,7 @@ static void FenceGs()
         CloseGifBlock();
     }
 
-    chain::Drain(); // marks its own DmaSend/DmaFlush/GsWait
+    cmdbuf::Drain(); // marks its own DmaSend/DmaFlush/GsWait
 
     if (s_in2D)
     {
@@ -855,7 +855,7 @@ void EnsureTextureResident(const tex::Texture & texture)
     // before any of this frame's binds - so this reads as free. It is the guard that keeps that
     // true: a kick left in flight anywhere upstream would otherwise surface as a corrupt texture
     // on 5% of frames, which is the kind of bug that takes a week.
-    chain::WaitIdle();
+    cmdbuf::WaitIdle();
 
     pkt.SendChain();
     {
@@ -1034,7 +1034,7 @@ void EndFrame()
     // the clear, every VU1 batch, every 2D block - and this is where all of it goes out, in one
     // kick, with one FlushCache(0), against the fifty-odd a frame used to take.
     s_inFlightCtx = s_drawCtx;
-    chain::Kick();
+    cmdbuf::Kick();
 
     // ps2_gs_latency is only about who waits for that kick. Off, this frame is fenced and shown
     // before EndFrame returns, which is what the renderer did before the cvar existed. On, it is
@@ -1052,7 +1052,7 @@ void EndFrame()
     // Rolls the frame chain's high-water and latches its counters for the overlay. Everything
     // the frame told the GS to do went through it, so from here those counters measure the
     // whole frame.
-    chain::EndFrame();
+    cmdbuf::EndFrame();
 
     s_drawCtx ^= 1; // draw into the other buffer next frame
 

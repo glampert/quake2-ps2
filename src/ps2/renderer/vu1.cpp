@@ -34,7 +34,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/render_profile.h"
@@ -382,10 +382,10 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 
     constexpr int kFrameConstantsQwords = sizeof(FrameConstants) / 16;
     constexpr int kLightConstantsQwords = sizeof(LightConstants) / 16;
-    // Each block costs what chain::CalcAllocCost says - its payload plus the skip tag - and the
+    // Each block costs what cmdbuf::CalcAllocCost says - its payload plus the skip tag - and the
     // REF tag that sends it, and the FLUSH below is the one qword on top.
-    static_assert(kDrawSetupQwords == 1 + chain::CalcAllocCost<FrameConstants>(1)
-                                        + chain::CalcAllocCost<LightConstants>(1) + 2,
+    static_assert(kDrawSetupQwords == 1 + cmdbuf::CalcAllocCost<FrameConstants>(1)
+                                        + cmdbuf::CalcAllocCost<LightConstants>(1) + 2,
                   "kDrawSetupQwords must match what BeginDrawChain appends");
 
     // Both unpacks below write absolute VU addresses, which the double buffer does not
@@ -393,7 +393,7 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
     // See kDrawSetupQwords.
     pkt.AddFlush();
 
-    FrameConstants * const constants = chain::Alloc<FrameConstants>(1);
+    FrameConstants * const constants = cmdbuf::Alloc<FrameConstants>(1);
 
     constants->mvp        = mvp;
     constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 0.0f };
@@ -407,7 +407,7 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 
     // s_lightConstants stays the source of truth - SetDynamicLights builds it once a frame -
     // and the chain gets a copy, for the same lifetime reason as the transform block.
-    LightConstants * const lights = chain::Alloc<LightConstants>(1);
+    LightConstants * const lights = cmdbuf::Alloc<LightConstants>(1);
     *lights = s_lightConstants;
 
     pkt.AddUnpackData(kLightBlockAddr, lights, kLightConstantsQwords, false);
@@ -424,7 +424,7 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 void ReserveChunk(VifPacket & pkt, const int chunkQwords, const math::Mat4 & mvp,
                   const DrawFlags flags, const bool firstChunk)
 {
-    if (chain::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
+    if (cmdbuf::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
     {
         BeginDrawChain(pkt, mvp, flags);
     }
@@ -462,15 +462,15 @@ void Init()
 
     // Upload the microprograms and set up the double buffer. Built into the frame
     // chain like every other VIF1 transfer, which is why vu1::Init has to run
-    // after chain::Init - see the ordering note in PS2_RefInit. Synchronous: the
+    // after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the
     // Drain terminates, kicks and waits, so VU1 is ready once it returns.
-    VifPacket pkt = chain::Packet();
+    VifPacket pkt = cmdbuf::Packet();
     pkt.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
     pkt.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
     pkt.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
     pkt.AddMicroProgram(s_litTrisProgAddr, VU1Prog_LitTriangles_Code());
     pkt.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    chain::Drain();
+    cmdbuf::Drain();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -526,7 +526,7 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::EnsureTextureResident(texture);
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = chain::Packet();
+    VifPacket pkt = cmdbuf::Packet();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
@@ -653,7 +653,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = chain::Packet();
+    VifPacket pkt = cmdbuf::Packet();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
@@ -791,7 +791,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = chain::Packet();
+    VifPacket pkt = cmdbuf::Packet();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {

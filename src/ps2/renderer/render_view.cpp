@@ -30,7 +30,7 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/batch.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
@@ -2499,8 +2499,8 @@ void RenderParticles(const refdef_t & viewDef)
     // actually is: a pending 2D batch holds an open DMA tag and an allocation
     // cannot land inside one (see batch.h).
     gs::FlushPending2D();
-    chain::Reserve(chain::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
-    vu1::ParticleVertex * const particles = chain::Alloc<vu1::ParticleVertex>(numParticles);
+    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
+    vu1::ParticleVertex * const particles = cmdbuf::Alloc<vu1::ParticleVertex>(numParticles);
 
     for (int i = 0; i < numParticles; ++i)
     {

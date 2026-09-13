@@ -9,7 +9,7 @@
  *  state changes or when it fills up. The buffer is referenced in place by the
  *  chain rather than copied into it.
  *
- *  That buffer is a span of the frame chain itself (chain::Alloc), not storage
+ *  That buffer is a span of the frame chain itself (cmdbuf::Alloc), not storage
  *  the batch owns. A batch claims its worst case on its first push, fills what
  *  it needs, hands the rest back at Flush and is then referenced where it lies -
  *  so a gather that is 40 vertices long costs the frame 40 vertices instead of
@@ -30,8 +30,8 @@
  *
  *  Two invariants hold over a span, and both come from it being part of the
  *  chain: while it is claimed nothing else may allocate from the chain, and
- *  until the frame ends nothing may rewind it. chain::Commit asserts the first.
- *  The second is chain::Reserve's overflow path, which is why a batch reserves
+ *  until the frame ends nothing may rewind it. cmdbuf::Commit asserts the first.
+ *  The second is cmdbuf::Reserve's overflow path, which is why a batch reserves
  *  the whole of what it is about to build - the data *and* every tag that will
  *  reference it - before it claims anything (see vu1.h's chain budget). Drains
  *  are not part of this: a drain empties the pipeline but leaves the chain
@@ -49,7 +49,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/draw_stats.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/vu1.h"
 
@@ -92,7 +92,7 @@ public:
     // the chunks that reference them will append afterwards. Both together,
     // because the chunk loop reserves as it goes and a reservation that overflowed
     // half way through would rewind the chain out from under the span.
-    static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::DrawVertex>(MaxVerts)
+    static constexpr int kClaimQwords = cmdbuf::CalcAllocCost<vu1::DrawVertex>(MaxVerts)
                                       + vu1::DrawTrianglesChainCost(MaxVerts);
 
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
@@ -110,7 +110,7 @@ public:
             // Cut the claim back to what was gathered *before* the draw appends the
             // chunks that reference it - they have to land after the data, and the
             // rest of the claim is what makes room for them.
-            chain::Commit(m_verts, m_vertCount);
+            cmdbuf::Commit(m_verts, m_vertCount);
 
             ++view::GetDrawStats().drawBatches;
             vu1::DrawTriangles(mvp, texture, m_verts, m_vertCount, flags);
@@ -191,7 +191,7 @@ public:
 private:
     // The batch's vertices, claimed from the frame chain on the first push of a
     // flush cycle and given back at Flush. Reserving is separate from claiming on
-    // purpose: chain::Reserve may rewind the chain, which is safe here and only
+    // purpose: cmdbuf::Reserve may rewind the chain, which is safe here and only
     // here, because nothing of this batch's is live yet.
     //
     // **Claiming the chain is the 2D->3D boundary, not the draw.** A pending 2D
@@ -204,8 +204,8 @@ private:
         if (m_verts == nullptr) [[unlikely]]
         {
             gs::FlushPending2D();
-            chain::Reserve(kClaimQwords);
-            m_verts = chain::AllocMax<vu1::DrawVertex>(MaxVerts);
+            cmdbuf::Reserve(kClaimQwords);
+            m_verts = cmdbuf::AllocMax<vu1::DrawVertex>(MaxVerts);
         }
         return m_verts;
     }
@@ -274,7 +274,7 @@ public:
     // RedrawLastFlush emits another set over the same data and must not be the
     // thing that overflows. An overflow between the two would rewind the chain
     // out from under the span the redraw exists to reference.
-    static constexpr int kClaimQwords = chain::CalcAllocCost<vu1::LerpPosChunk>(kMaxChunks)
+    static constexpr int kClaimQwords = cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(kMaxChunks)
                                       + (2 * vu1::DrawLerpedTrianglesChainCost(MaxVerts));
 
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
@@ -313,7 +313,7 @@ public:
 
             // Whole groups: the tail of a partly filled last group is the only
             // thing a flush cycle wastes, and it is bounded by one group.
-            chain::Commit(m_chunks, vu1::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
+            cmdbuf::Commit(m_chunks, vu1::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
             ++view::GetDrawStats().drawBatches;
             vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
@@ -394,7 +394,7 @@ public:
 private:
     // Claims the span on the first push of a flush cycle, and steps to the next
     // group after that. Reserving is separate from claiming on purpose:
-    // chain::Reserve may rewind the chain, which is safe here and only here,
+    // cmdbuf::Reserve may rewind the chain, which is safe here and only here,
     // because nothing of this batch's is live yet. The 2D flush is the 2D->3D
     // boundary - see TriangleBatch::Verts for why it belongs here.
     void NextChunk()
@@ -402,8 +402,8 @@ private:
         if (m_chunks == nullptr) [[unlikely]]
         {
             gs::FlushPending2D();
-            chain::Reserve(kClaimQwords);
-            m_chunks = chain::AllocMax<vu1::LerpPosChunk>(kMaxChunks);
+            cmdbuf::Reserve(kClaimQwords);
+            m_chunks = cmdbuf::AllocMax<vu1::LerpPosChunk>(kMaxChunks);
             m_chunk  = m_chunks;
         }
         else

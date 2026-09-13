@@ -11,7 +11,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/renderer/frame_chain.h"
+#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/math/vec_mat.h"
 
 namespace ps2::test {
@@ -278,14 +278,14 @@ void DrawRotatingCube()
             EmitFace(s_faceVerts, kFaces[face], tess);
 
             const int numChunks = vu1::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
-            chain::Reserve(chain::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
-                         + chain::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
+            cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
+                         + cmdbuf::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
                          + vu1::DrawLerpedTrianglesChainCost(numVerts));
 
             // Two exact allocations rather than one committable block: both sizes are
             // known before anything is written, so neither has to be cut back.
-            vu1::LerpPosChunk   * const chunks  = chain::Alloc<vu1::LerpPosChunk>(numChunks);
-            vu1::LerpDrawAttrib * const attribs = chain::Alloc<vu1::LerpDrawAttrib>(numVerts);
+            vu1::LerpPosChunk   * const chunks  = cmdbuf::Alloc<vu1::LerpPosChunk>(numChunks);
+            vu1::LerpDrawAttrib * const attribs = cmdbuf::Alloc<vu1::LerpDrawAttrib>(numVerts);
 
             const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, attribs, numVerts);
 
@@ -294,10 +294,10 @@ void DrawRotatingCube()
         }
         else
         {
-            chain::Reserve(chain::CalcAllocCost<vu1::DrawVertex>(numVerts)
+            cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::DrawVertex>(numVerts)
                          + vu1::DrawTrianglesChainCost(numVerts));
 
-            vu1::DrawVertex * const verts = chain::Alloc<vu1::DrawVertex>(numVerts);
+            vu1::DrawVertex * const verts = cmdbuf::Alloc<vu1::DrawVertex>(numVerts);
             EmitFace(verts, kFaces[face], tess);
 
             vu1::DrawTriangles(mvp, tex::DebugTexture(variant), verts, numVerts);

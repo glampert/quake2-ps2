@@ -59,6 +59,7 @@
 #include "ps2/system/heap.h"
 
 #include <cstring> // memset
+#include <optional>
 #include <dma.h>
 #include <gs_gp.h>
 #include <gs_psm.h>
@@ -106,6 +107,12 @@ constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
 class GifPacket final
 {
 public:
+    GifPacket() = default;
+
+    // Non-copyable: it owns its buffer.
+    GifPacket(const GifPacket &) = delete;
+    GifPacket & operator=(const GifPacket &) = delete;
+
     // Allocates the buffer. Call once, after the heap is up - not from a static constructor.
     void Init(const int maxQwords)
     {
@@ -125,21 +132,20 @@ public:
     GifWriter & Begin()
     {
         PS2_AssertMsg(m_base != nullptr, "GifPacket::Begin before Init!");
-        m_writer = GifWriter{ m_base, m_maxQwords };
-        return m_writer;
+        return m_writer.emplace(m_base, m_maxQwords);
     }
 
     // Sends what has been built as one normal transfer. Fire and forget; the wait is Wait().
     void SendNormal()
     {
-        dma_channel_send_normal(DMA_CHANNEL_GIF, m_base, m_writer.QwordCount(), 0, 0);
+        dma_channel_send_normal(DMA_CHANNEL_GIF, m_base, BuiltQwords(), 0, 0);
     }
 
     // Sends it as a source-chain transfer, for the uploads whose payload is referenced by
     // chain tags the packet holds rather than copied into it.
     void SendChain()
     {
-        dma_channel_send_chain(DMA_CHANNEL_GIF, m_base, m_writer.QwordCount(), 0, 0);
+        dma_channel_send_chain(DMA_CHANNEL_GIF, m_base, BuiltQwords(), 0, 0);
     }
 
     // Waits until the GIF channel is usable again.
@@ -150,16 +156,27 @@ public:
     static void WaitFinish() { draw_wait_finish(); }
 
 private:
-    // Slack past m_maxQwords. The libdraw helpers only report their size by returning the
-    // advanced cursor, so an overrun can only be caught after the fact - this is the room that
-    // keeps the offending write inside our own allocation, so GifWriter halts on it instead of
-    // it becoming heap corruption somebody debugs later. Comfortably larger than any single
-    // emission: draw_texture_transfer's whole chain fits in the 128-qword upload packet.
+    // Slack past m_maxQwords, under asserts only. The libdraw helpers report their size only by
+    // returning the advanced cursor, so an overrun is caught after the fact - this is the room
+    // that keeps the offending write inside our own allocation, so GifWriter::Advance halts on
+    // it instead of it becoming heap corruption somebody debugs later. Comfortably larger than
+    // any single emission: draw_texture_transfer's whole chain fits in the 128-qword packet.
+    // A release build checks nothing and so has nothing to land in, and does not pay for it.
+#if PS2_QUAKE_ASSERTS
     static constexpr int kGuardQwords = 256;
+#else // !PS2_QUAKE_ASSERTS
+    static constexpr int kGuardQwords = 0;
+#endif // PS2_QUAKE_ASSERTS
 
-    qword_t * m_base      = nullptr;
-    int       m_maxQwords = 0;
-    GifWriter m_writer;
+    // Qwords Begin()'s writer has built, which is what a send transfers.
+    int BuiltQwords() const
+    {
+        return m_writer.has_value() ? m_writer->QwordCount() : 0;
+    }
+
+    qword_t *                m_base      = nullptr;
+    int                      m_maxQwords = 0;
+    std::optional<GifWriter> m_writer;
 };
 
 static framebuffer_t s_frameBuffer[2];
@@ -167,11 +184,11 @@ static zbuffer_t     s_zbuffer;
 
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
 
-// The GIF block currently open in the frame chain - the clear at the top of the frame, or
-// the 2D overlay - as a cursor into the chain's own memory. Valid only between OpenGifBlock
-// and CloseGifBlock; the chain owns the memory and submits it.
-static GifWriter s_gifBlock;
-static bool s_gifBlockOpen = false;
+// The GIF block currently open in the frame chain - the clear at the top of the frame, or the
+// 2D overlay - as a cursor into the chain's own memory. Engaged only between OpenGifBlock and
+// CloseGifBlock, which is also what says whether a block is open; the chain owns the memory
+// and submits it.
+static std::optional<GifWriter> s_gifBlock;
 
 // High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
 // rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
@@ -296,7 +313,7 @@ Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
 // what watches the ceiling.
 GifWriter & OpenGifBlock(const int minQwords)
 {
-    PS2_AssertMsg(!s_gifBlockOpen, "A GIF block is already open in the frame chain!");
+    PS2_AssertMsg(!s_gifBlock.has_value(), "A GIF block is already open in the frame chain!");
 
     cmdbuf::Reserve(minQwords + vu1::VifPacket::kDirectOverheadQwords);
 
@@ -306,9 +323,7 @@ GifWriter & OpenGifBlock(const int minQwords)
     const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
     PS2_Assert(capacity >= minQwords);
 
-    s_gifBlock     = GifWriter{ packet.DirectCursor(), capacity };
-    s_gifBlockOpen = true;
-    return s_gifBlock;
+    return s_gifBlock.emplace(packet.DirectCursor(), capacity);
 }
 
 // Closes the open block, handing the chain back the cursor the libdraw emitters advanced.
@@ -316,19 +331,18 @@ GifWriter & OpenGifBlock(const int minQwords)
 // the 2D splits it is nothing at all - the next block simply follows it in the same chain.
 void CloseGifBlock()
 {
-    PS2_AssertMsg(s_gifBlockOpen, "No GIF block open in the frame chain!");
-    s_gifBlockOpen = false;
+    PS2_AssertMsg(s_gifBlock.has_value(), "No GIF block open in the frame chain!");
 
-    s_gifBlock.EndGifPacket();
+    s_gifBlock->EndGifPacket();
 
     vu1::VifPacket packet = cmdbuf::Packet();
-    packet.SetDirectCursor(s_gifBlock.Cursor());
+    packet.SetDirectCursor(s_gifBlock->Cursor());
     packet.CloseDirect();
 
-    const int used = s_gifBlock.QwordCount();
+    const int used = s_gifBlock->QwordCount();
     if (used > s_gifBlockPeakQwords) { s_gifBlockPeakQwords = used; }
 
-    s_gifBlock = GifWriter{};
+    s_gifBlock.reset();
 }
 
 } // namespace
@@ -367,7 +381,7 @@ int Gif2DPeakQwords()
 {
     // Folds in the block still open, so a mid-frame reader (the overlay is drawn during the
     // 2D pass) reports honestly rather than only what previous blocks held.
-    const int used = s_gifBlockOpen ? s_gifBlock.QwordCount() : 0;
+    const int used = s_gifBlock.has_value() ? s_gifBlock->QwordCount() : 0;
     return (used > s_gifBlockPeakQwords) ? used : s_gifBlockPeakQwords;
 }
 
@@ -666,11 +680,11 @@ static void Ensure2D()
 // because the state the section programmed lives in the GS's registers, not in the chain.
 static void Ensure2DSpace(const int qwords)
 {
-    PS2_AssertMsg(s_in2D && s_gifBlockOpen, "2D emission with no block open!");
+    PS2_AssertMsg(s_in2D && s_gifBlock.has_value(), "2D emission with no block open!");
 
     // Plus the block's tail: keeping room for it here is what lets the FINISH and the EOP
     // terminator never be the things that overrun the block.
-    if (s_gifBlock.QwordCount() + qwords + kBlockTailQwords <= s_gifBlock.QwordCapacity()) [[likely]]
+    if (s_gifBlock->QwordCount() + qwords + kBlockTailQwords <= s_gifBlock->QwordCapacity()) [[likely]]
     {
         return;
     }
@@ -705,7 +719,7 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
     Ensure2D();
     Ensure2DSpace(64);
 
-    GifWriter & pkt = s_gifBlock;
+    GifWriter & pkt = *s_gifBlock;
 
     rect_t rect;
     rect.v0.x = static_cast<float>(x);
@@ -1003,7 +1017,7 @@ void SetTextureFor2D(const tex::Texture & texture)
 
     // After EnsureTextureResident, which may have split the block out from under us.
     Ensure2DSpace(16);
-    GifWriter & pkt = s_gifBlock;
+    GifWriter & pkt = *s_gifBlock;
 
     lod_t lod;
     lod.calculation   = LOD_USE_K;
@@ -1064,7 +1078,7 @@ void DrawTexturedRect(int x, int y, int w, int h,
     PS2_AssertMsg(s_in2D, "DrawTexturedRect without an open 2D batch!");
 
     Ensure2DSpace(8);
-    GifWriter & pkt = s_gifBlock;
+    GifWriter & pkt = *s_gifBlock;
 
     // s_texOriginU/V both zero unless a scrap atlas is bound, in which case they shift the
     // coordinates from the image's own space into its corner of the atlas.

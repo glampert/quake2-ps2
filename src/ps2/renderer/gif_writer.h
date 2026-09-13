@@ -28,9 +28,9 @@ namespace ps2::gs {
 class GifWriter final
 {
 public:
-    GifWriter() = default;
-
-    // 'maxQwords' is what may be written at 'base'.
+    // 'maxQwords' is what may be written at 'base'. There is no default state: a writer always
+    // refers to real memory, and re-pointing one means constructing another over the new block
+    // (m_maxQwords is const, so assignment is not available).
     GifWriter(qword_t * const base, const int maxQwords)
         : m_base{ base }
         , m_ptr{ base }
@@ -45,8 +45,10 @@ public:
     int QwordCount() const { return static_cast<int>(m_ptr - m_base); }
     int QwordCapacity() const { return m_maxQwords; }
 
-    // Halts if the next emission would overrun. 'qwords' is an upper bound for what comes
-    // next (DEBUG ONLY); the per-emission check in Advance is the live one.
+    // Halts if the next emission would overrun. 'qwords' is an upper bound for what comes next.
+    // DEBUG ONLY, as is the per-emission check in Advance: both compile out of a release build,
+    // which is assumed to have been run through every level under asserts first. An overflow in
+    // release is undefined behaviour.
     void EnsureSpace([[maybe_unused]] const int qwords) const
     {
 #if PS2_QUAKE_ASSERTS
@@ -164,23 +166,25 @@ public:
     }
 
 private:
-    // Takes the cursor a draw_* helper returned and halts if the emission went past capacity,
-    // so a caller whose upper bound was wrong gets a named error rather than silent corruption
-    // of whatever follows the block.
+    // Takes the cursor a draw_* helper returned and, under asserts, halts if the emission went
+    // past capacity - so a caller whose upper bound was wrong gets a named error rather than
+    // silent corruption of whatever follows the block.
     Q_ALWAYS_INLINE void Advance(qword_t * const newPtr)
     {
         m_ptr = newPtr;
 
+#if PS2_QUAKE_ASSERTS
         if (QwordCount() > m_maxQwords) [[unlikely]]
         {
             Sys_Error("GIF packet overflow: emission ran to %d qwords, past the %d capacity.",
                       QwordCount(), m_maxQwords);
         }
+#endif // PS2_QUAKE_ASSERTS
     }
 
-    qword_t * m_base      = nullptr; // start of the block being written
-    qword_t * m_ptr       = nullptr; // write cursor, advanced by every append
-    int       m_maxQwords = 0;       // what may be written at m_base
+    qword_t * m_base;            // start of the block being written
+    qword_t * m_ptr;             // write cursor, advanced by every append
+    const int m_maxQwords;       // what may be written at m_base
 };
 
 } // namespace ps2::gs

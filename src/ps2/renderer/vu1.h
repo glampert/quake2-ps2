@@ -10,7 +10,6 @@
 
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/vif_packet.h"
 
 namespace ps2::tex { struct Texture; }
 
@@ -19,6 +18,13 @@ namespace ps2::vu1 {
 // ------------------------------------------------------------------------------------------------
 // Utilities
 // ------------------------------------------------------------------------------------------------
+
+// An assembled microprogram's extent in the ELF's .vudata section.
+struct VUCode
+{
+    u32 * start;
+    u32 * end;
+};
 
 // Declares the linker symbols bracketing an assembled VU microprogram in the
 // ELF's .vudata section. 'progName' must match the #vuprog name in the .vcl.

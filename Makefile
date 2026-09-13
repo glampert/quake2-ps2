@@ -97,6 +97,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/ref.cpp              \
 	ps2/renderer/vu1.cpp              \
 	ps2/renderer/cmd_buffer.cpp       \
+	ps2/renderer/render_context.cpp   \
 	ps2/renderer/clip.cpp             \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \

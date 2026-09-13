@@ -91,6 +91,13 @@ Q_ALWAYS_INLINE packet2_t * Current()
     return s_packets[s_half];
 }
 
+// Points the inline accessors in the header at the half s_half selects. Must run wherever
+// s_half changes, which is Init and BeginFrame.
+void PublishCurrent()
+{
+    detail::g_packet = s_packets[s_half];
+}
+
 // Aims an allocation's skip tag at the first qword past its payload.
 //
 // Masked explicitly: the DMAC wants a physical address and packet2_chain_set_dma_tag stores
@@ -132,6 +139,8 @@ void Rewind()
 
 } // namespace
 
+packet2_t * detail::g_packet = nullptr;
+
 // ------------------------------------------------------------------------------------------------
 // Lifecycle
 // ------------------------------------------------------------------------------------------------
@@ -161,7 +170,7 @@ void Init()
         void * const halfMem = base + (static_cast<size_t>(i) * kHalfBytes);
         qword_t * const half = static_cast<qword_t *>(halfMem);
 
-        // Source-chain mode with tags transferred inline (tte=1), matching VifPacket: the VIFcode
+        // Source-chain mode with tags transferred inline (tte=1), matching the recorder: the VIFcode
         // for each transfer rides in the upper 64 bits of its own DMA tag.
         s_packets[i] = packet2_create_from(half, half, static_cast<u16>(kHalfQwords),
                                            P2_TYPE_NORMAL, P2_MODE_CHAIN, /*tte=*/1);
@@ -173,6 +182,7 @@ void Init()
     ps2::heap::TagsAddMem(ps2::heap::MemTag::Renderer, 2u * sizeof(packet2_t));
 
     s_initialized = true;
+    PublishCurrent();
 
     Com_DPrintf("Frame chain: 2 x %u KB inside the world lump scratch (%u KB), no heap of its own.\n",
                 kHalfBytes / 1024u, scratch.sizeBytes / 1024u);
@@ -194,6 +204,7 @@ void BeginFrame()
     WaitIdle();
 
     s_half ^= 1;
+    PublishCurrent();
     Rewind();
 
     s_frameQwords = 0; // after Rewind, which banked the stale half it just reset
@@ -220,23 +231,9 @@ void EndFrame()
 // Building
 // ------------------------------------------------------------------------------------------------
 
-vu1::VifPacket Packet()
-{
-    return vu1::VifPacket{ Current(), QwordCapacity() };
-}
-
-int QwordCount()
-{
-    return static_cast<int>(packet2_get_qw_count(Current()));
-}
-
-int QwordCapacity()
-{
-    return static_cast<int>(kHalfQwords) - kTerminatorQwords;
-}
-
 bool Reserve(const int qwords)
 {
+    PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
     PS2_Assert(qwords >= 0);
 
     const int capacity = QwordCapacity();
@@ -291,7 +288,7 @@ void * detail::AllocQwords(const int qwords, const bool committable)
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
                   "cmdbuf::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
 
-    // Live in release for the same reason VifPacket::EnsureSpace is: the overrun would run off
+    // Live in release, unlike the recorder's own EnsureSpace: the overrun would run off
     // the end of this half and into the other one, and the failure would surface a frame or two
     // later as corruption with nothing to connect it back to here.
     if (QwordCount() + qwords + kAllocOverheadQwords > QwordCapacity()) [[unlikely]]
@@ -387,7 +384,7 @@ void Kick()
     // bit once it has drawn everything ahead of it. That is the fence WaitIdle waits on.
     //
     // FLUSH and DIRECT are the two VIFcodes riding the CNT tag's own qword (tte=1), so the opening
-    // is one qword and the payload starts on the next - the same shape VifPacket::OpenDirect
+    // is one qword and the payload starts on the next - the same shape RenderContext::OpenDirect
     // builds, and what makes the manual qword count of 2 below come out right.
     packet2_chain_open_cnt(pkt, 0, 0, 0);
     packet2_vif_flush(pkt, 0);

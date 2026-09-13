@@ -35,6 +35,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/render_profile.h"
@@ -313,7 +314,7 @@ inline void DepthRangeFor(DrawFlags flags, float * outScale, float * outOffset)
 //
 // Returns whether the batch blends, since the drawing tag needs it for the
 // prim's ABE bit and it is decided here.
-bool AddBatchStateBlock(VifPacket & pkt, const tex::Texture & texture, int ctx, DrawFlags flags)
+bool AddBatchStateBlock(rc::RenderContext & pkt, const tex::Texture & texture, int ctx, DrawFlags flags)
 {
     // The blend flags select alternative equations, they are not switches to
     // combine: each one brings the ABE bit and the depth-write mask with it.
@@ -343,7 +344,7 @@ bool AddBatchStateBlock(VifPacket & pkt, const tex::Texture & texture, int ctx, 
 // turn the prim's ABE bit on and mask depth writes; NoDepthWrite masks them
 // without the ABE bit; untextured ones clear the TME bit (the texture
 // registers are still written, just not sampled).
-void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
+void AddBatchGifTags(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
                      int vertCount, DrawFlags flags, bool packedRgbaOut = false)
 {
     const bool blended = AddBatchStateBlock(pkt, texture, ctx, flags);
@@ -373,7 +374,7 @@ void AddBatchGifTags(VifPacket & pkt, const tex::Texture & texture, int ctx,
 // fixed low VU addresses. Both are chain payload rather than statics - see FrameConstants.
 //
 // kDrawSetupQwords is exactly what this appends, and ReserveChunk has already reserved it.
-void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
+void BeginDrawChain(rc::RenderContext & pkt, const math::Mat4 & mvp, DrawFlags flags)
 {
     // Every chunk of a draw shares one flags value, so the batch's depth range
     // is a property of the whole chain and rides with the other constants.
@@ -421,7 +422,7 @@ void BeginDrawChain(VifPacket & pkt, const math::Mat4 & mvp, DrawFlags flags)
 // with it, and the chunk that follows would otherwise transform against whatever
 // the previous draw happened to leave in VU memory. 'firstChunk' opens it for
 // the same reason at the top of a call, where nothing has emitted it yet.
-void ReserveChunk(VifPacket & pkt, const int chunkQwords, const math::Mat4 & mvp,
+void ReserveChunk(rc::RenderContext & pkt, const int chunkQwords, const math::Mat4 & mvp,
                   const DrawFlags flags, const bool firstChunk)
 {
     if (cmdbuf::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
@@ -464,7 +465,7 @@ void Init()
     // chain like every other VIF1 transfer, which is why vu1::Init has to run
     // after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the
     // Drain terminates, kicks and waits, so VU1 is ready once it returns.
-    VifPacket pkt = cmdbuf::Packet();
+    rc::RenderContext & pkt = rc::Ctx();
     pkt.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
     pkt.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
     pkt.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
@@ -488,7 +489,7 @@ constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 // Emits one chunk into the chain: batch header and GIF tags unpacked inline
 // to the current double buffer, the vertex data referenced in place, and the
 // MSCAL that runs the microprogram over it.
-static void AddBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
+static void AddBatchChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
                           const DrawVertex * verts, int vertCount, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxVertsPerBatch && (vertCount % 3) == 0);
@@ -526,7 +527,7 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     gs::EnsureTextureResident(texture);
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = cmdbuf::Packet();
+    rc::RenderContext & pkt = rc::Ctx();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
@@ -569,7 +570,7 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // tags inline, then the two vertex streams, then the MSCAL. The byte-position
 // DMA must be whole source qwords, so an odd count transfers one pad vertex
 // the VU never reads (the fixed region has room: odd counts are < the even maximum).
-static void AddLerpBatchChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
+static void AddLerpBatchChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
                               const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
                               const LerpPosChunk & posChunk, const LerpDrawAttrib * attribs,
@@ -653,7 +654,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = cmdbuf::Packet();
+    rc::RenderContext & pkt = rc::Ctx();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
@@ -717,7 +718,7 @@ constexpr u64 kParticleRegList = (u64(GIF_REG_AD)   <<  0) |
 //
 // 'clipOffset' is the corner offset already transformed to clip space; the UVs
 // are in the GS 12.4 fixed point the PACKED UV descriptor wants.
-static void AddParticleChunk(VifPacket & pkt, const tex::Texture & texture, int ctx,
+static void AddParticleChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
                              const math::Vec4 & clipOffset, u32 uvMaxU, u32 uvMaxV,
                              const ParticleVertex * particles, int count, DrawFlags flags)
 {
@@ -791,7 +792,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
     const int ctx = gs::CurrentContext();
-    VifPacket pkt = cmdbuf::Packet();
+    rc::RenderContext & pkt = rc::Ctx();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {

@@ -53,6 +53,7 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
@@ -315,9 +316,9 @@ GifWriter & OpenGifBlock(const int minQwords)
 {
     PS2_AssertMsg(!s_gifBlock.has_value(), "A GIF block is already open in the frame chain!");
 
-    cmdbuf::Reserve(minQwords + vu1::VifPacket::kDirectOverheadQwords);
+    cmdbuf::Reserve(minQwords + rc::RenderContext::kDirectOverheadQwords);
 
-    vu1::VifPacket packet = cmdbuf::Packet();
+    rc::RenderContext & packet = rc::Ctx();
     packet.OpenDirect();
 
     const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
@@ -335,7 +336,7 @@ void CloseGifBlock()
 
     s_gifBlock->EndGifPacket();
 
-    vu1::VifPacket packet = cmdbuf::Packet();
+    rc::RenderContext & packet = rc::Ctx();
     packet.SetDirectCursor(s_gifBlock->Cursor());
     packet.CloseDirect();
 

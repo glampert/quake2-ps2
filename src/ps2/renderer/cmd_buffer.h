@@ -32,7 +32,8 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
-#include "ps2/renderer/vif_packet.h"
+
+#include <packet2.h>
 
 #include <cstdint>
 
@@ -69,17 +70,36 @@ void BeginFrame();
 // kick: terminating and submitting the frame's chain is the caller's call (see gs::EndFrame).
 void EndFrame();
 
-// The chain being built. Valid between BeginFrame and EndFrame.
-vu1::VifPacket Packet();
+namespace detail {
+// The half being built, swapped by BeginFrame. Exposed so the accessors below can be inline -
+// they are on the hot path of every emission - and written only by cmd_buffer.cpp.
+extern packet2_t * g_packet;
+} // namespace detail
+
+// The half being built. Valid between BeginFrame and EndFrame.
+//
+// No "Init was called" assert here: this is on the hot path of every emission, where the check
+// would expand hundreds of times a frame. Reserve() carries it instead, and every draw goes
+// through that before it emits anything.
+Q_ALWAYS_INLINE packet2_t * Packet()
+{
+    return detail::g_packet;
+}
 
 // Qwords written into the current half so far.
-int QwordCount();
+Q_ALWAYS_INLINE int QwordCount()
+{
+    return static_cast<int>(packet2_get_qw_count(Packet()));
+}
 
-// Qwords a caller may write into a half. Not kHalfQwords: the chain always holds back
-// room for the terminator Kick() appends, because a half with no room left for its own END tag
-// could not be drained. Reserve() measures against exactly this, and it is the capacity to hand
-// any helper that range-checks its own writes.
-int QwordCapacity();
+// Qwords a caller may write into a half. Not kHalfQwords: the buffer always holds back room for
+// the terminator Kick() appends, because a half with no room left for its own END tag could not
+// be drained. Reserve() measures against exactly this, and it is the capacity to hand any helper
+// that range-checks its own writes.
+Q_ALWAYS_INLINE int QwordCapacity()
+{
+    return static_cast<int>(kHalfQwords) - kTerminatorQwords;
+}
 
 // Makes room for 'qwords' more, and says whether it had to empty the chain to do it.
 //

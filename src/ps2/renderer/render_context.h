@@ -252,6 +252,10 @@ namespace detail {
 // The one recorder. Exposed so Ctx() can be inline, which will matter once the recorder carries
 // state the emitters read per call; written only by render_context.cpp.
 extern RenderContext g_context;
+
+// The context this frame draws into, swapped by EndFrame. Exposed for the same reason: every
+// batch asks for it. Written only by render_context.cpp.
+extern gs::DrawContext g_drawCtx;
 } // namespace detail
 
 // The frame's recorder.
@@ -276,9 +280,12 @@ void BeginFrame();
 // ps2_gs_latency leaves it drawing for the next BeginFrame to show - waits for the GS and flips.
 void EndFrame();
 
-// The GS drawing context (0 or 1) being rendered into this frame. Every context-indexed register
-// a caller programs itself, and the prim CTXT bit, must match it.
-int CurrentDrawContext();
+// The GS drawing context being rendered into this frame. Every context-indexed register a caller
+// programs itself, and the prim CTXT bit, must match it.
+Q_ALWAYS_INLINE gs::DrawContext CurrentDrawContext() { return detail::g_drawCtx; }
+
+// Background colour the frame clear fills with.
+void SetClearColor(u8 r, u8 g, u8 b);
 
 // Makes the texture's pixels resident in GS VRAM, uploading them on a miss and evicting the
 // least-recently-bound textures when the heap is full. Already-resident textures only have their

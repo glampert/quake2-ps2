@@ -211,8 +211,9 @@ inline u8 Log2(u32 x)
 }
 
 // Registers the built-in images (they stream into GS VRAM on first bind).
-// Call once, after gs::Init().
-void Init();
+// 'intensity' (>= 1) is the brightening a lit true-colour image takes in its own
+// texels, since it has no CLUT to carry it - see TakesIntensity. Call once.
+void Init(float intensity);
 
 // Level asset lifetimes, driven by the engine's registration sequence:
 // BeginRegistration starts a new sequence (level load); every texture found

@@ -194,101 +194,33 @@ static LightConstants s_lightConstants;
 //   CTXT - Drawing context (0=1, 1=2)
 //   FIX  - ?? Fragment value control (use 0)
 
-// TEX0/TEX1 register qwords for the batch's texture bind, sent A+D over PATH1.
-// Built here rather than with the packet2_utils helpers because those hardcode
-// GS context 0 and this renderer alternates contexts per frame.
-inline u64 MakeTex0Data(const tex::Texture & texture)
-{
-    // Indexed textures sample through one of the two fixed CLUTs (the global
-    // palette or the alpha ramp, by format); reloading the on-chip CLUT cache
-    // on every bind is cheap (1 KB). Everything else leaves the CLUT fields
-    // zero (as the 2D path's MakeTex0 does).
-    const vram::Address clutAddr = gs::ClutAddressFor(texture);
-    const bool palettized = (clutAddr != vram::Address::Invalid);
-
-    const int psm    = tex::GsPsm(texture.format);
-    const int stride = tex::TextureStridePixels(texture, psm);
-
-    texbuffer_t texbuf;
-    texbuf.address         = static_cast<unsigned int>(texture.vramAddr);
-    texbuf.width           = static_cast<unsigned int>(stride);
-    texbuf.psm             = static_cast<unsigned int>(psm);
-    texbuf.info.width      = tex::Log2(static_cast<u32>(texture.width));
-    texbuf.info.height     = tex::Log2(static_cast<u32>(texture.height));
-    texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(texture.components));
-    texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(texture.function));
-
-    return GS_SET_TEX0(texbuf.address >> 6,
-                       texbuf.width >> 6,
-                       texbuf.psm,
-                       texbuf.info.width,
-                       texbuf.info.height,
-                       texbuf.info.components,
-                       texbuf.info.function,
-                       palettized ? ((int)clutAddr >> 6) : 0,
-                       GS_PSM_32, // CPSM; only read for palettized PSMs (and == 0 anyway)
-                       CLUT_STORAGE_MODE1, 0,
-                       palettized ? CLUT_LOAD : CLUT_NO_LOAD);
-}
-
-inline u64 MakeTex1Data(const tex::Texture & texture)
-{
-    return GS_SET_TEX1(LOD_USE_K, 0,
-                       tex::GsMagFilter(texture.magFilter),
-                       tex::GsMinFilter(texture.minFilter),
-                       LOD_MIPMAP_REGISTER, 0, 0);
-}
-
-// Pixel tests for the batch: the environment's alpha test plus the real
-// z-test (mirrors libdraw's draw_enable_tests).
-inline u64 MakeTestData()
-{
-    return GS_SET_TEST(DRAW_ENABLE, ATEST_METHOD_NOTEQUAL, 0x00, ATEST_KEEP_FRAMEBUFFER,
-                       DRAW_DISABLE, DRAW_DISABLE,
-                       DRAW_ENABLE, gs::DepthTestMethod());
-}
-
-// Blend function for batches drawn with the PRIM ABE bit on. Opaque batches
-// write it too - deterministic register state, ignored while ABE is off.
+// Which blend equation the batch's ALPHA register gets. The flags select
+// alternative equations, they are not switches to combine - each one brings the
+// prim's ABE bit and the depth-write mask with it - so this also asserts that.
 //
-// The additive form keeps C = As rather than the fixed 0x80 that would spell
-// GL_ONE literally: at As = 0x80 the two are identical, and routing the
-// source alpha through the equation lets a caller fade an additive primitive
-// per vertex (the dynamic light flares rely on it) without a third mode.
-inline u64 MakeAlphaData(DrawFlags flags)
+// DynamicLights over Modulate is the lit lightmap pass: the modulate scales the
+// framebuffer by the luxel intensity as usual, and the D term adds the lit
+// program's computed colour on top. Cs is exactly that colour, because the atlas
+// texel is an alpha-ramp CLUT entry whose RGB is pinned at the modulate identity
+// (Ct * Cv >> 7 == Cv) and As is untouched, still the luxel intensity.
+inline gs::BlendMode BlendModeFor(DrawFlags flags)
 {
+    const int blendModes = static_cast<int>(HasDrawFlag(flags, DrawFlags::Blended))
+                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Additive))
+                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Modulate));
+    PS2_AssertMsg(blendModes <= 1,
+                  "Pick one blend mode - Blended, Additive and Modulate are exclusive!");
+
     if (HasDrawFlag(flags, DrawFlags::Additive))
     {
-        // (Cs - 0) * As / 128 + Cd
-        return GS_SET_ALPHA(BLEND_COLOR_SOURCE, BLEND_COLOR_ZERO,
-                            BLEND_ALPHA_SOURCE, BLEND_COLOR_DEST, 0x80);
+        return gs::BlendMode::Additive;
     }
-
     if (HasDrawFlag(flags, DrawFlags::Modulate))
     {
-        if (HasDrawFlag(flags, DrawFlags::DynamicLights))
-        {
-            // (Cd - 0) * As / 128 + Cs: the lightmap modulate as below, plus the
-            // lit program's computed colour added on top. The D term is the slot
-            // that made this possible - plain Modulate leaves it zero, so the
-            // pass's vertex colour was going spare.
-            //
-            // Cs is exactly that colour: the atlas texel is an alpha-ramp CLUT
-            // entry whose RGB is pinned at the modulate identity, so
-            // Ct * Cv >> 7 == Cv. As is untouched, still the luxel intensity.
-            return GS_SET_ALPHA(BLEND_COLOR_DEST, BLEND_COLOR_ZERO,
-                                BLEND_ALPHA_SOURCE, BLEND_COLOR_SOURCE, 0x80);
-        }
-
-        // (Cd - 0) * As / 128 + 0: scales the framebuffer by the source alpha
-        // and adds nothing, so the batch's own colour never reaches the pixel.
-        return GS_SET_ALPHA(BLEND_COLOR_DEST, BLEND_COLOR_ZERO,
-                            BLEND_ALPHA_SOURCE, BLEND_COLOR_ZERO, 0x80);
+        return HasDrawFlag(flags, DrawFlags::DynamicLights) ? gs::BlendMode::ModulateAdd
+                                                            : gs::BlendMode::Modulate;
     }
-
-    // (Cs - Cd) * As / 128 + Cd
-    return GS_SET_ALPHA(BLEND_COLOR_SOURCE, BLEND_COLOR_DEST,
-                        BLEND_ALPHA_SOURCE, BLEND_COLOR_DEST, 0x80);
+    return gs::BlendMode::Blend; // what an opaque batch writes too; ABE is off for it
 }
 
 // The GS z conversion for a batch, as the (offset, scale) pair the microprogram
@@ -314,27 +246,27 @@ inline void DepthRangeFor(DrawFlags flags, float * outScale, float * outOffset)
 //
 // Returns whether the batch blends, since the drawing tag needs it for the
 // prim's ABE bit and it is decided here.
-bool AddBatchStateBlock(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx, DrawFlags flags)
+bool AddBatchStateBlock(rc::RenderContext & ctx, const tex::Texture & texture,
+                        gs::DrawContext drawCtx, DrawFlags flags)
 {
-    // The blend flags select alternative equations, they are not switches to
-    // combine: each one brings the ABE bit and the depth-write mask with it.
-    const int blendModes = static_cast<int>(HasDrawFlag(flags, DrawFlags::Blended))
-                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Additive))
-                         + static_cast<int>(HasDrawFlag(flags, DrawFlags::Modulate));
-    PS2_AssertMsg(blendModes <= 1,
-                  "Pick one blend mode - Blended, Additive and Modulate are exclusive!");
+    const gs::BlendMode blendMode = BlendModeFor(flags);
 
-    const bool blended = (blendModes != 0);
+    // A blend mode was asked for (any of the three flags), as opposed to the equation every
+    // batch writes: that is what turns the ABE bit on and masks depth writes.
+    const bool blended = HasDrawFlag(flags, DrawFlags::Blended)
+                      || HasDrawFlag(flags, DrawFlags::Additive)
+                      || HasDrawFlag(flags, DrawFlags::Modulate);
 
     // Five A+D register writes: pixel tests, the texture bind, the blend
     // function and the depth-write mask for this context...
     ctx.AddQword(GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
-    ctx.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + drawCtx));
-    ctx.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1  + drawCtx));
-    ctx.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0  + drawCtx));
-    ctx.AddQword(MakeAlphaData(flags),  static_cast<u64>(GS_REG_ALPHA + drawCtx));
-    ctx.AddQword(gs::ZBufData(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite)),
-                 static_cast<u64>(GS_REG_ZBUF + drawCtx));
+    ctx.AddQword(gs::MakePixelTests(), gs::ContextReg(GS_REG_TEST, drawCtx));
+    ctx.AddQword(gs::MakeTex1(texture), gs::ContextReg(GS_REG_TEX1, drawCtx));
+    ctx.AddQword(gs::MakeTex0(texture, tex::TakesIntensity(texture.type)),
+                 gs::ContextReg(GS_REG_TEX0, drawCtx));
+    ctx.AddQword(gs::MakeAlphaBlend(blendMode), gs::ContextReg(GS_REG_ALPHA, drawCtx));
+    ctx.AddQword(gs::MakeZBuf(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite)),
+                 gs::ContextReg(GS_REG_ZBUF, drawCtx));
 
     return blended;
 }
@@ -344,7 +276,7 @@ bool AddBatchStateBlock(rc::RenderContext & ctx, const tex::Texture & texture, i
 // turn the prim's ABE bit on and mask depth writes; NoDepthWrite masks them
 // without the ABE bit; untextured ones clear the TME bit (the texture
 // registers are still written, just not sampled).
-void AddBatchGifTags(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
+void AddBatchGifTags(rc::RenderContext & ctx, const tex::Texture & texture, gs::DrawContext drawCtx,
                      int vertCount, DrawFlags flags, bool packedRgbaOut = false)
 {
     const bool blended = AddBatchStateBlock(ctx, texture, drawCtx, flags);
@@ -361,7 +293,7 @@ void AddBatchGifTags(rc::RenderContext & ctx, const tex::Texture & texture, int 
     // parses as 'blended ? 1 : (0 << 6)' and drops the bit at position 0 -
     // inside the PRIM field, where PRIM_TRIANGLE (3) already has that bit
     // set. Nothing warned and the primitive still drew, just never blended.
-    const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, drawCtx, 0);
+    const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, gs::Index(drawCtx), 0);
     // The programs that *compute* their color emit PACKED RGBAQ; the ones that
     // receive it already packed emit an A+D write. The register list has to
     // follow whichever this batch will run, so the caller says which.
@@ -489,7 +421,7 @@ constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 // Emits one chunk into the chain: batch header and GIF tags unpacked inline
 // to the current double buffer, the vertex data referenced in place, and the
 // MSCAL that runs the microprogram over it.
-static void AddBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
+static void AddBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, gs::DrawContext drawCtx,
                           const DrawVertex * verts, int vertCount, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxVertsPerBatch && (vertCount % 3) == 0);
@@ -528,7 +460,7 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     rc::EnsureTextureResident(texture);
 
-    const int drawCtx = rc::CurrentDrawContext();
+    const gs::DrawContext drawCtx = rc::CurrentDrawContext();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
@@ -571,7 +503,7 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // tags inline, then the two vertex streams, then the MSCAL. The byte-position
 // DMA must be whole source qwords, so an odd count transfers one pad vertex
 // the VU never reads (the fixed region has room: odd counts are < the even maximum).
-static void AddLerpBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
+static void AddLerpBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, gs::DrawContext drawCtx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
                               const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
                               const LerpPosChunk & posChunk, const LerpDrawAttrib * attribs,
@@ -655,7 +587,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
-    const int drawCtx = rc::CurrentDrawContext();
+    const gs::DrawContext drawCtx = rc::CurrentDrawContext();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
@@ -719,7 +651,7 @@ constexpr u64 kParticleRegList = (u64(GIF_REG_AD)   <<  0) |
 //
 // 'clipOffset' is the corner offset already transformed to clip space; the UVs
 // are in the GS 12.4 fixed point the PACKED UV descriptor wants.
-static void AddParticleChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
+static void AddParticleChunk(rc::RenderContext & ctx, const tex::Texture & texture, gs::DrawContext drawCtx,
                              const math::Vec4 & clipOffset, u32 uvMaxU, u32 uvMaxV,
                              const ParticleVertex * particles, int count, DrawFlags flags)
 {
@@ -758,7 +690,7 @@ static void AddParticleChunk(rc::RenderContext & ctx, const tex::Texture & textu
         // The drawing tag: one sprite per particle, five registers each - the
         // A+D that sets its colour, then a UV/XYZ2 pair per corner. FST selects
         // UV over ST: a screen-aligned sprite needs no perspective correction.
-        const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, drawCtx, 0);
+        const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, gs::Index(drawCtx), 0);
         ctx.AddQword(GIF_SET_TAG(count, 1, 1, prim, GIF_FLG_PACKED, 5), kParticleRegList);
     }
     ctx.CloseInlineUnpack();
@@ -793,7 +725,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
-    const int drawCtx = rc::CurrentDrawContext();
+    const gs::DrawContext drawCtx = rc::CurrentDrawContext();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {

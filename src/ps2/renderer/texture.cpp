@@ -66,6 +66,10 @@ bool HasTransparentTexels(const u8 * pic8, int texelCount)
     return false;
 }
 
+// ref_gl's 'intensity', as Init was given it: the brightening a lit true-colour image
+// takes in its own texels. Latched, so it is the same for every image of a run.
+static float s_intensityScale = 1.0f;
+
 // Multiplies an RGBA32 image's colour channels in place, clamping each at full
 // rather than wrapping. The alpha is left alone - it is coverage, not light.
 // This is ref_gl's intensitytable applied directly to the texels, for the images
@@ -421,7 +425,7 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         pixels = pic8;
 
         // Sky faces always sample as RGB, whatever they contain. The 3D path's
-        // alpha test cuts texels whose alpha is zero (vu1.cpp's MakeTestData),
+        // alpha test cuts texels whose alpha is zero (gs::MakePixelTests),
         // and palette entry 255 is exactly that - so a sky face that happened
         // to use index 255 would be punched through to the clear colour
         // instead of drawing. No stock env/ face does, but ref_gl's sky upload
@@ -474,14 +478,13 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         components = hasAlpha ? TexComponents::RGBA : TexComponents::RGB;
         pixels     = pic32;
 
-        // True-colour images have no CLUT to carry ps2_intensity for them, so
-        // a lit one takes the scale in its own texels here. That bakes in
-        // whatever the value is at load time, unlike the palettized images the
-        // retail game is made of, which follow the cvar live - a .tga picks up
-        // a new value the next time it is loaded.
+        // True-colour images have no CLUT to carry the intensity for them, so a
+        // lit one takes the scale in its own texels here. Palettized images - which
+        // is everything the retail game ships - sample a pre-brightened CLUT
+        // instead, built once by gs::Init.
         if (TakesIntensity(type))
         {
-            ScaleTexelsForIntensity(pic32, width * height, gs::IntensityScale());
+            ScaleTexelsForIntensity(pic32, width * height, s_intensityScale);
         }
     }
     else [[unlikely]]
@@ -706,8 +709,11 @@ static TextureCache s_cache;
 // Public API
 // ------------------------------------------------------------------------------------------------
 
-void Init()
+void Init(const float intensity)
 {
+    PS2_Assert(intensity >= 1.0f);
+    s_intensityScale = intensity;
+
     s_cache.Init();
 }
 

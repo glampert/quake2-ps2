@@ -7,10 +7,10 @@
  *  contexts. draw_setup_environment programs each context so screen coordinates
  *  are direct top-left pixels.
  *
- *  ps2_fb_16bit picks their format. 16-bit (the default) costs 560 KB each
- *  instead of 1120 KB, which nearly doubles the texture heap below and halves
- *  the GS's color write and blend-read bandwidth, in exchange for 5:5:5 color -
- *  hardware dithering (ps2_fb_dither) covers most of the resulting banding.
+ *  Config::framebuffer16Bit picks their format. 16-bit costs 560 KB each instead
+ *  of 1120 KB, which nearly doubles the texture heap below and halves the GS's
+ *  color write and blend-read bandwidth, in exchange for 5:5:5 color - hardware
+ *  dithering covers most of the resulting banding.
  *
  *  Frame structure: BeginFrame() opens the frame's DMA chain and writes the
  *  color+depth clear into the head of it. 2D and 3D then draw in any order,
@@ -53,7 +53,6 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
 #include "ps2/system/heap.h"
@@ -72,9 +71,6 @@
 
 namespace ps2::gs {
 namespace {
-
-constexpr int kRenderWidth  = 640;
-constexpr int kRenderHeight = 448;
 
 // Scratch packet for the transfers that are still the EE's own: streamed texture
 // and CLUT uploads (DMA chain tags only; the pixel data is referenced in place),
@@ -163,18 +159,8 @@ private:
 };
 
 static framebuffer_t s_frameBuffer[2];
-static zbuffer_t     s_zbuffer;
 
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
-
-// Screen clean color. Distinctive dark blue.
-static u8 s_clearColor[3] = { 0x20, 0x20, 0x38 };
-
-// ps2_fb_16bit picks the framebuffer format and is read once by Init (it fixes
-// the whole VRAM layout, so it cannot change mid-run). ps2_fb_dither is sampled
-// every frame instead, so the 5:5:5 banding it hides can be compared on the spot.
-static const cvar_t * s_fb16Bit = nullptr;
-static const cvar_t * s_enableDither = nullptr;
 
 // The 4x4 ordered dither matrix the GS adds before truncating a pixel to 5 bits
 // per channel: it trades banding for a fixed low-amplitude pattern.
@@ -194,10 +180,6 @@ constexpr signed char kDitherMatrix[16] =
      1, -1,  0, -2,
 };
 
-// Texture bound for 2D draws in the current drawing context, for dropping redundant TEX0
-// writes. The atlas when a scrapped image was bound; see ResolveBind2D.
-static const tex::Texture * s_currentTex = nullptr;
-
 // The three CLUTs, all living at fixed VRAM spots outside the texture heap
 // (see clut.h for their layout).
 //
@@ -214,12 +196,6 @@ static const tex::Texture * s_currentTex = nullptr;
 static tex::Clut s_globalPaletteClut;
 static tex::Clut s_litPaletteClut;
 static tex::Clut s_alphaRampClut;
-
-// ref_gl's 'intensity': how much every lit image is brightened before anything
-// multiplies it back down. Latched at boot - see BuildLitPalette - so a change
-// takes effect on the next run, the same restart ref_gl needs for a .tga.
-static const cvar_t * s_intensity = nullptr;
-static float s_litPaletteScale = 0.0f; // what s_litPaletteClut currently holds
 
 // Packs the matrix into the DIMX register: sixteen 3-bit signed fields at a
 // 4-bit stride.
@@ -252,26 +228,9 @@ Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
 // Public API
 // ------------------------------------------------------------------------------------------------
 
-int Width()  { return kRenderWidth; }
-int Height() { return kRenderHeight; }
-
-int DepthTestMethod()
-{
-    return static_cast<int>(s_zbuffer.method);
-}
-
-u64 ZBufData(bool maskDepthWrites)
-{
-    // Note ZBUF wants a word address >> 11, unlike TEX0's >> 6.
-    return GS_SET_ZBUF(s_zbuffer.address >> 11, s_zbuffer.zsm, maskDepthWrites ? 1 : 0);
-}
-
-void SetClearColor(u8 r, u8 g, u8 b)
-{
-    s_clearColor[0] = r;
-    s_clearColor[1] = g;
-    s_clearColor[2] = b;
-}
+// What the inline accessors, register builders and 2D resolve in gs.h read. Init fills it, and
+// Invalidate2DBinding/EmitTextureBind move 'currentTex'; nothing else writes it.
+namespace detail { State g_state; }
 
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
 // transfer. Only ever called from Init now, before a frame has ever started, so
@@ -298,8 +257,8 @@ static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 
 // Builds the lit palette and uploads it. Called once, from Init.
 //
-// This used to run at the top of every frame so ps2_intensity could be dialled
-// in on hardware without a restart. The value is settled now, and a CLUT the GS
+// This used to run at the top of every frame so the intensity could be dialled in
+// on hardware without a restart. The value is settled now, and a CLUT the GS
 // samples may only be rewritten when the GS is idle - which stopped being true
 // of the top of a frame the moment the previous frame was left drawing into it.
 // Keeping the knob would have meant fencing the GS to turn it, every frame, to
@@ -309,42 +268,38 @@ static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 // ships. A PixelFormat::RGBA32 texture (a .tga replacement) carries the scale in
 // its own texels instead and picks up a new value when it is next loaded - the
 // same restart ref_gl needs for all of them.
-static void BuildLitPalette()
+static void BuildLitPalette(const u32 * palette, const float intensity)
 {
-    // Below 1 would darken rather than brighten, which is not what the knob is
-    // for and is what ref_gl's own floor at 1 says too.
-    const float scale = (s_intensity->value < 1.0f) ? 1.0f : s_intensity->value;
-
-    s_litPaletteScale = scale;
-    s_litPaletteClut.BuildFromPaletteScaled(global_palette, scale);
+    s_litPaletteClut.BuildFromPaletteScaled(palette, intensity);
     UploadCluts(&s_litPaletteClut, nullptr);
 }
 
-void Init()
+void Init(const Config & cfg)
 {
+    PS2_Assert(cfg.palette != nullptr && cfg.intensity >= 1.0f);
+    PS2_Assert(cfg.width > 0 && cfg.height > 0);
+
     dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_GIF);
 
-    // Latched: the framebuffer format fixes the whole VRAM layout, so it is read
-    // once here and a change only takes effect on the next run.
-    s_fb16Bit       = Cvar_Get("ps2_fb_16bit",  "1", CVAR_ARCHIVE);
-    s_enableDither  = Cvar_Get("ps2_fb_dither", "0", CVAR_ARCHIVE); // Skybox looks significantly worse with dithering on.
-    const bool fb16 = (s_fb16Bit->value != 0.0f);
+    detail::g_state.width      = cfg.width;
+    detail::g_state.height     = cfg.height;
+    detail::g_state.currentTex = nullptr;
 
     // Two framebuffers. 16-bit halves them - 1120 KB each down to 560 KB - which
     // is where most of the texture heap's headroom comes from, at the cost of
     // 5:5:5 color (see the dither below) and one bit of destination alpha, which
     // nothing reads: every blend here scales by *source* alpha.
-    const int framePsm = fb16 ? GS_PSM_16 : GS_PSM_32;
+    const int framePsm = cfg.framebuffer16Bit ? GS_PSM_16 : GS_PSM_32;
 
-    s_frameBuffer[0].width   = kRenderWidth;
-    s_frameBuffer[0].height  = kRenderHeight;
+    s_frameBuffer[0].width   = static_cast<unsigned int>(cfg.width);
+    s_frameBuffer[0].height  = static_cast<unsigned int>(cfg.height);
     s_frameBuffer[0].mask    = 0;
     s_frameBuffer[0].psm     = static_cast<unsigned int>(framePsm);
-    s_frameBuffer[0].address = static_cast<unsigned int>(graph_vram_allocate(kRenderWidth, kRenderHeight, framePsm, GRAPH_ALIGN_PAGE));
+    s_frameBuffer[0].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
     s_frameBuffer[1]         = s_frameBuffer[0];
-    s_frameBuffer[1].address = static_cast<unsigned int>(graph_vram_allocate(kRenderWidth, kRenderHeight, framePsm, GRAPH_ALIGN_PAGE));
+    s_frameBuffer[1].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
     // Z-buffer for the 3D world; larger depth = closer (the projection maps the
     // near plane to 0xFFFF), hence GREATER_EQUAL. Depth is 16-bit either way -
@@ -352,13 +307,14 @@ void Init()
     // depth buffers to share a page layout: PSMCT32/24 pair with Z32/Z24/Z16S,
     // PSMCT16 pairs with Z16, PSMCT16S with Z16S. Mismatch them and depth sorting
     // breaks while color looks fine, which is a confusing way to find out.
-    const int zPsm = fb16 ? GS_ZBUF_16 : GS_ZBUF_16S;
+    const int zPsm = cfg.framebuffer16Bit ? GS_ZBUF_16 : GS_ZBUF_16S;
 
-    s_zbuffer.enable  = DRAW_ENABLE;
-    s_zbuffer.method  = ZTEST_METHOD_GREATER_EQUAL;
-    s_zbuffer.mask    = 0;
-    s_zbuffer.zsm     = static_cast<unsigned int>(zPsm);
-    s_zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(kRenderWidth, kRenderHeight, zPsm, GRAPH_ALIGN_PAGE));
+    zbuffer_t & zbuffer = detail::g_state.zbuffer;
+    zbuffer.enable  = DRAW_ENABLE;
+    zbuffer.method  = ZTEST_METHOD_GREATER_EQUAL;
+    zbuffer.mask    = 0;
+    zbuffer.zsm     = static_cast<unsigned int>(zPsm);
+    zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, zPsm, GRAPH_ALIGN_PAGE));
 
     // All three CLUTs live with the fixed allocations; the streamed texture heap
     // takes everything after them, rounded up to a page so its footprint math
@@ -378,8 +334,13 @@ void Init()
     s_litPaletteClut.vramAddr    = vram::Address(litClutVramAddr);
     s_alphaRampClut.vramAddr     = vram::Address(alphaRampClutAddr);
 
+    // The addresses are all ClutAddress() needs; the entry buffers stay here.
+    detail::g_state.globalPaletteClut = s_globalPaletteClut.vramAddr;
+    detail::g_state.litPaletteClut    = s_litPaletteClut.vramAddr;
+    detail::g_state.alphaRampClut     = s_alphaRampClut.vramAddr;
+
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
-    graph_initialize(static_cast<int>(s_frameBuffer[0].address), kRenderWidth, kRenderHeight, framePsm, 0, 0);
+    graph_initialize(static_cast<int>(s_frameBuffer[0].address), cfg.width, cfg.height, framePsm, 0, 0);
 
     s_texUploadPacket.Init(kTexUploadQwords);
 
@@ -395,10 +356,10 @@ void Init()
     // On the upload packet, not the frame chain: gs::Init runs before mod::Init, and the
     // chain's halves live in the arena that reserves (see PS2_RefInit's ordering note).
     GifWriter & pkt = s_texUploadPacket.Begin();
-    pkt.SetupEnvironment(0, s_frameBuffer[0], s_zbuffer);
-    pkt.TextureWrapping(0, wrap);
-    pkt.SetupEnvironment(1, s_frameBuffer[1], s_zbuffer);
-    pkt.TextureWrapping(1, wrap);
+    pkt.SetupEnvironment(Index(DrawContext::Ctx0), s_frameBuffer[0], zbuffer);
+    pkt.TextureWrapping(Index(DrawContext::Ctx0), wrap);
+    pkt.SetupEnvironment(Index(DrawContext::Ctx1), s_frameBuffer[1], zbuffer);
+    pkt.TextureWrapping(Index(DrawContext::Ctx1), wrap);
 
     // DIMX is global rather than per-context and never changes, so it is set up
     // once here; only the DTHE enable is rewritten per frame (see BeginFrame).
@@ -410,31 +371,47 @@ void Init()
     GifPacket::WaitFinish();
 
     // Build and upload the CLUTs. None of the three ever changes again.
-    s_globalPaletteClut.BuildFromPalette(global_palette);
+    s_globalPaletteClut.BuildFromPalette(cfg.palette);
     s_alphaRampClut.BuildAlphaRamp();
 
     UploadCluts(&s_globalPaletteClut, &s_alphaRampClut);
-
-    s_intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
-    BuildLitPalette();
+    BuildLitPalette(cfg.palette, cfg.intensity);
 }
 
-float IntensityScale()
-{
-    return s_litPaletteScale;
-}
+// ------------------------------------------------------------------------------------------------
+// GS register values
+// ------------------------------------------------------------------------------------------------
 
-vram::Address ClutAddressFor(const tex::Texture & texture)
+u64 MakeTex0(const tex::Texture & texture, const bool lit)
 {
-    switch (texture.format)
-    {
-    case tex::PixelFormat::Palette8 :
-        return tex::TakesIntensity(texture.type) ? s_litPaletteClut.vramAddr : s_globalPaletteClut.vramAddr;
-    case tex::PixelFormat::Alpha8 :
-        return s_alphaRampClut.vramAddr;
-    default :
-        return vram::Address::Invalid;
-    }
+    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "MakeTex0 for a texture with no VRAM!");
+
+    // Indexed formats sample through one of the fixed CLUTs and reload the on-chip CLUT cache on
+    // every bind - cheap (1 KB) even at the 2D path's bind rate. Everything else leaves the CLUT
+    // fields zero, which is also what CPSM reads as: GS_PSM_32 is 0.
+    //
+    // TODO: CLUT_COMPARE_CBP0 skips redundant reloads - worthwhile once world textures bind
+    // per-surface.
+    const vram::Address clutAddr = ClutAddress(texture.format, lit);
+    const bool palettized = (clutAddr != vram::Address::Invalid);
+
+    const int psm = tex::GsPsm(texture.format);
+
+    // The stride (TEX0's TBW) differs from the width for narrow 8-bit textures; the page-grid
+    // footprint vram.cpp charges for already covers the rounding.
+    const int stride = tex::TextureStridePixels(texture, psm);
+
+    return GS_SET_TEX0(static_cast<u32>(texture.vramAddr) >> 6,
+                       static_cast<u32>(stride) >> 6,
+                       psm,
+                       tex::Log2(static_cast<u32>(texture.width)),
+                       tex::Log2(static_cast<u32>(texture.height)),
+                       tex::GsComponents(texture.components),
+                       tex::GsFunction(texture.function),
+                       palettized ? (static_cast<int>(clutAddr) >> 6) : 0,
+                       GS_PSM_32, // CPSM; only read for palettized PSMs (and == 0 anyway)
+                       CLUT_STORAGE_MODE1, 0,
+                       palettized ? CLUT_LOAD : CLUT_NO_LOAD);
 }
 
 void ReleaseTexture(const tex::Texture & texture)
@@ -442,9 +419,9 @@ void ReleaseTexture(const tex::Texture & texture)
     // Never leave the TEX0 dedupe pointing at a released texture: a rebind in
     // the same 2D section must go through EnsureTextureResident again, and the
     // cache may recycle the slot for a different image entirely.
-    if (s_currentTex == &texture)
+    if (detail::g_state.currentTex == &texture)
     {
-        s_currentTex = nullptr;
+        detail::g_state.currentTex = nullptr;
     }
 
     if (texture.vramAddr == tex::Texture::kNotResident)
@@ -465,17 +442,15 @@ void DefragVramHeap()
     // Every texture is non-resident now: the 2D dedupe would otherwise skip the
     // rebind of the current one and sample VRAM it no longer owns. The recycled
     // heap raises the reuse hazard inside vram::Defragment.
-    s_currentTex = nullptr;
+    detail::g_state.currentTex = nullptr;
 }
 
 // ------------------------------------------------------------------------------------------------
 // Presentation
 // ------------------------------------------------------------------------------------------------
 
-void PresentFramebuffer(const int drawCtx)
+void PresentFramebuffer(const DrawContext ctx)
 {
-    PS2_Assert(drawCtx == 0 || drawCtx == 1);
-
     // DISPFB has to be rewritten inside the blanking interval or the change tears, and the spin
     // doubles as the frame's pacing.
     {
@@ -483,9 +458,10 @@ void PresentFramebuffer(const int drawCtx)
         graph_wait_vsync();
     }
 
-    graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[drawCtx].address),
-                                   static_cast<int>(s_frameBuffer[drawCtx].width),
-                                   static_cast<int>(s_frameBuffer[drawCtx].psm), 0, 0);
+    const framebuffer_t & fb = s_frameBuffer[Index(ctx)];
+    graph_set_framebuffer_filtered(static_cast<int>(fb.address),
+                                   static_cast<int>(fb.width),
+                                   static_cast<int>(fb.psm), 0, 0);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -538,75 +514,44 @@ void UploadTexture(const tex::Texture & texture)
 }
 
 // ------------------------------------------------------------------------------------------------
-// 2D texture binding
-// ------------------------------------------------------------------------------------------------
-
-Bind2D ResolveBind2D(const tex::Texture & texture)
-{
-    PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
-
-    // A scrapped image is a window onto a shared atlas: the atlas is what gets bound and made
-    // resident, and the draw's texel coordinates shift into it.
-    const bool isInScrapAtlas = (texture.atlas != nullptr);
-    const tex::Texture & bindTex = isInScrapAtlas ? *texture.atlas : texture;
-
-    Bind2D bind;
-    bind.texture = &bindTex;
-    bind.originU = isInScrapAtlas ? texture.atlasX : 0;
-    bind.originV = isInScrapAtlas ? texture.atlasY : 0;
-
-    // Two different images in the same scrap resolve to the same atlas, so the second correctly
-    // needs no TEX0 write - but it still draws from its own corner, which is why the origins are
-    // set either way.
-    bind.needsBind = (&bindTex != s_currentTex) || bindTex.dirtyPixels;
-    return bind;
-}
-
-void Invalidate2DBinding()
-{
-    s_currentTex = nullptr;
-}
-
-// ------------------------------------------------------------------------------------------------
 // GIF emission
 // ------------------------------------------------------------------------------------------------
 
-void EmitClear(GifWriter & w, const int drawCtx, const bool dither)
+void EmitClear(GifWriter & w, const DrawContext ctx, const u8 color[3], const bool dither)
 {
     w.EnsureSpace(kClearQwords);
 
     draw_disable_blending(); // draw_clear must overwrite, never blend
-    w.DisableTests(drawCtx, s_zbuffer);
+    w.DisableTests(Index(ctx), detail::g_state.zbuffer);
 
     // Re-arm depth writes: a blended VU1 batch (ZMSK = 1) may have been this context's last word
     // on ZBUF two frames ago, and draw_disable_tests only touches TEST - without this the z=0
     // sprite would clear color but leave stale depth behind.
-    w.SetRegister(static_cast<u64>(GS_REG_ZBUF + drawCtx), ZBufData(false));
+    w.SetRegister(ContextReg(GS_REG_ZBUF, ctx), MakeZBuf(false));
 
     // Dithering hides the banding a 5:5:5 framebuffer would otherwise show on smooth gradients.
-    // Rewritten every frame (one qword) purely so the cvar can be flipped live to compare; it
-    // does nothing to a 32-bit framebuffer.
+    // Rewritten every frame (one qword) purely so the caller's knob can be flipped live to
+    // compare; it does nothing to a 32-bit framebuffer.
     const bool dtheOn = (s_frameBuffer[0].psm == GS_PSM_16) && dither;
     w.SetRegister(static_cast<u64>(GS_REG_DTHE), GS_SET_DTHE(dtheOn ? 1 : 0));
 
     // The z=0 sprite with an ALLPASS z-test clears color and depth in one pass (0 = farthest).
-    w.Clear(drawCtx, 0.0f, 0.0f,
-            static_cast<float>(kRenderWidth), static_cast<float>(kRenderHeight),
-            static_cast<int>(s_clearColor[0]), static_cast<int>(s_clearColor[1]),
-            static_cast<int>(s_clearColor[2]));
+    w.Clear(Index(ctx), 0.0f, 0.0f,
+            static_cast<float>(Width()), static_cast<float>(Height()),
+            static_cast<int>(color[0]), static_cast<int>(color[1]), static_cast<int>(color[2]));
 
-    w.EnableTests(drawCtx, s_zbuffer); // restore the real z-test for the 3D world
+    w.EnableTests(Index(ctx), detail::g_state.zbuffer); // restore the real z-test for the 3D world
 }
 
-void EmitBegin2D(GifWriter & w, const int drawCtx)
+void EmitBegin2D(GifWriter & w, const DrawContext ctx)
 {
     w.EnsureSpace(kBegin2DQwords);
 
-    w.DisableTests(drawCtx, s_zbuffer);
-    w.SetRegister(static_cast<u64>(GS_REG_ZBUF + drawCtx), ZBufData(false));
+    w.DisableTests(Index(ctx), detail::g_state.zbuffer);
+    w.SetRegister(ContextReg(GS_REG_ZBUF, ctx), MakeZBuf(false));
 }
 
-void EmitFillRect(GifWriter & w, const int drawCtx, const int x, const int y,
+void EmitFillRect(GifWriter & w, const DrawContext ctx, const int x, const int y,
                   const int width, const int height, const u8 r, const u8 g, const u8 b, const u8 a)
 {
     w.EnsureSpace(kFillRectQwords);
@@ -628,7 +573,7 @@ void EmitFillRect(GifWriter & w, const int drawCtx, const int x, const int y,
         // Fully opaque: plain overwrite.
         draw_disable_blending();
         rect.color.a = 0x80;
-        w.RectFilled(drawCtx, rect);
+        w.RectFilled(Index(ctx), rect);
     }
     else
     {
@@ -638,83 +583,40 @@ void EmitFillRect(GifWriter & w, const int drawCtx, const int x, const int y,
 
         // The GS is slow on very large polygons; libdraw recommends strips for near-fullscreen
         // fills.
-        if (width >= kRenderWidth / 2)
+        if (width >= Width() / 2)
         {
-            w.RectFilledStrips(drawCtx, rect);
+            w.RectFilledStrips(Index(ctx), rect);
         }
         else
         {
-            w.RectFilled(drawCtx, rect);
+            w.RectFilled(Index(ctx), rect);
         }
         draw_disable_blending();
     }
 }
 
-void EmitTextureBind(GifWriter & w, const int drawCtx, const Bind2D & bind)
+void EmitTextureBind(GifWriter & w, const DrawContext ctx, const Bind2D & bind)
 {
     PS2_AssertMsg(bind.needsBind, "EmitTextureBind for a binding that did not need one!");
     const tex::Texture & bindTex = *bind.texture;
 
     w.EnsureSpace(kTextureBindQwords);
 
-    lod_t lod;
-    lod.calculation   = LOD_USE_K;
-    lod.max_level     = 0;
-    lod.mag_filter    = static_cast<unsigned char>(tex::GsMagFilter(bindTex.magFilter));
-    lod.min_filter    = static_cast<unsigned char>(tex::GsMinFilter(bindTex.minFilter));
-    lod.mipmap_select = LOD_MIPMAP_REGISTER;
-    lod.l             = 0;
-    lod.k             = 0.0f;
+    // The same two registers, in the same order, that libdraw's draw_texture_sampling and
+    // draw_texturebuffer wrote here before - each is one GIF tag plus one A+D pair, which is
+    // exactly what SetRegister emits.
+    w.SetRegister(ContextReg(GS_REG_TEX1, ctx), MakeTex1(bindTex));
+    w.SetRegister(ContextReg(GS_REG_TEX0, ctx), MakeTex0(bindTex, tex::TakesIntensity(bindTex.type)));
 
-    clutbuffer_t clut;
-    const vram::Address clutAddr = ClutAddressFor(bindTex);
-    if (clutAddr != vram::Address::Invalid)
-    {
-        // Reload the on-chip CLUT cache on every bind: cheap (1 KB) at the 2D path's bind rate.
-        // TODO: CLUT_COMPARE_CBP0 skips redundant reloads - worthwhile once world textures bind
-        // per-surface.
-        clut.address      = static_cast<unsigned int>(clutAddr);
-        clut.psm          = GS_PSM_32;
-        clut.storage_mode = CLUT_STORAGE_MODE1;
-        clut.start        = 0;
-        clut.load_method  = CLUT_LOAD;
-    }
-    else
-    {
-        // Not palettized; the CLUT slots stay empty.
-        clut.address      = 0;
-        clut.psm          = 0;
-        clut.storage_mode = CLUT_STORAGE_MODE1;
-        clut.start        = 0;
-        clut.load_method  = CLUT_NO_LOAD;
-    }
-
-    const int psm    = tex::GsPsm(bindTex.format);
-    const int stride = tex::TextureStridePixels(bindTex, psm);
-
-    // The stride (TEX0's TBW) differs from the width for narrow 8-bit textures; the page-grid
-    // footprint already covers the rounding.
-    texbuffer_t texbuf;
-    texbuf.address         = static_cast<unsigned int>(bindTex.vramAddr);
-    texbuf.width           = static_cast<unsigned int>(stride);
-    texbuf.psm             = static_cast<unsigned int>(psm);
-    texbuf.info.width      = tex::Log2(static_cast<u32>(bindTex.width));
-    texbuf.info.height     = tex::Log2(static_cast<u32>(bindTex.height));
-    texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(bindTex.components));
-    texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(bindTex.function));
-
-    w.TextureSampling(drawCtx, lod);
-    w.TextureBuffer(drawCtx, texbuf, clut);
-
-    s_currentTex = &bindTex;
+    detail::g_state.currentTex = &bindTex;
 }
 
-void EmitTexturedRect(GifWriter & w, const int drawCtx, const int x, const int y,
+void EmitTexturedRect(GifWriter & w, const DrawContext ctx, const int x, const int y,
                       const int width, const int height,
                       const int u0, const int v0, const int u1, const int v1,
                       const Bind2D & bind, const u8 brightness[3])
 {
-    PS2_AssertMsg(s_currentTex != nullptr, "EmitTexturedRect with nothing bound!");
+    PS2_AssertMsg(detail::g_state.currentTex != nullptr, "EmitTexturedRect with nothing bound!");
 
     w.EnsureSpace(kTexturedRectQwords);
 
@@ -742,7 +644,7 @@ void EmitTexturedRect(GifWriter & w, const int drawCtx, const int x, const int y
     rect.color.q = 1.0f;
 
     draw_disable_blending();
-    w.RectTextured(drawCtx, rect);
+    w.RectTextured(Index(ctx), rect);
 }
 
 } // namespace ps2::gs

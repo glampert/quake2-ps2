@@ -482,8 +482,25 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     (void)hinstance;
     (void)wndproc;
 
-    ps2::gs::Init();
-    ps2::tex::Init();
+    // The cvars the GS and the texture cache are configured with. Both are latched here: the
+    // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
+    // GS may only have rewritten while it is idle, so a change to either takes effect next run.
+    const cvar_t * const fb16Bit   = Cvar_Get("ps2_fb_16bit", "1", CVAR_ARCHIVE);
+    const cvar_t * const intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
+
+    // Below 1 would darken rather than brighten, which is not what the knob is for - ref_gl
+    // floors it at 1 too.
+    const float intensityScale = (intensity->value < 1.0f) ? 1.0f : intensity->value;
+
+    ps2::gs::Config gsConfig;
+    gsConfig.palette          = global_palette;
+    gsConfig.intensity        = intensityScale;
+    gsConfig.width            = 640;
+    gsConfig.height           = 448;
+    gsConfig.framebuffer16Bit = (fb16Bit->value != 0.0f);
+
+    ps2::gs::Init(gsConfig);
+    ps2::tex::Init(intensityScale);
     ps2::lm::Init();
     ps2::mod::Init();
     ps2::cmdbuf::Init(); // after mod::Init: the chain halves live in the arena it reserves
@@ -510,7 +527,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
 #if !PS2_QUAKE_DEBUG
     // Default clear color to black in release builds.
-    ps2::gs::SetClearColor(0, 0, 0);
+    ps2::rc::SetClearColor(0, 0, 0);
 #endif // PS2_QUAKE_DEBUG
 
     Com_DPrintf("PS2 refresh initialised: %dx%d\n", viddef.width, viddef.height);

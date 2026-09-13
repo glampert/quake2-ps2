@@ -48,7 +48,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/clut.h"
-#include "ps2/renderer/render_packet.h"
+#include "ps2/renderer/gif_writer.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
@@ -56,7 +56,9 @@
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
+#include "ps2/system/heap.h"
 
+#include <cstring> // memset
 #include <dma.h>
 #include <gs_gp.h>
 #include <gs_psm.h>
@@ -97,16 +99,83 @@ constexpr int kBlockTailQwords = 1;
 constexpr int kClearBlockQwords = 64;
 constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
 
+// A GIF packet with a buffer of its own, sent down the GIF channel by the EE. The frame's
+// command buffer carries everything else; what is left for this are the transfers that cannot
+// ride it - the one-time context setup in Init, which runs before the command buffer exists,
+// and the synchronous texture and CLUT uploads.
+class GifPacket final
+{
+public:
+    // Allocates the buffer. Call once, after the heap is up - not from a static constructor.
+    void Init(const int maxQwords)
+    {
+        PS2_AssertMsg(m_base == nullptr, "GifPacket::Init called twice!");
+        PS2_Assert(maxQwords > 0);
+
+        // 64-byte (cache line) aligned and zeroed. Behind the tagged allocator, so it shows up
+        // in the memory overlay.
+        const size_t sizeBytes = static_cast<size_t>(maxQwords + kGuardQwords) * sizeof(qword_t);
+        m_base = static_cast<qword_t *>(heap::AllocAligned(heap::MemAlign(64), sizeBytes,
+                                                           heap::MemTag::Renderer));
+        std::memset(m_base, 0, sizeBytes);
+        m_maxQwords = maxQwords;
+    }
+
+    // Rewinds to the start of the buffer and hands back the writer to build with.
+    GifWriter & Begin()
+    {
+        PS2_AssertMsg(m_base != nullptr, "GifPacket::Begin before Init!");
+        m_writer = GifWriter{ m_base, m_maxQwords };
+        return m_writer;
+    }
+
+    // Sends what has been built as one normal transfer. Fire and forget; the wait is Wait().
+    void SendNormal()
+    {
+        dma_channel_send_normal(DMA_CHANNEL_GIF, m_base, m_writer.QwordCount(), 0, 0);
+    }
+
+    // Sends it as a source-chain transfer, for the uploads whose payload is referenced by
+    // chain tags the packet holds rather than copied into it.
+    void SendChain()
+    {
+        dma_channel_send_chain(DMA_CHANNEL_GIF, m_base, m_writer.QwordCount(), 0, 0);
+    }
+
+    // Waits until the GIF channel is usable again.
+    // NOTE: assumes fast waits are enabled for it (see Init below).
+    static void Wait() { dma_wait_fast(); }
+
+    // Waits for the FINISH event a GifWriter::Finish() armed.
+    static void WaitFinish() { draw_wait_finish(); }
+
+private:
+    // Slack past m_maxQwords. The libdraw helpers only report their size by returning the
+    // advanced cursor, so an overrun can only be caught after the fact - this is the room that
+    // keeps the offending write inside our own allocation, so GifWriter halts on it instead of
+    // it becoming heap corruption somebody debugs later. Comfortably larger than any single
+    // emission: draw_texture_transfer's whole chain fits in the 128-qword upload packet.
+    static constexpr int kGuardQwords = 256;
+
+    qword_t * m_base      = nullptr;
+    int       m_maxQwords = 0;
+    GifWriter m_writer;
+};
+
 static framebuffer_t s_frameBuffer[2];
 static zbuffer_t     s_zbuffer;
 
-static RenderPacket s_texUploadPacket;  // scratch packet for texture uploads; owns its buffer
+static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
 
 // The GIF block currently open in the frame chain - the clear at the top of the frame, or
-// the 2D overlay - with the libdraw wrappers pointed at the chain's write cursor. Borrowed
-// memory, valid only between OpenGifBlock and CloseGifBlock; the chain owns it and submits it.
-static RenderPacket s_gifBlock;
+// the 2D overlay - as a cursor into the chain's own memory. Valid only between OpenGifBlock
+// and CloseGifBlock; the chain owns the memory and submits it.
+static GifWriter s_gifBlock;
 static bool s_gifBlockOpen = false;
+
+// High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
+// rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
+static int s_gifBlockPeakQwords = 0;
 
 static int s_drawCtx = 1; // which framebuffer/context we render into this frame
 
@@ -225,7 +294,7 @@ Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
 // The block's capacity is not what was reserved but everything left in the half, because the
 // 2D overlay's real size is not knowable up front. Reserve is the floor; Ensure2DSpace is
 // what watches the ceiling.
-RenderPacket & OpenGifBlock(const int minQwords)
+GifWriter & OpenGifBlock(const int minQwords)
 {
     PS2_AssertMsg(!s_gifBlockOpen, "A GIF block is already open in the frame chain!");
 
@@ -237,7 +306,7 @@ RenderPacket & OpenGifBlock(const int minQwords)
     const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
     PS2_Assert(capacity >= minQwords);
 
-    s_gifBlock.Attach(packet.DirectCursor(), capacity);
+    s_gifBlock     = GifWriter{ packet.DirectCursor(), capacity };
     s_gifBlockOpen = true;
     return s_gifBlock;
 }
@@ -256,7 +325,10 @@ void CloseGifBlock()
     packet.SetDirectCursor(s_gifBlock.Cursor());
     packet.CloseDirect();
 
-    s_gifBlock.Detach();
+    const int used = s_gifBlock.QwordCount();
+    if (used > s_gifBlockPeakQwords) { s_gifBlockPeakQwords = used; }
+
+    s_gifBlock = GifWriter{};
 }
 
 } // namespace
@@ -293,7 +365,10 @@ void SetClearColor(u8 r, u8 g, u8 b)
 
 int Gif2DPeakQwords()
 {
-    return s_gifBlock.PeakQwords();
+    // Folds in the block still open, so a mid-frame reader (the overlay is drawn during the
+    // 2D pass) reports honestly rather than only what previous blocks held.
+    const int used = s_gifBlockOpen ? s_gifBlock.QwordCount() : 0;
+    return (used > s_gifBlockPeakQwords) ? used : s_gifBlockPeakQwords;
 }
 
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
@@ -302,8 +377,7 @@ int Gif2DPeakQwords()
 // uploads for it and without having to fence anything.
 static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 {
-    RenderPacket & upload = s_texUploadPacket;
-    upload.Reset();
+    GifWriter & upload = s_texUploadPacket.Begin();
 
     const tex::Clut * const cluts[] = { first, second };
     for (const tex::Clut * clut : cluts)
@@ -316,8 +390,8 @@ static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
     }
     upload.TextureFlush();
 
-    upload.SendChain();
-    upload.Wait();
+    s_texUploadPacket.SendChain();
+    GifPacket::Wait();
 }
 
 // Builds the lit palette and uploads it. Called once, from Init.
@@ -418,8 +492,7 @@ void Init()
 
     // On the upload packet, not the frame chain: gs::Init runs before mod::Init, and the
     // chain's halves live in the arena that reserves (see PS2_RefInit's ordering note).
-    RenderPacket & pkt = s_texUploadPacket;
-    pkt.Reset();
+    GifWriter & pkt = s_texUploadPacket.Begin();
     pkt.SetupEnvironment(0, s_frameBuffer[0], s_zbuffer);
     pkt.TextureWrapping(0, wrap);
     pkt.SetupEnvironment(1, s_frameBuffer[1], s_zbuffer);
@@ -430,9 +503,9 @@ void Init()
     pkt.SetRegister(static_cast<u64>(GS_REG_DIMX), PackDitherMatrix(kDitherMatrix));
     pkt.Finish();
 
-    pkt.SendNormal();
-    pkt.Wait();
-    pkt.WaitFinish();
+    s_texUploadPacket.SendNormal();
+    GifPacket::Wait();
+    GifPacket::WaitFinish();
 
     // Build and upload the CLUTs. None of the three ever changes again.
     s_globalPaletteClut.BuildFromPalette(global_palette);
@@ -523,7 +596,7 @@ void BeginFrame()
     // head of it - so the VU1 3D world that follows in the same chain cannot land on an
     // uncleared framebuffer whatever the two GIF paths do. The z=0 sprite with an ALLPASS
     // z-test clears color and depth in one pass (0 = farthest).
-    RenderPacket & clear = OpenGifBlock(kClearBlockQwords);
+    GifWriter & clear = OpenGifBlock(kClearBlockQwords);
 
     draw_disable_blending(); // draw_clear must overwrite, never blend
     clear.DisableTests(s_drawCtx, s_zbuffer);
@@ -578,7 +651,7 @@ static void Ensure2D()
     // The 2D overlay accumulates in a DIRECT block of the frame's chain and goes out at the
     // next flush, after any 3D drawn so far: always-pass z-test so it lands on top. ZBUF is
     // re-armed too, in case a blended 3D batch (ZMSK = 1) drew before this batch opened.
-    RenderPacket & pkt = OpenGifBlock(k2DBlockMinQwords);
+    GifWriter & pkt = OpenGifBlock(k2DBlockMinQwords);
     pkt.DisableTests(s_drawCtx, s_zbuffer);
     pkt.SetRegister(static_cast<u64>(GS_REG_ZBUF + s_drawCtx), ZBufData(false));
 }
@@ -632,7 +705,7 @@ void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
     Ensure2D();
     Ensure2DSpace(64);
 
-    RenderPacket & pkt = s_gifBlock;
+    GifWriter & pkt = s_gifBlock;
 
     rect_t rect;
     rect.v0.x = static_cast<float>(x);
@@ -840,11 +913,10 @@ void EnsureTextureResident(const tex::Texture & texture)
 
     // Synchronous DMA upload; the chain references the pixels in EE RAM.
     // TextureTransfer cannot EnsureSpace up front - only draw_texture_transfer
-    // knows how many chain tags a given texture needs - but RenderPacket::Advance
+    // knows how many chain tags a given texture needs - but GifWriter::Advance
     // checks afterwards and Sys_Errors, so a texture that outgrows this 128-qword
     // scratch packet says so instead of scribbling past it.
-    RenderPacket & pkt = s_texUploadPacket;
-    pkt.Reset();
+    GifWriter & pkt = s_texUploadPacket.Begin();
     pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
     pkt.TextureFlush();
 
@@ -857,10 +929,10 @@ void EnsureTextureResident(const tex::Texture & texture)
     // on 5% of frames, which is the kind of bug that takes a week.
     cmdbuf::WaitIdle();
 
-    pkt.SendChain();
+    s_texUploadPacket.SendChain();
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        pkt.Wait();
+        GifPacket::Wait();
     }
 
     vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count
@@ -931,7 +1003,7 @@ void SetTextureFor2D(const tex::Texture & texture)
 
     // After EnsureTextureResident, which may have split the block out from under us.
     Ensure2DSpace(16);
-    RenderPacket & pkt = s_gifBlock;
+    GifWriter & pkt = s_gifBlock;
 
     lod_t lod;
     lod.calculation   = LOD_USE_K;
@@ -992,7 +1064,7 @@ void DrawTexturedRect(int x, int y, int w, int h,
     PS2_AssertMsg(s_in2D, "DrawTexturedRect without an open 2D batch!");
 
     Ensure2DSpace(8);
-    RenderPacket & pkt = s_gifBlock;
+    GifWriter & pkt = s_gifBlock;
 
     // s_texOriginU/V both zero unless a scrap atlas is bound, in which case they shift the
     // coordinates from the image's own space into its corner of the atlas.

@@ -487,7 +487,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::lm::Init();
     ps2::mod::Init();
     ps2::cmdbuf::Init(); // after mod::Init: the chain halves live in the arena it reserves
-    ps2::vu1::Init();   // after cmdbuf::Init: the microprogram upload goes out on the chain
+    ps2::vu1::Init();    // after cmdbuf::Init: the microprogram upload goes out on the chain
     ps2::view::Init();
 
     s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);

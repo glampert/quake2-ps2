@@ -37,6 +37,13 @@ constexpr int kBlockTailQwords = 1;
 constexpr int kClearBlockQwords = gs::kClearQwords;
 constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
 
+// True only between Begin/EndFrame.
+static bool s_frameStarted = false;
+
+// Whether a 2D section is accumulating. Distinct from a block being open: the clear opens a block
+// of its own, and a 2D section can outlive a block across a split.
+static bool s_in2D = false;
+
 // The GIF block currently open - the clear at the top of the frame, or the 2D overlay - as a
 // cursor into the command buffer's own memory. Engaged only between OpenGifBlock and
 // CloseGifBlock, which is also what says whether a block is open.
@@ -45,12 +52,6 @@ static std::optional<gs::GifWriter> s_gifBlock;
 // High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
 // rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
 static int s_gifBlockPeakQwords = 0;
-
-// Whether a 2D section is accumulating. Distinct from a block being open: the clear opens a block
-// of its own, and a 2D section can outlive a block across a split.
-static bool s_in2D = false;
-
-static bool s_frameStarted = false;
 
 // The framebuffer the chain in flight is drawing into - what DISPFB is pointed at once it has
 // been fenced. Not the same as detail::g_drawCtx once a frame is left drawing while the next one is
@@ -61,15 +62,6 @@ static std::optional<gs::DrawContext> s_inFlightCtx;
 // Background colour for the frame clear. Distinctive dark blue, so an unwritten pixel is obvious;
 // ref.cpp sets black for release builds.
 static u8 s_clearColor[3] = { 0x20, 0x20, 0x38 };
-
-// ps2_gs_latency: leave the frame's chain drawing at EndFrame and show it at the *next* one, so
-// the GS rasterises frame N while the EE builds N+1, instead of the EE standing at the fence
-// waiting for it. Costs one frame of input lag, which is why it is a cvar and not a constant -
-// sampled each EndFrame so it can be flipped live and judged on hardware.
-static const cvar_t * s_gsLatency = nullptr;
-
-// ps2_fb_dither: sampled every frame so the 5:5:5 banding it hides can be compared on the spot.
-static const cvar_t * s_enableDither = nullptr;
 
 // Opens a DIRECT block and points a GIF writer at its payload.
 //
@@ -134,8 +126,8 @@ void Ensure2D()
 
 // Empties the whole pipeline: submits the frame as far as it has been built and blocks until the
 // GS has finished drawing every bit of it - and anything left over from the frame before, which
-// under ps2_gs_latency may still be rasterising. The frame then carries on building where it left
-// off: this is a stall, not a reset, and no pointer into the buffer moves.
+// under a deferred present may still be rasterising. The frame then carries on building where it
+// left off: this is a stall, not a reset, and no pointer into the buffer moves.
 //
 // Its cost to the buffer is the terminator the kick writes, which every draw already reserves -
 // see cmdbuf::kTerminatorQwords. It must not reserve anything itself: this fires in the middle of
@@ -209,7 +201,7 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
 }
 
 // Waits for the chain in flight to have been drawn, then puts its framebuffer on screen. A no-op
-// when there is nothing outstanding, which is how the two ps2_gs_latency paths share it.
+// when there is nothing outstanding, which is how the deferred and immediate paths share it.
 //
 // **Why this is the top of a frame and not the bottom of the previous one.** There are two
 // framebuffers, so the one the GS may be drawing into and the one being scanned out have to be
@@ -220,8 +212,8 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
 // nobody is looking.
 void PresentFrameInFlight()
 {
-    // Nothing waiting to be shown: either EndFrame already presented this frame (ps2_gs_latency
-    // off, where this is then the no-op at the next BeginFrame) or none has been kicked yet. The
+    // Nothing waiting to be shown: either EndFrame already presented this frame (the immediate
+    // path, where this is then the no-op at the next BeginFrame) or none has been kicked yet. The
     // early out has to come before the vsync, not after - falling through would spend a whole
     // field here and a second one at the frame's real present, halving the frame rate.
     if (!s_inFlightCtx.has_value())
@@ -383,13 +375,6 @@ void EnsureTextureResident(const tex::Texture & texture)
 // Frame lifecycle
 // ------------------------------------------------------------------------------------------------
 
-void Init()
-{
-    s_gsLatency    = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
-    s_enableDither = Cvar_Get("ps2_fb_dither", "0", CVAR_ARCHIVE); // the skybox looks worse with it on
-    detail::g_drawCtx      = gs::DrawContext::Ctx1;
-}
-
 void SetClearColor(const u8 r, const u8 g, const u8 b)
 {
     s_clearColor[0] = r;
@@ -397,14 +382,14 @@ void SetClearColor(const u8 r, const u8 g, const u8 b)
     s_clearColor[2] = b;
 }
 
-void BeginFrame()
+void BeginFrame(const bool dither)
 {
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
 
-    // Retires and shows the previous frame when ps2_gs_latency left it drawing. Already done - by
-    // EndFrame itself - when the cvar is off, and this is then the no-op that lets the two paths
-    // share everything below.
+    // Retires and shows the previous frame when EndFrame left it drawing. Already done - by
+    // EndFrame itself - when it presented immediately, and this is then the no-op that lets the
+    // two paths share everything below.
     PresentFrameInFlight();
 
     cmdbuf::BeginFrame();
@@ -413,7 +398,7 @@ void BeginFrame()
     // so the VU1 3D world that follows in the same buffer cannot land on an uncleared
     // framebuffer whatever the two GIF paths do.
     gs::GifWriter & clear = OpenGifBlock(kClearBlockQwords);
-    gs::EmitClear(clear, detail::g_drawCtx, s_clearColor, s_enableDither->value != 0.0f);
+    gs::EmitClear(clear, detail::g_drawCtx, s_clearColor, dither);
     CloseGifBlock();
 
     // Nothing is sent here. The clear sits at the head of the buffer and goes out with the rest
@@ -428,7 +413,7 @@ void BeginFrame()
     vram::BeginFrame();
 }
 
-void EndFrame()
+void EndFrame(const bool deferPresent)
 {
     PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
     s_frameStarted = false;
@@ -443,15 +428,15 @@ void EndFrame()
     s_inFlightCtx = detail::g_drawCtx;
     cmdbuf::Kick();
 
-    // ps2_gs_latency is only about who waits for that kick. Off, this frame is fenced and shown
-    // before EndFrame returns. On, it is left drawing and PresentFrameInFlight at the next
+    // 'deferPresent' is only about who waits for that kick. Clear, this frame is fenced and
+    // shown before EndFrame returns. Set, it is left drawing and PresentFrameInFlight at the next
     // BeginFrame picks it up - so the GS rasterises it across the engine's own frame work instead
     // of the EE standing at the fence.
     //
-    // Turning it off mid-run costs one frame: the one left drawing is fenced by the Kick above
-    // and then never shown, because the line above it has already claimed s_inFlightCtx. That is
-    // a duplicated field on screen, not a corrupt one, and it is not worth code to avoid.
-    if (s_gsLatency->value == 0.0f)
+    // Clearing it mid-run costs one frame: the one left drawing is fenced by the Kick above and
+    // then never shown, because the line above it has already claimed s_inFlightCtx. That is a
+    // duplicated field on screen, not a corrupt one, and it is not worth code to avoid.
+    if (!deferPresent)
     {
         PresentFrameInFlight();
     }

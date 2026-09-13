@@ -51,6 +51,15 @@ static const cvar_t * s_showVramStats    = nullptr;
 static const cvar_t * s_showDrawStats    = nullptr;
 static const cvar_t * s_showProfileStats = nullptr;
 
+// How the frame is steered, sampled every frame and handed to rc::Begin/EndFrame so both can be
+// flipped live and judged on hardware.
+//
+// ps2_gs_latency leaves the frame drawing at EndFrame and shows it at the next one, at the cost of
+// one frame of input lag. ps2_fb_dither hides the banding a 16-bit framebuffer shows on gradients
+// (the skybox looks worse with it on, which is why it is off by default).
+static const cvar_t * s_gsLatency        = nullptr;
+static const cvar_t * s_enableDither     = nullptr;
+
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
 static const ps2::tex::Texture * s_texBacktile = nullptr;
@@ -485,11 +494,11 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     // The cvars the GS and the texture cache are configured with. Both are latched here: the
     // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
     // GS may only have rewritten while it is idle, so a change to either takes effect next run.
-    const cvar_t * const fb16Bit   = Cvar_Get("ps2_fb_16bit", "1", CVAR_ARCHIVE);
+    const cvar_t * const fb16Bit   = Cvar_Get("ps2_fb_16bit",  "1", CVAR_ARCHIVE);
     const cvar_t * const intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
 
-    // Below 1 would darken rather than brighten, which is not what the knob is for - ref_gl
-    // floors it at 1 too.
+    // Below 1 would darken rather than brighten, which is not what the cvar is for
+    // - ref_gl floors it at 1 too.
     const float intensityScale = (intensity->value < 1.0f) ? 1.0f : intensity->value;
 
     ps2::gs::Config gsConfig;
@@ -505,8 +514,10 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::mod::Init();
     ps2::cmdbuf::Init(); // after mod::Init: the chain halves live in the arena it reserves
     ps2::vu1::Init();    // after cmdbuf::Init: the microprogram upload goes out on the chain
-    ps2::rc::Init();
     ps2::view::Init();
+
+    s_gsLatency    = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
+    s_enableDither = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
 
     s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
     s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
@@ -716,7 +727,7 @@ void PS2_BeginFrame(float cameraSeparation)
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
     // each 2D->3D boundary and in rc::EndFrame().
-    ps2::rc::BeginFrame();
+    ps2::rc::BeginFrame(s_enableDither->value != 0.0f);
 }
 
 void PS2_EndFrame()
@@ -753,7 +764,7 @@ void PS2_EndFrame()
     // zero in a release-style configuration.
     DrawDebugOverlays();
 
-    ps2::rc::EndFrame();
+    ps2::rc::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
 }
 
 void PS2_RenderFrame(refdef_t * viewDef)

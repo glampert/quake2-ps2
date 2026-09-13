@@ -182,9 +182,9 @@ private:
 #endif // PS2_QUAKE_ASSERTS
     }
 
-    qword_t * m_base;            // start of the block being written
-    qword_t * m_ptr;             // write cursor, advanced by every append
-    const int m_maxQwords;       // what may be written at m_base
+    qword_t * m_base;      // start of the block being written
+    qword_t * m_ptr;       // write cursor, advanced by every append
+    const int m_maxQwords; // what may be written at m_base
 };
 
 } // namespace ps2::gs

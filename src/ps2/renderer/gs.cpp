@@ -158,8 +158,6 @@ private:
     std::optional<GifWriter> m_writer;
 };
 
-static framebuffer_t s_frameBuffer[2];
-
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
 
 // The 4x4 ordered dither matrix the GS adds before truncating a pixel to 5 bits
@@ -222,21 +220,11 @@ Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
     return texture.width * texture.height * tex::BytesPerTexel(texture.format);
 }
 
-} // namespace
-
-// ------------------------------------------------------------------------------------------------
-// Public API
-// ------------------------------------------------------------------------------------------------
-
-// What the inline accessors, register builders and 2D resolve in gs.h read. Init fills it, and
-// Invalidate2DBinding/EmitTextureBind move 'currentTex'; nothing else writes it.
-namespace detail { State g_state; }
-
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
 // transfer. Only ever called from Init now, before a frame has ever started, so
 // it can take the shared upload packet without fighting the streamed texture
 // uploads for it and without having to fence anything.
-static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
+void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 {
     GifWriter & upload = s_texUploadPacket.Begin();
 
@@ -268,11 +256,21 @@ static void UploadCluts(const tex::Clut * first, const tex::Clut * second)
 // ships. A PixelFormat::RGBA32 texture (a .tga replacement) carries the scale in
 // its own texels instead and picks up a new value when it is next loaded - the
 // same restart ref_gl needs for all of them.
-static void BuildLitPalette(const u32 * palette, const float intensity)
+void BuildLitPalette(const u32 * palette, const float intensity)
 {
     s_litPaletteClut.BuildFromPaletteScaled(palette, intensity);
     UploadCluts(&s_litPaletteClut, nullptr);
 }
+
+} // namespace
+
+// ------------------------------------------------------------------------------------------------
+// Public API
+// ------------------------------------------------------------------------------------------------
+
+// What the inline accessors, register builders and 2D resolve in gs.h read. Init fills it, and
+// Invalidate2DBinding/EmitTextureBind move 'currentTex'; nothing else writes it.
+namespace detail { State g_state; }
 
 void Init(const Config & cfg)
 {
@@ -292,14 +290,15 @@ void Init(const Config & cfg)
     // nothing reads: every blend here scales by *source* alpha.
     const int framePsm = cfg.framebuffer16Bit ? GS_PSM_16 : GS_PSM_32;
 
-    s_frameBuffer[0].width   = static_cast<unsigned int>(cfg.width);
-    s_frameBuffer[0].height  = static_cast<unsigned int>(cfg.height);
-    s_frameBuffer[0].mask    = 0;
-    s_frameBuffer[0].psm     = static_cast<unsigned int>(framePsm);
-    s_frameBuffer[0].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
+    framebuffer_t * const frames = detail::g_state.framebuffer;
+    frames[0].width   = static_cast<unsigned int>(cfg.width);
+    frames[0].height  = static_cast<unsigned int>(cfg.height);
+    frames[0].mask    = 0;
+    frames[0].psm     = static_cast<unsigned int>(framePsm);
+    frames[0].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
-    s_frameBuffer[1]         = s_frameBuffer[0];
-    s_frameBuffer[1].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
+    frames[1]         = frames[0];
+    frames[1].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
     // Z-buffer for the 3D world; larger depth = closer (the projection maps the
     // near plane to 0xFFFF), hence GREATER_EQUAL. Depth is 16-bit either way -
@@ -340,7 +339,7 @@ void Init(const Config & cfg)
     detail::g_state.alphaRampClut     = s_alphaRampClut.vramAddr;
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
-    graph_initialize(static_cast<int>(s_frameBuffer[0].address), cfg.width, cfg.height, framePsm, 0, 0);
+    graph_initialize(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, 0, 0);
 
     s_texUploadPacket.Init(kTexUploadQwords);
 
@@ -356,9 +355,9 @@ void Init(const Config & cfg)
     // On the upload packet, not the frame chain: gs::Init runs before mod::Init, and the
     // chain's halves live in the arena that reserves (see PS2_RefInit's ordering note).
     GifWriter & pkt = s_texUploadPacket.Begin();
-    pkt.SetupEnvironment(Index(DrawContext::Ctx0), s_frameBuffer[0], zbuffer);
+    pkt.SetupEnvironment(Index(DrawContext::Ctx0), frames[0], zbuffer);
     pkt.TextureWrapping(Index(DrawContext::Ctx0), wrap);
-    pkt.SetupEnvironment(Index(DrawContext::Ctx1), s_frameBuffer[1], zbuffer);
+    pkt.SetupEnvironment(Index(DrawContext::Ctx1), frames[1], zbuffer);
     pkt.TextureWrapping(Index(DrawContext::Ctx1), wrap);
 
     // DIMX is global rather than per-context and never changes, so it is set up
@@ -458,7 +457,7 @@ void PresentFramebuffer(const DrawContext ctx)
         graph_wait_vsync();
     }
 
-    const framebuffer_t & fb = s_frameBuffer[Index(ctx)];
+    const framebuffer_t & fb = detail::g_state.framebuffer[Index(ctx)];
     graph_set_framebuffer_filtered(static_cast<int>(fb.address),
                                    static_cast<int>(fb.width),
                                    static_cast<int>(fb.psm), 0, 0);
@@ -532,7 +531,7 @@ void EmitClear(GifWriter & w, const DrawContext ctx, const u8 color[3], const bo
     // Dithering hides the banding a 5:5:5 framebuffer would otherwise show on smooth gradients.
     // Rewritten every frame (one qword) purely so the caller's knob can be flipped live to
     // compare; it does nothing to a 32-bit framebuffer.
-    const bool dtheOn = (s_frameBuffer[0].psm == GS_PSM_16) && dither;
+    const bool dtheOn = (detail::g_state.framebuffer[0].psm == GS_PSM_16) && dither;
     w.SetRegister(static_cast<u64>(GS_REG_DTHE), GS_SET_DTHE(dtheOn ? 1 : 0));
 
     // The z=0 sprite with an ALLPASS z-test clears color and depth in one pass (0 = farthest).

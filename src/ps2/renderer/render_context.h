@@ -268,17 +268,20 @@ Q_ALWAYS_INLINE RenderContext & Ctx()
 // Frame lifecycle
 // --------------------------------------------------------------------------------------------
 
-// Reads the cvars the frame is steered by. Call once, after gs::Init and cmdbuf::Init.
-void Init();
-
 // Opens the frame: shows the previous one if it was left drawing, rewinds the command buffer
 // and writes the screen clear at the head of it. 2D and 3D may then be drawn in any order, and
 // both record into the same buffer.
-void BeginFrame();
+//
+// 'dither' enables the GS's ordered dither, which hides the banding a 16-bit framebuffer shows on
+// smooth gradients and does nothing to a 32-bit one. Passed per frame so it can be flipped live.
+void BeginFrame(bool dither);
 
-// Closes the frame: flushes any pending 2D, submits the command buffer, and - unless
-// ps2_gs_latency leaves it drawing for the next BeginFrame to show - waits for the GS and flips.
-void EndFrame();
+// Closes the frame: flushes any pending 2D and submits the command buffer.
+//
+// 'deferPresent' leaves the frame drawing for the next BeginFrame to show, so the GS rasterises it
+// while the EE builds the frame after - one frame of latency bought for the fence the EE would
+// otherwise stand at. Clear it and this waits for the GS and flips before returning.
+void EndFrame(bool deferPresent);
 
 // The GS drawing context being rendered into this frame. Every context-indexed register a caller
 // programs itself, and the prim CTXT bit, must match it.

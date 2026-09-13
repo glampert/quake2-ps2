@@ -73,6 +73,7 @@ namespace detail {
 struct State
 {
     int width, height;               // as configured
+    framebuffer_t framebuffer[2];    // one per drawing context: the pair that alternates
     zbuffer_t zbuffer;               // where the z-buffer is, its format, and the real z-test
     vram::Address globalPaletteClut; // the three fixed CLUTs, outside the texture heap
     vram::Address litPaletteClut;

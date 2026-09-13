@@ -8,32 +8,11 @@
 
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
+#include "ps2/renderer/draw_stats.h"
 
 namespace ps2::view {
 
 void Init();
-
-// Performance counters for one RenderFrame, tracking what the 3D view walked,
-// culled, clipped and submitted. Feeds the ps2_show_drawstats debug overlay.
-struct DrawStats
-{
-    int nodesWalked;    // BSP nodes + leafs visited by the world walk.
-    int surfaces;       // Opaque world surfaces drawn.
-    int surfacesAlpha;  // Translucent surfaces deferred to the final alpha pass.
-    int skyFaces;       // Skybox cube faces submitted (0-6).
-    int trisDrawn;      // Triangles submitted to VU1 (after EE clipping).
-    int trisClipped;    // Triangles re-cut against the VU clip volume.
-    int trisCulled;     // Triangles dropped whole, entirely outside the view volume.
-    int surfsUnclipped; // World surface gathers that skipped the clipper, counted once per pass.
-    int boxesCulled;    // Whole meshes culled via bounding box checks.
-    int drawBatches;    // vu1::DrawTriangles calls (one or more per texture).
-    int entities;       // Entity models drawn (after frustum culling).
-    int particles;      // Particle billboards drawn.
-    int dlights;        // Dynamic light flares drawn.
-};
-
-// Stats of the most recent RenderFrame; all zeros before the first 3D frame.
-DrawStats & GetDrawStats();
 
 // Entity angles + origin as a world transform, in the row-vector convention
 // (rotations apply first, then the translation). 'flipPitchAngle' picks the sign

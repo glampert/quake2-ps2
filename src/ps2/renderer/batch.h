@@ -48,9 +48,9 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/clip.h"
+#include "ps2/renderer/draw_stats.h"
 #include "ps2/renderer/frame_chain.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/renderer/render_view.h"
 #include "ps2/renderer/vu1.h"
 
 namespace ps2::batch {

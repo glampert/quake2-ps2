@@ -216,7 +216,16 @@ private:
     static Q_ALWAYS_INLINE packet2_t * Packet() { return cmdbuf::Packet(); }
 };
 
+namespace detail {
+// The one recorder. Exposed so Ctx() can be inline, which will matter once the recorder carries
+// state the emitters read per call; written only by render_context.cpp.
+extern RenderContext g_context;
+} // namespace detail
+
 // The frame's recorder.
-RenderContext & Ctx();
+Q_ALWAYS_INLINE RenderContext & Ctx()
+{
+    return detail::g_context;
+}
 
 } // namespace ps2::rc

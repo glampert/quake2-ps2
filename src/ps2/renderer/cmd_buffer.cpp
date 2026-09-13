@@ -194,7 +194,9 @@ void BeginFrame()
 
     // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
     // frames from now and whatever was built and never submitted would simply not have drawn.
-    PS2_AssertMsg(QwordCount() == s_kickedQwords,
+    // Through Current() rather than the inline QwordCount(): EndFrame unpublished the pointer
+    // that one reads, and this runs before the swap republishes it.
+    PS2_AssertMsg(static_cast<int>(packet2_get_qw_count(Current())) == s_kickedQwords,
                   "cmdbuf::BeginFrame with work in the half nothing ever kicked!");
 
     // A no-op in practice, and deliberately not relied on to be: gs::BeginFrame fences the
@@ -225,6 +227,12 @@ void EndFrame()
     s_frameQwordsLastFrame = s_frameQwords + used;
     s_kicksLastFrame = s_kicks;
     s_emergencyDrainsLasFrame = s_emergencyDrains;
+
+    // Unpublish the half. Packet() carries no assert - it is called hundreds of times a frame -
+    // so this is what makes a use outside Begin/EndFrame fail: a null here is a TLB fault at the
+    // first emission, rather than a write into a half that is still mapped and still looks
+    // plausible until the frame it belongs to draws it.
+    detail::g_packet = nullptr;
 }
 
 // ------------------------------------------------------------------------------------------------

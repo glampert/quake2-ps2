@@ -239,12 +239,6 @@ constexpr signed char kDitherMatrix[16] =
      1, -1,  0, -2,
 };
 
-// Set when a VRAM allocation evicted a texture: draws already queued (or still
-// rasterising) may reference the freed range, so the next upload must sync the
-// GS first. Sticky until a GS-idle point - a block freed early in the frame
-// can be handed out later without a new eviction.
-static bool s_vramReuseHazard = false;
-
 // Texture bound in the current 2D section, and the texel offset draws through it
 // must be shifted by - nonzero only while a scrap atlas is bound, where the bound
 // texture is the atlas and the requested image is a sub-rectangle of it.
@@ -318,13 +312,13 @@ GifWriter & OpenGifBlock(const int minQwords)
 
     cmdbuf::Reserve(minQwords + rc::RenderContext::kDirectOverheadQwords);
 
-    rc::RenderContext & packet = rc::Ctx();
-    packet.OpenDirect();
+    rc::RenderContext & ctx = rc::Ctx();
+    ctx.OpenDirect();
 
     const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
     PS2_Assert(capacity >= minQwords);
 
-    return s_gifBlock.emplace(packet.DirectCursor(), capacity);
+    return s_gifBlock.emplace(ctx.DirectCursor(), capacity);
 }
 
 // Closes the open block, handing the chain back the cursor the libdraw emitters advanced.
@@ -336,9 +330,9 @@ void CloseGifBlock()
 
     s_gifBlock->EndGifPacket();
 
-    rc::RenderContext & packet = rc::Ctx();
-    packet.SetDirectCursor(s_gifBlock->Cursor());
-    packet.CloseDirect();
+    rc::RenderContext & ctx = rc::Ctx();
+    ctx.SetDirectCursor(s_gifBlock->Cursor());
+    ctx.CloseDirect();
 
     const int used = s_gifBlock->QwordCount();
     if (used > s_gifBlockPeakQwords) { s_gifBlockPeakQwords = used; }
@@ -645,7 +639,7 @@ void BeginFrame()
     // the *top* of a frame buys, and it is what keeps everything from here down - the eviction
     // pins, the reuse hazard, the one-frame LRU stamp - reading exactly as it did before.
     PS2_AssertMsg(!cmdbuf::KickInFlight(), "BeginFrame with a frame still drawing!");
-    s_vramReuseHazard = false;
+    vram::ClearReuseHazard();
     vram::BeginFrame();
 }
 
@@ -709,10 +703,10 @@ void FlushPending2D()
     // lands after it because it is later in the chain, and cannot overtake it at the GIF
     // because every block opens with a VIF FLUSH.
     //
-    // The one job this no longer does is making the GS idle, so s_vramReuseHazard is not
-    // cleared here any more - a texture bound by the 2D just closed may still be sampled by
-    // draws nothing has sent. FenceGs is what clears it now, and vram::TryAllocate refusing to
-    // evict anything bound this frame is what keeps that rare.
+    // The one job this no longer does is making the GS idle, so the VRAM reuse hazard is not
+    // cleared here - a texture bound by the 2D just closed may still be sampled by draws
+    // nothing has sent. FenceGs is what clears it, and vram::TryAllocate refusing to evict
+    // anything bound this frame is what keeps that rare.
 }
 
 void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
@@ -795,7 +789,7 @@ static void FenceGs()
         OpenGifBlock(k2DBlockMinQwords);
     }
 
-    s_vramReuseHazard = false;
+    vram::ClearReuseHazard();
 }
 
 // Finds 'sizeWords' of VRAM for the texture, escalating when the heap is full.
@@ -814,10 +808,7 @@ static void FenceGs()
 // before ever getting here.
 static vram::Address AllocateVramFor(const tex::Texture & texture, int sizeWords)
 {
-    bool evicted = false;
-
-    vram::Address addr = vram::TryAllocate(texture, sizeWords, &evicted);
-    s_vramReuseHazard |= evicted;
+    vram::Address addr = vram::TryAllocate(texture, sizeWords);
 
     if (addr == vram::Address::Invalid)
     {
@@ -829,19 +820,17 @@ static vram::Address AllocateVramFor(const tex::Texture & texture, int sizeWords
         vram::UnpinAll();
         vram::NoteOomSync();
 
-        addr = vram::TryAllocate(texture, sizeWords, &evicted);
-        s_vramReuseHazard |= evicted;
+        addr = vram::TryAllocate(texture, sizeWords);
     }
 
     if (addr == vram::Address::Invalid)
     {
         // Enough free words, just not contiguous. The GS is already idle from
         // the rung above, so the wholesale evict-and-repack is safe here.
-        s_vramReuseHazard |= vram::Defragment();
+        vram::Defragment();
         s_currentTex = nullptr;
 
-        addr = vram::TryAllocate(texture, sizeWords, &evicted);
-        s_vramReuseHazard |= evicted;
+        addr = vram::TryAllocate(texture, sizeWords);
     }
 
     if (addr == vram::Address::Invalid) [[unlikely]]
@@ -904,7 +893,7 @@ void EnsureTextureResident(const tex::Texture & texture)
 
         // Queued or in-flight draws may still sample VRAM the allocation just
         // recycled; the upload below would pull it out from under them.
-        if (s_vramReuseHazard)
+        if (vram::HasReuseHazard())
         {
             FenceGs();
         }
@@ -971,11 +960,7 @@ void ReleaseTexture(const tex::Texture & texture)
         return;
     }
 
-    vram::Free(texture);
-
-    // Queued or in-flight draws may still sample the freed range; the next
-    // upload that lands there must sync the GS first, same as an eviction.
-    s_vramReuseHazard = true;
+    vram::Free(texture); // raises the reuse hazard
 }
 
 void DefragVramHeap()
@@ -986,10 +971,9 @@ void DefragVramHeap()
     }
 
     // Every texture is non-resident now: the 2D dedupe would otherwise skip the
-    // rebind of the current one and sample VRAM it no longer owns, and queued
-    // draws may still reference the recycled heap, same as ReleaseTexture.
-    s_currentTex      = nullptr;
-    s_vramReuseHazard = true;
+    // rebind of the current one and sample VRAM it no longer owns. The recycled
+    // heap raises the reuse hazard inside vram::Defragment.
+    s_currentTex = nullptr;
 }
 
 void SetTextureFor2D(const tex::Texture & texture)

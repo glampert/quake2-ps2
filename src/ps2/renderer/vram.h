@@ -40,15 +40,15 @@ int HeapTotalWords();
 // needed - never ones bound this frame, whose draws may still be in flight.
 // Evicted textures get vramAddr = kNotResident and self-heal on their next bind.
 // Returns the block's word address, or Address::Invalid when the request cannot
-// be met without touching a texture bound this frame; sets *outEvicted when
-// anything was evicted - the caller must sync the GS before writing over reused
-// VRAM.
+// be met without touching a texture bound this frame. An eviction raises the
+// reuse hazard below, which the caller must resolve before writing over the
+// VRAM it handed out.
 //
 // Failure is not fatal and not the end of the road: the caller fences the GS -
 // sending the frame's chain so far and waiting for it, which is what the this-frame
 // protection guards against - then calls UnpinAll and retries, then Defragment and
 // retries. See gs::EnsureTextureResident.
-Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvicted);
+Address TryAllocate(const tex::Texture & texture, int sizeWords);
 
 // Drops the this-frame eviction protection from every resident texture, making
 // the whole heap evictable again. Only legal once the GS has been fenced - the pins
@@ -93,6 +93,20 @@ void NoteTextureUpload();
 // per-frame counters. A nonzero count means the frame's working set outgrew the
 // heap and the renderer traded pipelining for it.
 void NoteOomSync();
+
+// --------------------------------------------------------------------------------------------
+// Reuse hazard
+// --------------------------------------------------------------------------------------------
+
+// Whether VRAM has been handed out again, or given back, since this was last cleared - by an
+// eviction inside TryAllocate, by Free, or by Defragment. While it is set, draws already built
+// (or still rasterising) may reference a range something else now owns, so anything about to
+// write over that VRAM must make the GS idle first and clear this.
+//
+// Sticky on purpose: a block freed early in a frame can be handed out later in it without a
+// second eviction, and the hazard that created is the same one.
+bool HasReuseHazard();
+void ClearReuseHazard();
 
 // Prints the whole block list and the current stats: which textures hold VRAM,
 // how much each takes and how recently each was bound. For diagnosing a failed

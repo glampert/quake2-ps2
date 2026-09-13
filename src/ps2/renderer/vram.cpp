@@ -63,6 +63,9 @@ static Block * s_blockList         = nullptr; // null until Init()
 static int     s_blockCount        = 0;       // blocks currently in s_blockList
 static u32     s_frame             = 0;
 
+// Set when VRAM was recycled or given back; see HasReuseHazard in vram.h.
+static bool    s_reuseHazard       = false;
+
 // The heap extent Init() took over (Defragment() remakes the list from it) and
 // the debug-overlay stats for this frame.
 static int s_heapBaseWords     = 0;
@@ -374,13 +377,12 @@ int HeapTotalWords()
     return s_heapTotalWords;
 }
 
-Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvicted)
+Address TryAllocate(const tex::Texture & texture, int sizeWords)
 {
     PS2_AssertMsg(s_blockList != nullptr, "vram::Init not called!");
     PS2_AssertMsg(texture.vramAddr == tex::Texture::kNotResident, "Texture already resident!");
-    PS2_Assert(sizeWords > 0 && outEvicted != nullptr);
+    PS2_Assert(sizeWords > 0);
 
-    *outEvicted = false;
 
     for (;;)
     {
@@ -441,7 +443,7 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords, bool * outEvict
 
         victim->owner->vramAddr = tex::Texture::kNotResident;
         victim->owner = nullptr;
-        *outEvicted = true;
+        s_reuseHazard = true;
         CoalesceFree(victim);
     }
 }
@@ -508,6 +510,10 @@ void Free(const tex::Texture & texture)
         texture.vramAddr = tex::Texture::kNotResident;
         block->owner     = nullptr;
         CoalesceFree(block);
+
+        // Queued or in-flight draws may still sample the range just freed, so the next upload
+        // that lands there has to make the GS idle first - same as an eviction.
+        s_reuseHazard = true;
         return;
     }
 
@@ -535,6 +541,9 @@ bool Defragment()
 
     ResetHeap();
 
+    // Everything that was resident now is not, and its VRAM is about to be handed out again.
+    s_reuseHazard |= (evicted > 0);
+
     Com_DPrintf("VRAM: heap defragmented, %d resident textures evicted.\n", evicted);
     return evicted > 0;
 }
@@ -542,6 +551,16 @@ bool Defragment()
 void NoteTextureUpload()
 {
     ++s_uploadsThisFrame;
+}
+
+bool HasReuseHazard()
+{
+    return s_reuseHazard;
+}
+
+void ClearReuseHazard()
+{
+    s_reuseHazard = false;
 }
 
 void NoteOomSync()

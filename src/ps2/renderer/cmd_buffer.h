@@ -96,7 +96,7 @@ Q_ALWAYS_INLINE int QwordCount()
 // the terminator Kick() appends, because a half with no room left for its own END tag could not
 // be drained. Reserve() measures against exactly this, and it is the capacity to hand any helper
 // that range-checks its own writes.
-Q_ALWAYS_INLINE int QwordCapacity()
+constexpr int QwordCapacity()
 {
     return static_cast<int>(kHalfQwords) - kTerminatorQwords;
 }

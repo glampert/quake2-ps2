@@ -9,13 +9,8 @@
 
 namespace ps2::rc {
 
-// The one recorder. Stateless beyond the command buffer it writes into, so it needs no
-// initialization of its own - cmdbuf::Init is what has to have run before it is used.
-static RenderContext s_context;
-
-RenderContext & Ctx()
-{
-    return s_context;
-}
+// The one recorder. Needs no initialization of its own - cmdbuf::Init is what has to have run
+// before it is used.
+RenderContext detail::g_context;
 
 } // namespace ps2::rc

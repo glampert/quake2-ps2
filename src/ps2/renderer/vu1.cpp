@@ -314,7 +314,7 @@ inline void DepthRangeFor(DrawFlags flags, float * outScale, float * outOffset)
 //
 // Returns whether the batch blends, since the drawing tag needs it for the
 // prim's ABE bit and it is decided here.
-bool AddBatchStateBlock(rc::RenderContext & pkt, const tex::Texture & texture, int ctx, DrawFlags flags)
+bool AddBatchStateBlock(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx, DrawFlags flags)
 {
     // The blend flags select alternative equations, they are not switches to
     // combine: each one brings the ABE bit and the depth-write mask with it.
@@ -328,13 +328,13 @@ bool AddBatchStateBlock(rc::RenderContext & pkt, const tex::Texture & texture, i
 
     // Five A+D register writes: pixel tests, the texture bind, the blend
     // function and the depth-write mask for this context...
-    pkt.AddQword(GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
-    pkt.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + ctx));
-    pkt.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1  + ctx));
-    pkt.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0  + ctx));
-    pkt.AddQword(MakeAlphaData(flags),  static_cast<u64>(GS_REG_ALPHA + ctx));
-    pkt.AddQword(gs::ZBufData(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite)),
-                 static_cast<u64>(GS_REG_ZBUF + ctx));
+    ctx.AddQword(GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
+    ctx.AddQword(MakeTestData(), static_cast<u64>(GS_REG_TEST + drawCtx));
+    ctx.AddQword(MakeTex1Data(texture), static_cast<u64>(GS_REG_TEX1  + drawCtx));
+    ctx.AddQword(MakeTex0Data(texture), static_cast<u64>(GS_REG_TEX0  + drawCtx));
+    ctx.AddQword(MakeAlphaData(flags),  static_cast<u64>(GS_REG_ALPHA + drawCtx));
+    ctx.AddQword(gs::ZBufData(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite)),
+                 static_cast<u64>(GS_REG_ZBUF + drawCtx));
 
     return blended;
 }
@@ -344,10 +344,10 @@ bool AddBatchStateBlock(rc::RenderContext & pkt, const tex::Texture & texture, i
 // turn the prim's ABE bit on and mask depth writes; NoDepthWrite masks them
 // without the ABE bit; untextured ones clear the TME bit (the texture
 // registers are still written, just not sampled).
-void AddBatchGifTags(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
+void AddBatchGifTags(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
                      int vertCount, DrawFlags flags, bool packedRgbaOut = false)
 {
-    const bool blended = AddBatchStateBlock(pkt, texture, ctx, flags);
+    const bool blended = AddBatchStateBlock(ctx, texture, drawCtx, flags);
     const int  tme     = HasDrawFlag(flags, DrawFlags::Untextured) ? 0 : 1;
     const int  abe     = blended ? 1 : 0;
 
@@ -361,12 +361,12 @@ void AddBatchGifTags(rc::RenderContext & pkt, const tex::Texture & texture, int 
     // parses as 'blended ? 1 : (0 << 6)' and drops the bit at position 0 -
     // inside the PRIM field, where PRIM_TRIANGLE (3) already has that bit
     // set. Nothing warned and the primitive still drew, just never blended.
-    const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, ctx, 0);
+    const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, drawCtx, 0);
     // The programs that *compute* their color emit PACKED RGBAQ; the ones that
     // receive it already packed emit an A+D write. The register list has to
     // follow whichever this batch will run, so the caller says which.
     const bool packedRgba = packedRgbaOut || HasDrawFlag(flags, DrawFlags::DynamicLights);
-    pkt.AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
+    ctx.AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
                  packedRgba ? kLitVertexRegList : kVertexRegList);
 }
 
@@ -374,7 +374,7 @@ void AddBatchGifTags(rc::RenderContext & pkt, const tex::Texture & texture, int 
 // fixed low VU addresses. Both are chain payload rather than statics - see FrameConstants.
 //
 // kDrawSetupQwords is exactly what this appends, and ReserveChunk has already reserved it.
-void BeginDrawChain(rc::RenderContext & pkt, const math::Mat4 & mvp, DrawFlags flags)
+void BeginDrawChain(rc::RenderContext & ctx, const math::Mat4 & mvp, DrawFlags flags)
 {
     // Every chunk of a draw shares one flags value, so the batch's depth range
     // is a property of the whole chain and rides with the other constants.
@@ -392,7 +392,7 @@ void BeginDrawChain(rc::RenderContext & pkt, const math::Mat4 & mvp, DrawFlags f
     // Both unpacks below write absolute VU addresses, which the double buffer does not
     // protect, and the previous draw's last chunk is very likely still running: wait for it.
     // See kDrawSetupQwords.
-    pkt.AddFlush();
+    ctx.AddFlush();
 
     FrameConstants * const constants = cmdbuf::Alloc<FrameConstants>(1);
 
@@ -404,14 +404,14 @@ void BeginDrawChain(rc::RenderContext & pkt, const math::Mat4 & mvp, DrawFlags f
     constants->clipScale  = kClipScale;
     constants->colorClamp = kColorClamp;
 
-    pkt.AddUnpackData(kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
+    ctx.AddUnpackData(kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
 
     // s_lightConstants stays the source of truth - SetDynamicLights builds it once a frame -
     // and the chain gets a copy, for the same lifetime reason as the transform block.
     LightConstants * const lights = cmdbuf::Alloc<LightConstants>(1);
     *lights = s_lightConstants;
 
-    pkt.AddUnpackData(kLightBlockAddr, lights, kLightConstantsQwords, false);
+    ctx.AddUnpackData(kLightBlockAddr, lights, kLightConstantsQwords, false);
 }
 
 // Makes room in the chain for one chunk and (re)opens the draw's chain when it
@@ -422,12 +422,12 @@ void BeginDrawChain(rc::RenderContext & pkt, const math::Mat4 & mvp, DrawFlags f
 // with it, and the chunk that follows would otherwise transform against whatever
 // the previous draw happened to leave in VU memory. 'firstChunk' opens it for
 // the same reason at the top of a call, where nothing has emitted it yet.
-void ReserveChunk(rc::RenderContext & pkt, const int chunkQwords, const math::Mat4 & mvp,
+void ReserveChunk(rc::RenderContext & ctx, const int chunkQwords, const math::Mat4 & mvp,
                   const DrawFlags flags, const bool firstChunk)
 {
     if (cmdbuf::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
     {
-        BeginDrawChain(pkt, mvp, flags);
+        BeginDrawChain(ctx, mvp, flags);
     }
 }
 
@@ -465,12 +465,12 @@ void Init()
     // chain like every other VIF1 transfer, which is why vu1::Init has to run
     // after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the
     // Drain terminates, kicks and waits, so VU1 is ready once it returns.
-    rc::RenderContext & pkt = rc::Ctx();
-    pkt.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
-    pkt.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
-    pkt.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
-    pkt.AddMicroProgram(s_litTrisProgAddr, VU1Prog_LitTriangles_Code());
-    pkt.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
+    rc::RenderContext & ctx = rc::Ctx();
+    ctx.AddMicroProgram(s_texturedTrisProgAddr, VU1Prog_TexturedTriangles_Code());
+    ctx.AddMicroProgram(s_lerpedProgAddr, VU1Prog_LerpedTriangles_Code());
+    ctx.AddMicroProgram(s_particlesProgAddr, VU1Prog_Particles_Code());
+    ctx.AddMicroProgram(s_litTrisProgAddr, VU1Prog_LitTriangles_Code());
+    ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
     cmdbuf::Drain();
 }
 
@@ -489,26 +489,26 @@ constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 // Emits one chunk into the chain: batch header and GIF tags unpacked inline
 // to the current double buffer, the vertex data referenced in place, and the
 // MSCAL that runs the microprogram over it.
-static void AddBatchChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
+static void AddBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
                           const DrawVertex * verts, int vertCount, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxVertsPerBatch && (vertCount % 3) == 0);
-    pkt.EnsureSpace(kChunkChainQwords);
+    ctx.EnsureSpace(kChunkChainQwords);
 
-    pkt.OpenInlineUnpack(kBatchHeaderAddr, true);
+    ctx.OpenInlineUnpack(kBatchHeaderAddr, true);
     {
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(static_cast<u32>(vertCount));
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(static_cast<u32>(vertCount));
 
-        AddBatchGifTags(pkt, texture, ctx, vertCount, flags);
+        AddBatchGifTags(ctx, texture, drawCtx, vertCount, flags);
     }
-    pkt.CloseInlineUnpack();
+    ctx.CloseInlineUnpack();
 
-    pkt.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
+    ctx.AddUnpackData(kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    pkt.AddStartProgram(HasDrawFlag(flags, DrawFlags::DynamicLights)
+    ctx.AddStartProgram(HasDrawFlag(flags, DrawFlags::DynamicLights)
                         ? s_litTrisProgAddr : s_texturedTrisProgAddr);
 }
 
@@ -526,18 +526,18 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     gs::EnsureTextureResident(texture);
 
-    const int ctx = gs::CurrentContext();
-    rc::RenderContext & pkt = rc::Ctx();
+    const int drawCtx = gs::CurrentContext();
+    rc::RenderContext & ctx = rc::Ctx();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
     for (int firstVert = 0; firstVert < vertCount; firstVert += kMaxVertsPerBatch)
     {
-        ReserveChunk(pkt, kChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
+        ReserveChunk(ctx, kChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxVertsPerBatch) ? remaining : kMaxVertsPerBatch;
-        AddBatchChunk(pkt, texture, ctx, verts + firstVert, chunkVerts, flags);
+        AddBatchChunk(ctx, texture, drawCtx, verts + firstVert, chunkVerts, flags);
     }
 }
 
@@ -570,7 +570,7 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // tags inline, then the two vertex streams, then the MSCAL. The byte-position
 // DMA must be whole source qwords, so an odd count transfers one pad vertex
 // the VU never reads (the fixed region has room: odd counts are < the even maximum).
-static void AddLerpBatchChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
+static void AddLerpBatchChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
                               const math::Vec3 & frontv, const math::Vec3 & backv,
                               const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
                               const LerpPosChunk & posChunk, const LerpDrawAttrib * attribs,
@@ -578,49 +578,49 @@ static void AddLerpBatchChunk(rc::RenderContext & pkt, const tex::Texture & text
                               FaceCull faceCull, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
-    pkt.EnsureSpace(kLerpChunkChainQwords);
+    ctx.EnsureSpace(kLerpChunkChainQwords);
 
-    pkt.OpenInlineUnpack(kLerpBatchHeaderAddr, true);
+    ctx.OpenInlineUnpack(kLerpBatchHeaderAddr, true);
     {
-        pkt.AddU32(static_cast<u32>(faceCull)); // backface cull mode in .x
+        ctx.AddU32(static_cast<u32>(faceCull)); // backface cull mode in .x
         // The skin's size over its power-of-two TEX0 extent, which the
         // microprogram multiplies onto every vertex's ST. Here rather than on
         // the EE because the VU has the multiply slot free and the EE does not:
         // it is two mul.s per vertex saved out of an expansion loop that is the
         // single largest marker in the frame.
-        pkt.AddFloat(stScaleS); // .y
-        pkt.AddFloat(stScaleT); // .z
-        pkt.AddU32(static_cast<u32>(vertCount));
+        ctx.AddFloat(stScaleS); // .y
+        ctx.AddFloat(stScaleT); // .z
+        ctx.AddU32(static_cast<u32>(vertCount));
 
-        pkt.AddFloat(frontv.x);
-        pkt.AddFloat(frontv.y);
-        pkt.AddFloat(frontv.z);
-        pkt.AddFloat(0.0f); // .w rides through the lerp; keep it finite
+        ctx.AddFloat(frontv.x);
+        ctx.AddFloat(frontv.y);
+        ctx.AddFloat(frontv.z);
+        ctx.AddFloat(0.0f); // .w rides through the lerp; keep it finite
 
-        pkt.AddFloat(backv.x);
-        pkt.AddFloat(backv.y);
-        pkt.AddFloat(backv.z);
-        pkt.AddFloat(0.0f);
+        ctx.AddFloat(backv.x);
+        ctx.AddFloat(backv.y);
+        ctx.AddFloat(backv.z);
+        ctx.AddFloat(0.0f);
 
         // The entity's light, which the microprogram multiplies by each vertex's
         // shade term to get its color. On the EE this was a 162-entry table
         // rebuilt per entity per frame; here it is four floats per batch. The
         // shade arrives quantized (shade * 128), so .xyz carry the light already
         // divided by 128 - see VertexShadeLight.
-        pkt.AddFloat(shadeLight.x);
-        pkt.AddFloat(shadeLight.y);
-        pkt.AddFloat(shadeLight.z);
-        pkt.AddFloat(shadeLight.w); // vertex alpha, GS units
+        ctx.AddFloat(shadeLight.x);
+        ctx.AddFloat(shadeLight.y);
+        ctx.AddFloat(shadeLight.z);
+        ctx.AddFloat(shadeLight.w); // vertex alpha, GS units
 
-        AddBatchGifTags(pkt, texture, ctx, vertCount, flags, /*packedRgbaOut=*/true);
+        AddBatchGifTags(ctx, texture, drawCtx, vertCount, flags, /*packedRgbaOut=*/true);
     }
-    pkt.CloseInlineUnpack();
+    ctx.CloseInlineUnpack();
 
     // The keyframe bytes: V4_8 elements, one source word and two destination
     // qwords per vertex, padded to an even vertex count so the transfer is
     // whole qwords (every word the DMA carries must be unpack payload).
     const int srcVerts = vertCount + (vertCount & 1);
-    pkt.AddUnpackDataFmt(kLerpPositionsAddr, posChunk.pos,
+    ctx.AddUnpackDataFmt(kLerpPositionsAddr, posChunk.pos,
                          static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
                          static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
                          P2_UNPACK_V4_8, true);
@@ -628,9 +628,9 @@ static void AddLerpBatchChunk(rc::RenderContext & pkt, const tex::Texture & text
     // Referenced in the model hunk rather than in the chain: this is the stream the
     // EE no longer gathers at all. One REF tag either way - the DMAC does not care
     // which side of the bus the qwords came from, and nothing rewrites a model.
-    pkt.AddUnpackData(kLerpAttribsAddr, attribs, static_cast<u32>(vertCount), true);
+    ctx.AddUnpackData(kLerpAttribsAddr, attribs, static_cast<u32>(vertCount), true);
 
-    pkt.AddStartProgram(s_lerpedProgAddr);
+    ctx.AddStartProgram(s_lerpedProgAddr);
 }
 
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
@@ -653,8 +653,8 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
-    const int ctx = gs::CurrentContext();
-    rc::RenderContext & pkt = rc::Ctx();
+    const int drawCtx = gs::CurrentContext();
+    rc::RenderContext & ctx = rc::Ctx();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
@@ -663,12 +663,12 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     // (see AddLerpBatchChunk).
     for (int firstVert = 0, c = 0; firstVert < vertCount; firstVert += kMaxLerpVertsPerBatch, ++c)
     {
-        ReserveChunk(pkt, kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
+        ReserveChunk(ctx, kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < kMaxLerpVertsPerBatch) ? remaining : kMaxLerpVertsPerBatch;
 
-        AddLerpBatchChunk(pkt, texture, ctx, frontv, backv, shadeLight, stScaleS, stScaleT,
+        AddLerpBatchChunk(ctx, texture, drawCtx, frontv, backv, shadeLight, stScaleS, stScaleT,
                           posChunks[c], attribs + firstVert, chunkVerts, faceCull, flags);
     }
 }
@@ -718,53 +718,53 @@ constexpr u64 kParticleRegList = (u64(GIF_REG_AD)   <<  0) |
 //
 // 'clipOffset' is the corner offset already transformed to clip space; the UVs
 // are in the GS 12.4 fixed point the PACKED UV descriptor wants.
-static void AddParticleChunk(rc::RenderContext & pkt, const tex::Texture & texture, int ctx,
+static void AddParticleChunk(rc::RenderContext & ctx, const tex::Texture & texture, int drawCtx,
                              const math::Vec4 & clipOffset, u32 uvMaxU, u32 uvMaxV,
                              const ParticleVertex * particles, int count, DrawFlags flags)
 {
     PS2_Assert(count > 0 && count <= kMaxParticlesPerBatch);
-    pkt.EnsureSpace(kParticleChunkQwords);
+    ctx.EnsureSpace(kParticleChunkQwords);
 
-    pkt.OpenInlineUnpack(kPrtBatchHeaderAddr, true);
+    ctx.OpenInlineUnpack(kPrtBatchHeaderAddr, true);
     {
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(static_cast<u32>(count));
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(static_cast<u32>(count));
 
         // The corner offset, with the distance blow-up rate riding in the .w the
         // offset itself has no use for (it is a direction, so its w is zero).
-        pkt.AddFloat(clipOffset.x);
-        pkt.AddFloat(clipOffset.y);
-        pkt.AddFloat(clipOffset.z);
-        pkt.AddFloat(kParticleBlowUpRate);
+        ctx.AddFloat(clipOffset.x);
+        ctx.AddFloat(clipOffset.y);
+        ctx.AddFloat(clipOffset.z);
+        ctx.AddFloat(kParticleBlowUpRate);
 
         // The two corner UVs. PACKED UV takes U in word 0 and V in word 1; the
         // upper half of the qword is not part of the descriptor.
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
 
-        pkt.AddU32(uvMaxU);
-        pkt.AddU32(uvMaxV);
-        pkt.AddU32(0);
-        pkt.AddU32(0);
+        ctx.AddU32(uvMaxU);
+        ctx.AddU32(uvMaxV);
+        ctx.AddU32(0);
+        ctx.AddU32(0);
 
-        const bool blended = AddBatchStateBlock(pkt, texture, ctx, flags);
+        const bool blended = AddBatchStateBlock(ctx, texture, drawCtx, flags);
         const int  abe     = blended ? 1 : 0; // Hoisted: see the note in AddBatchGifTags.
 
         // The drawing tag: one sprite per particle, five registers each - the
         // A+D that sets its colour, then a UV/XYZ2 pair per corner. FST selects
         // UV over ST: a screen-aligned sprite needs no perspective correction.
-        const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, ctx, 0);
-        pkt.AddQword(GIF_SET_TAG(count, 1, 1, prim, GIF_FLG_PACKED, 5), kParticleRegList);
+        const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, drawCtx, 0);
+        ctx.AddQword(GIF_SET_TAG(count, 1, 1, prim, GIF_FLG_PACKED, 5), kParticleRegList);
     }
-    pkt.CloseInlineUnpack();
+    ctx.CloseInlineUnpack();
 
-    pkt.AddUnpackData(kPrtDataAddr, particles, static_cast<u32>(count), true);
+    ctx.AddUnpackData(kPrtDataAddr, particles, static_cast<u32>(count), true);
 
-    pkt.AddStartProgram(s_particlesProgAddr);
+    ctx.AddStartProgram(s_particlesProgAddr);
 }
 
 void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
@@ -791,16 +791,16 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
-    const int ctx = gs::CurrentContext();
-    rc::RenderContext & pkt = rc::Ctx();
+    const int drawCtx = gs::CurrentContext();
+    rc::RenderContext & ctx = rc::Ctx();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {
-        ReserveChunk(pkt, kParticleChunkQwords, mvp, flags, /*firstChunk=*/first == 0);
+        ReserveChunk(ctx, kParticleChunkQwords, mvp, flags, /*firstChunk=*/first == 0);
 
         const int remaining  = count - first;
         const int chunkCount = (remaining < kMaxParticlesPerBatch) ? remaining : kMaxParticlesPerBatch;
-        AddParticleChunk(pkt, texture, ctx, clipOffset, uvMaxU, uvMaxV,
+        AddParticleChunk(ctx, texture, drawCtx, clipOffset, uvMaxU, uvMaxV,
                          particles + first, chunkCount, flags);
     }
 }

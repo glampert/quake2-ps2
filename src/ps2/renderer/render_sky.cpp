@@ -574,7 +574,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
         // One batch per face: each binds its own texture, so they could never
         // have shared one anyway.
         tris.Flush();
-        ++view::GetDrawStats().skyFaces;
+        ++view::GetStats().skyFaces;
     }
 }
 

@@ -221,7 +221,7 @@ void FrameLogCapture()
     // All of these still hold the finished frame's values here: the view counters are cleared at
     // the top of view::RenderFrame, the submission counters by rc::BeginFrame and the lightmap
     // ones by lm::BeginFrame, none of which has run yet for the new frame.
-    const view::DrawStats & d = view::GetDrawStats();
+    const view::DrawStats & d = view::GetStats();
     s.nodes          = d.nodesWalked;
     s.surfs          = d.surfaces;
     s.surfsAlpha     = d.surfacesAlpha;
@@ -231,14 +231,14 @@ void FrameLogCapture()
     s.entities       = d.entities;
     s.dlights        = d.dlights;
 
-    const rc::DrawStats & r = rc::Ctx().Stats();
+    const rc::DrawStats & r = rc::Ctx().GetStats();
     s.tris        = r.trisDrawn;
     s.trisClipped = r.trisClipped;
     s.trisCulled  = r.trisCulled;
     s.batches     = r.drawBatches;
     s.particles   = r.particles;
 
-    const lm::Stats l = lm::GetStats();
+    const lm::Stats & l = lm::GetStats();
     s.lmAtlases = l.atlases;
     s.lmStyle   = l.styleUpdates;
     s.lmDynamic = l.dynamicUpdates;

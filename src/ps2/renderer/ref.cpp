@@ -401,9 +401,9 @@ void DrawDrawStatsOverlay()
         return;
     }
 
-    const ps2::view::DrawStats & stats = ps2::view::GetDrawStats();
-    const ps2::rc::DrawStats & rcStats = ps2::rc::Ctx().Stats();
-    const ps2::lm::Stats lmStats = ps2::lm::GetStats();
+    const ps2::view::DrawStats & stats = ps2::view::GetStats();
+    const ps2::rc::DrawStats & rcStats = ps2::rc::Ctx().GetStats();
+    const ps2::lm::Stats & lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
         { "Nodes",   stats.nodesWalked    },

@@ -184,7 +184,7 @@ constexpr int kBatchMaxVerts = 3 * 768; // 768 whole triangles per batch
 // One rc::TriangleStream per pass, at kBatchMaxVerts.
 
 // Performance counters for the frame, reset by RenderFrame and read through
-// GetDrawStats() by the ps2_show_drawstats overlay.
+// GetStats() by the ps2_show_drawstats overlay.
 static DrawStats s_drawStats = {};
 
 // ------------------------------------------------------------------------------------------------
@@ -2629,7 +2629,7 @@ void BeginRegistration()
     s_oldViewCluster2 = kInvalidCluster;
 }
 
-DrawStats & GetDrawStats()
+DrawStats & GetStats()
 {
     return s_drawStats;
 }

@@ -136,8 +136,8 @@ public:
     RenderContext & operator=(const RenderContext &) = delete;
 
     // What this frame has submitted so far. A member so the streams can bump it without a call.
-    Q_ALWAYS_INLINE DrawStats & Stats() { return m_stats; }
-    Q_ALWAYS_INLINE const DrawStats & Stats() const { return m_stats; }
+    Q_ALWAYS_INLINE DrawStats & GetStats() { return m_stats; }
+    Q_ALWAYS_INLINE const DrawStats & GetStats() const { return m_stats; }
 
     // Qwords written into the command buffer's current half, and what may be written there.
     int QwordCount() const { return cmdbuf::QwordCount(); }
@@ -727,13 +727,13 @@ public:
 
         if (count == 0)
         {
-            ++Ctx().Stats().trisCulled;
+            ++Ctx().GetStats().trisCulled;
             return;
         }
 
         if (wasClipped)
         {
-            ++Ctx().Stats().trisClipped;
+            ++Ctx().GetStats().trisClipped;
         }
 
         // The survivors fan-triangulate.
@@ -767,7 +767,7 @@ public:
             // makes room for them.
             cmdbuf::Commit(m_verts, m_vertCount);
 
-            DrawStats & stats = Ctx().Stats();
+            DrawStats & stats = Ctx().GetStats();
             ++stats.drawBatches;
             stats.trisDrawn += m_vertCount / 3;
 
@@ -982,7 +982,7 @@ public:
             // wastes, and it is bounded by one group.
             cmdbuf::Commit(m_chunks, ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
-            DrawStats & stats = Ctx().Stats();
+            DrawStats & stats = Ctx().GetStats();
             ++stats.drawBatches;
             stats.trisDrawn += m_vertCount / 3;
 
@@ -1032,7 +1032,7 @@ public:
         {
             // A batch, but not new geometry: this re-submits the span the last Flush already
             // counted, so trisDrawn is deliberately left alone.
-            ++Ctx().Stats().drawBatches;
+            ++Ctx().GetStats().drawBatches;
 
             const math::Vec3 frontv = m_frontv; // as Flush, see there
             const math::Vec3 backv  = m_backv;

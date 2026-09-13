@@ -112,7 +112,7 @@ public:
         return m_chains[index];
     }
 
-    Stats GetStats() const { return m_stats; }
+    const Stats & GetStats() const { return m_stats; }
 
 private:
     void NextAtlas();
@@ -782,7 +782,7 @@ void ClearChains()
     s_manager.ClearChains();
 }
 
-Stats GetStats()
+const Stats & GetStats()
 {
     return s_manager.GetStats();
 }

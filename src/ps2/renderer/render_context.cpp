@@ -407,7 +407,7 @@ void BeginFrame(const bool dither)
 
     // Safe here rather than a frame late: PS2_BeginFrame runs debug::FrameLogCapture, which reads
     // the finished frame's counters, before it calls this.
-    Ctx().Stats() = {};
+    Ctx().GetStats() = {};
 
     // Retires and shows the previous frame when EndFrame left it drawing. Already done - by
     // EndFrame itself - when it presented immediately, and this is then the no-op that lets the

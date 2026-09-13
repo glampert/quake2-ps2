@@ -9,8 +9,9 @@
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
 
-
 namespace ps2::view {
+
+void Init();
 
 // What the view decided to submit this frame - what it walked, culled and chained. What the
 // renderer then did with it is rc::DrawStats; the two were one struct until the submission half
@@ -30,9 +31,7 @@ struct DrawStats
 };
 
 // Stats of the most recent RenderFrame; all zeros before the first 3D frame.
-DrawStats & GetDrawStats();
-
-void Init();
+DrawStats & GetStats();
 
 // Entity angles + origin as a world transform, in the row-vector convention
 // (rotations apply first, then the translation). 'flipPitchAngle' picks the sign

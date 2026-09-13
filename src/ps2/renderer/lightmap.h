@@ -169,6 +169,6 @@ struct Stats
     int restoreUpdates; // Surfaces rebuilt back to their static lighting.
 };
 
-Stats GetStats();
+const Stats & GetStats();
 
 } // namespace ps2::lm

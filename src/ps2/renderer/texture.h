@@ -113,7 +113,7 @@ struct Texture final
 
     // Set when the image lives inside a shared scrap atlas (see scrap_atlas.h)
     // rather than owning VRAM: bind 'atlas' and shift the draw's texel
-    // coordinates by atlasX/atlasY, which gs::SetTextureFor2D does. 'width' and
+    // coordinates by atlasX/atlasY, which gs::ResolveBind2D works out. 'width' and
     // 'height' stay the image's own, so Draw_GetPicSize and every caller's
     // layout math are unaffected, and 'pixels' points into the atlas buffer -
     // it is not a standalone allocation and must not be freed (see Unload).

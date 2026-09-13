@@ -204,7 +204,7 @@ private:
     {
         if (m_verts == nullptr) [[unlikely]]
         {
-            rc::FlushPending2D();
+            rc::Ctx().FlushPending2D();
             cmdbuf::Reserve(kClaimQwords);
             m_verts = cmdbuf::AllocMax<vu1::DrawVertex>(MaxVerts);
         }
@@ -402,7 +402,7 @@ private:
     {
         if (m_chunks == nullptr) [[unlikely]]
         {
-            rc::FlushPending2D();
+            rc::Ctx().FlushPending2D();
             cmdbuf::Reserve(kClaimQwords);
             m_chunks = cmdbuf::AllocMax<vu1::LerpPosChunk>(kMaxChunks);
             m_chunk  = m_chunks;

@@ -13,7 +13,7 @@
  *  Textures bound this frame are pinned, because their draws are still sitting in
  *  the frame's chain unsent - or already queued at the GS - and a request that would
  *  have to evict one fails rather than corrupting them. That failure is a normal
- *  condition, not an error: the caller (gs::EnsureTextureResident) fences the GS,
+ *  condition, not an error: the caller (rc::EnsureTextureResident) fences the GS,
  *  which sends the chain and waits for it, then calls UnpinAll and retries, then
  *  Defragment and retries, trading the whole frame's pipelining for the space. Since Defragment
  *  remakes the heap as one free block, the retry can only fail for a texture
@@ -330,11 +330,6 @@ void BeginFrame()
     ++s_frame;
     s_uploadsThisFrame  = 0;
     s_oomSyncsThisFrame = 0;
-}
-
-void EndFrame()
-{
-    // Nothing for now.
 }
 
 int TextureFootprintWords(int width, int height, int psm)

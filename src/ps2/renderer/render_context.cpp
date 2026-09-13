@@ -451,8 +451,6 @@ void EndFrame()
     cmdbuf::EndFrame();
 
     s_drawCtx ^= 1; // draw into the other buffer next frame
-
-    vram::EndFrame();
 }
 
 int CurrentDrawContext()
@@ -466,11 +464,6 @@ int Gif2DPeakQwords()
     // pass) reports honestly rather than only what previous blocks held.
     const int used = s_gifBlock.has_value() ? s_gifBlock->QwordCount() : 0;
     return (used > s_gifBlockPeakQwords) ? used : s_gifBlockPeakQwords;
-}
-
-void FlushPending2D()
-{
-    Ctx().FlushPending2D();
 }
 
 } // namespace ps2::rc

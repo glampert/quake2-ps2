@@ -195,7 +195,7 @@ constexpr int ChunkCount(const int items, const int perChunk)
 // only what is written would let that final ask rewind the chain mid-draw.
 //
 // Plus the terminator. A draw no longer ends in a kick, but it can still contain one: the GS
-// fence gs::EnsureTextureResident takes when an upload is about to land on VRAM that queued
+// fence rc::EnsureTextureResident takes when an upload is about to land on VRAM that queued
 // draws may still sample has to send the chain now that nothing else will until EndFrame, and
 // a kick writes its FLUSH + END into the chain at the cursor. Budgeted here rather than
 // reserved where it fires, because reserving there is exactly what must not happen - a
@@ -269,7 +269,7 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // upload with the previous one's transform. Call between gs::Begin/EndFrame.
 //
 // **Not synchronous.** This appends to the frame's chain and returns; nothing is
-// sent until gs::EndFrame kicks it. So the vertex data has to stay valid for the
+// sent until rc::EndFrame kicks it. So the vertex data has to stay valid for the
 // rest of the frame, not for the duration of the call - which is why 'verts' is a
 // span of the frame chain itself (cmdbuf::Alloc) rather than a gather static, and
 // why a static is no longer a thing a caller can hand over.

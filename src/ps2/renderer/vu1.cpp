@@ -202,7 +202,7 @@ inline u64 MakeTex0Data(const tex::Texture & texture)
     // Indexed textures sample through one of the two fixed CLUTs (the global
     // palette or the alpha ramp, by format); reloading the on-chip CLUT cache
     // on every bind is cheap (1 KB). Everything else leaves the CLUT fields
-    // zero (as gs::SetTextureFor2D).
+    // zero (as the 2D path's MakeTex0 does).
     const vram::Address clutAddr = gs::ClutAddressFor(texture);
     const bool palettized = (clutAddr != vram::Address::Invalid);
 
@@ -519,15 +519,16 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawTriangles wants whole triangles!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(verts) & 15u) == 0, "Vertex data must be 16-byte aligned!");
 
+    rc::RenderContext & ctx = rc::Ctx();
+
     // Send any 2D accumulated before this 3D burst so it draws underneath (and
     // its textures are consumed before our uploads can evict them). A no-op once
     // the batch is already flushed - only the first 3D draw after 2D pays it.
-    rc::FlushPending2D();
+    ctx.FlushPending2D();
 
     rc::EnsureTextureResident(texture);
 
     const int drawCtx = rc::CurrentDrawContext();
-    rc::RenderContext & ctx = rc::Ctx();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
@@ -644,7 +645,8 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(posChunks) & 15u) == 0, "Position chunks must be 16-byte aligned!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(attribs) & 15u) == 0, "Attribute stream must be 16-byte aligned!");
 
-    rc::FlushPending2D();
+    rc::RenderContext & ctx = rc::Ctx();
+    ctx.FlushPending2D();
 
     rc::EnsureTextureResident(texture);
 
@@ -654,7 +656,6 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
     const int drawCtx = rc::CurrentDrawContext();
-    rc::RenderContext & ctx = rc::Ctx();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
@@ -775,7 +776,8 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg(count > 0, "DrawParticles wants at least one particle!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(particles) & 15u) == 0, "Particle data must be 16-byte aligned!");
 
-    rc::FlushPending2D();
+    rc::RenderContext & ctx = rc::Ctx();
+    ctx.FlushPending2D();
 
     rc::EnsureTextureResident(texture);
 
@@ -792,7 +794,6 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
     const int drawCtx = rc::CurrentDrawContext();
-    rc::RenderContext & ctx = rc::Ctx();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)
     {

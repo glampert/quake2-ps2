@@ -328,7 +328,7 @@ void DrawMemUsageOverlay()
 // GS VRAM texture-heap overlay in the lower-left corner: how much of the heap is
 // committed, the number of resident textures, the texture uploads done so far
 // this frame (streaming pressure - high or spiking means the heap is thrashing)
-// and the GS drains a full heap forced this frame (see gs::EnsureTextureResident;
+// and the GS drains a full heap forced this frame (see rc::EnsureTextureResident;
 // anything but zero means the frame's working set does not fit).
 void DrawVramUsageOverlay()
 {
@@ -682,7 +682,7 @@ void PS2_BeginFrame(float cameraSeparation)
     (void)cameraSeparation;
 
     // Close the frame the profile probes have been charging into, before any of
-    // this frame's work is measured, and before gs::BeginFrame below opens the
+    // this frame's work is measured, and before rc::BeginFrame below opens the
     // vsync probe. This has to happen here rather than at the end of
     // PS2_EndFrame: the Frame scope around Qcommon_Frame closes after it, and
     // would otherwise be charged to the frame after the one it measured,
@@ -692,13 +692,13 @@ void PS2_BeginFrame(float cameraSeparation)
     ps2::debug::ProfileNewFrame();
 
     // Snapshot that finished frame for the CSV log. Must sit between the
-    // rollover above and gs::BeginFrame below, which is where the draw-stat and
+    // rollover above and rc::BeginFrame below, which is where the draw-stat and
     // submitted-byte counters it reads get cleared.
     ps2::debug::FrameLogCapture();
 
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
-    // each 2D->3D boundary and in gs::EndFrame().
+    // each 2D->3D boundary and in rc::EndFrame().
     ps2::rc::BeginFrame();
 }
 
@@ -713,7 +713,7 @@ void PS2_EndFrame()
     // VU1 bring-up scene (cvar "ps2_testcube 1"): a 3D draw, so it flushes the
     // 2D overlay accumulated above and lands on top - staying visible over the
     // fullscreen console Quake forces while disconnected (its batch programs
-    // its own z-test). gs::EndFrame() then sends any remaining 2D and flips.
+    // its own z-test). rc::EndFrame() then sends any remaining 2D and flips.
     ps2::test::DrawRotatingCube();
 
     // Memory smoke test (cvar "ps2_testmaps 1"): loads every stock map in unit

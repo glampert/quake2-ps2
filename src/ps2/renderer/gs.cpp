@@ -53,7 +53,6 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/render_context.h"
 #include "ps2/builtin/builtin.h" // global_palette
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"

@@ -289,10 +289,6 @@ int CurrentDrawContext();
 // GifWriter taken before this call must not be used after it.
 void EnsureTextureResident(const tex::Texture & texture);
 
-// Closes the open 2D section, so what follows draws under it. What the 3D paths call at a
-// 2D->3D boundary; a no-op when nothing has accumulated.
-void FlushPending2D();
-
 // The most qwords one GIF block has held. Shown as "Gif2DPk" in the draw-stats overlay; what it
 // measures against is the command buffer half it has to fit inside (cmdbuf::kHalfBytes).
 int Gif2DPeakQwords();

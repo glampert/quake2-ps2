@@ -13,9 +13,9 @@
  *
  *  Packing is monotonic: images are never individually freed, matching the pics'
  *  own lifetime. The texture cache tags a packed image with the atlas it landed
- *  in and where (Texture::atlas / atlasX / atlasY); gs::SetTextureFor2D binds the
- *  atlas and offsets the draw's texel coordinates, so nothing above the renderer
- *  knows the difference.
+ *  in and where (Texture::atlas / atlasX / atlasY); gs::ResolveBind2D turns that
+ *  into the atlas to bind and the texel shift to add, so nothing above the
+ *  renderer knows the difference.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

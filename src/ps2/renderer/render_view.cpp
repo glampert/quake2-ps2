@@ -1499,7 +1499,7 @@ Q_ALWAYS_INLINE u8 BlendChannelToByte(const float channel)
 //
 // This opens the deferred 2D batch, which is what puts it under the HUD: every
 // 2D primitive the client draws after re.RenderFrame returns appends to the
-// same batch, and nothing flushes it until gs::EndFrame.
+// same batch, and nothing flushes it until rc::EndFrame.
 void RenderBlendedOverlay(const refdef_t & viewDef)
 {
     if (s_polyblend->value == 0.0f)
@@ -2499,7 +2499,7 @@ void RenderParticles(const refdef_t & viewDef)
     // Closing the 2D section first, because taking the chain is what the boundary
     // actually is: a pending 2D batch holds an open DMA tag and an allocation
     // cannot land inside one (see batch.h).
-    rc::FlushPending2D();
+    rc::Ctx().FlushPending2D();
     cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
     vu1::ParticleVertex * const particles = cmdbuf::Alloc<vu1::ParticleVertex>(numParticles);
 

@@ -4,7 +4,7 @@
  * Brief: GS VRAM texture heap: tracks which textures are resident in the VRAM left
  *        over after the framebuffers and z-buffer, handing out space on demand and
  *        evicting the least-recently-bound textures when full. Pure bookkeeping -
- *        the DMA uploads and GS synchronisation stay with gs::EnsureTextureResident.
+ *        the DMA uploads and GS synchronisation stay with rc::EnsureTextureResident.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -23,10 +23,9 @@ enum struct Address : int
 // end. Call once, from gs::Init(), after the framebuffer/z-buffer allocations.
 void Init(int heapBaseWords);
 
-// Advances the LRU clock. Call once per frame, from gs::BeginFrame()/EndFrame().
-// BeginFrame() also resets the per-frame texture-upload counter (see GetStats).
+// Advances the LRU clock and resets the per-frame counters (see GetStats).
+// Call once per frame, from rc::BeginFrame().
 void BeginFrame();
-void EndFrame();
 
 // VRAM words the texture occupies: the whole GS page grid it covers. libgraph's
 // graph_vram_size undercounts here - see the .cpp for why.
@@ -47,7 +46,7 @@ int HeapTotalWords();
 // Failure is not fatal and not the end of the road: the caller fences the GS -
 // sending the frame's chain so far and waiting for it, which is what the this-frame
 // protection guards against - then calls UnpinAll and retries, then Defragment and
-// retries. See gs::EnsureTextureResident.
+// retries. See rc::EnsureTextureResident.
 Address TryAllocate(const tex::Texture & texture, int sizeWords);
 
 // Drops the this-frame eviction protection from every resident texture, making
@@ -85,7 +84,7 @@ void Free(const tex::Texture & texture);
 bool Defragment();
 
 // Records one texture DMA upload for the per-frame counter. Called by
-// gs::EnsureTextureResident each time it transfers a texture's pixels into VRAM
+// gs::UploadTexture each time it transfers a texture's pixels into VRAM
 // (a first upload or a dirty re-upload); reset each frame by BeginFrame().
 void NoteTextureUpload();
 

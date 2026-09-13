@@ -28,6 +28,9 @@ PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LitTriangles);
 
 namespace {
 
+// VU1 micro memory, in the 64-bit instruction units MPG destinations count in (4 KB / 8 bytes).
+constexpr u32 kMicroMemInstructions = 2048;
+
 static bool s_initialized = false;
 
 // Micro memory entry point of each program, indexed by Program. Set by Init().
@@ -52,7 +55,9 @@ void Init()
     dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_VIF1);
 
-    /*
+    // Uploaded back to back from micro address 0, in this array's order - which is Program's
+    // order, since the loop below indexes s_progAddr by position. MPG rounds an odd instruction
+    // count up to even, so each program's base rounds up too.
     const struct { VUCode code; u32 instructionCount; } programs[] = {
         { VU1Prog_TexturedTriangles_Code(), VU1Prog_TexturedTriangles_InstructionCount() },
         { VU1Prog_LerpedTriangles_Code(),   VU1Prog_LerpedTriangles_InstructionCount()   },
@@ -61,14 +66,17 @@ void Init()
     };
     static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");
 
+    // Built into the command buffer like every other VIF1 transfer, which is why vu1::Init has to
+    // run after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the Drain
+    // terminates, kicks and waits, so VU1 is ready once it returns.
     rc::RenderContext & ctx = rc::Ctx();
 
-    u32 nextProgramIdx  = 0;
+    int nextProgramIdx  = 0;
     u32 nextProgramAddr = 0;
 
-    for (const auto& program : programs)
+    for (const auto & program : programs)
     {
-        PS2_AssertMsg(nextProgramAddr + program.instructionCount <= 2048,
+        PS2_AssertMsg(nextProgramAddr + program.instructionCount <= kMicroMemInstructions,
                       "Microprograms overflow VU1 micro memory!");
 
         s_progAddr[nextProgramIdx++] = ProgramAddr(nextProgramAddr);
@@ -77,38 +85,6 @@ void Init()
         nextProgramAddr += (program.instructionCount + 1u) & ~1u;
     }
 
-    ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    cmdbuf::Drain();
-    */
-
-    // The textured program sits at micro address 0, then the lerped one, the particle one and the
-    // lit one. MPG uploads round an odd instruction count up to even, so each base rounds up too.
-    const u32 texturedInstructions  = VU1Prog_TexturedTriangles_InstructionCount();
-    const u32 lerpedInstructions    = VU1Prog_LerpedTriangles_InstructionCount();
-    const u32 particlesInstructions = VU1Prog_Particles_InstructionCount();
-    const u32 litInstructions       = VU1Prog_LitTriangles_InstructionCount();
-
-    const u32 texturedAddr  = 0;
-    const u32 lerpedAddr    = (texturedInstructions + 1u) & ~1u;
-    const u32 particlesAddr = (lerpedAddr + lerpedInstructions + 1u) & ~1u;
-    const u32 litAddr       = (particlesAddr + particlesInstructions + 1u) & ~1u;
-
-    PS2_AssertMsg(litAddr + litInstructions <= 2048,
-                  "Microprograms overflow VU1 micro memory!");
-
-    s_progAddr[static_cast<int>(Program::Textured)]  = ProgramAddr(texturedAddr);
-    s_progAddr[static_cast<int>(Program::Lerped)]    = ProgramAddr(lerpedAddr);
-    s_progAddr[static_cast<int>(Program::Particles)] = ProgramAddr(particlesAddr);
-    s_progAddr[static_cast<int>(Program::Lit)]       = ProgramAddr(litAddr);
-
-    // Built into the command buffer like every other VIF1 transfer, which is why vu1::Init has to
-    // run after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the Drain
-    // terminates, kicks and waits, so VU1 is ready once it returns.
-    rc::RenderContext & ctx = rc::Ctx();
-    ctx.AddMicroProgram(ProgramAddr(texturedAddr),  VU1Prog_TexturedTriangles_Code());
-    ctx.AddMicroProgram(ProgramAddr(lerpedAddr),    VU1Prog_LerpedTriangles_Code());
-    ctx.AddMicroProgram(ProgramAddr(particlesAddr), VU1Prog_Particles_Code());
-    ctx.AddMicroProgram(ProgramAddr(litAddr),       VU1Prog_LitTriangles_Code());
     ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
     cmdbuf::Drain();
 }

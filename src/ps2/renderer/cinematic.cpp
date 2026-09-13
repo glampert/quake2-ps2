@@ -13,6 +13,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/cinematic.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/system/heap.h"
 #include "ps2/builtin/builtin.h" // global_palette
@@ -191,10 +192,9 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
     // picture - sampling to 256 is what caused the old renderer's black
     // bottom band and its hacky quad offsets.
     s_frameTexture.MarkPixelsDirty();
-    gs::SetTextureFor2D(s_frameTexture);
 
     constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
-    gs::DrawTexturedRect(x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
+    rc::Ctx().DrawTexturedRect(s_frameTexture, x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
 }
 
 } // namespace ps2::cin

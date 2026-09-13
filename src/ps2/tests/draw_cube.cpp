@@ -12,6 +12,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/math/vec_mat.h"
 
 namespace ps2::test {
@@ -259,7 +260,7 @@ void DrawRotatingCube()
     // chain, which cannot happen inside one. Closing it here rather than leaving it
     // to the draw is the same rule the batches follow: the 2D->3D boundary is where
     // the chain is claimed, not where it is submitted.
-    gs::FlushPending2D();
+    rc::FlushPending2D();
 
     const int tick = Sys_Milliseconds() / 2000;
     for (int face = 0; face < 6; ++face)

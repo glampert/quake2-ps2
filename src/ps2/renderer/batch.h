@@ -51,6 +51,7 @@
 #include "ps2/renderer/draw_stats.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/renderer/vu1.h"
 
 namespace ps2::batch {
@@ -203,7 +204,7 @@ private:
     {
         if (m_verts == nullptr) [[unlikely]]
         {
-            gs::FlushPending2D();
+            rc::FlushPending2D();
             cmdbuf::Reserve(kClaimQwords);
             m_verts = cmdbuf::AllocMax<vu1::DrawVertex>(MaxVerts);
         }
@@ -401,7 +402,7 @@ private:
     {
         if (m_chunks == nullptr) [[unlikely]]
         {
-            gs::FlushPending2D();
+            rc::FlushPending2D();
             cmdbuf::Reserve(kClaimQwords);
             m_chunks = cmdbuf::AllocMax<vu1::LerpPosChunk>(kMaxChunks);
             m_chunk  = m_chunks;

@@ -13,9 +13,11 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/gs.h"
 #include "ps2/renderer/vu1.h"
 
 #include <cstdint>
+#include <optional>
 #include <packet2.h>
 #include <packet2_chain.h>
 #include <packet2_utils.h>
@@ -210,6 +212,36 @@ public:
         pkt->next = cursor;
     }
 
+    // --------------------------------------------------------------------------------------------
+    // GIF sections
+    // --------------------------------------------------------------------------------------------
+
+    // Room for 'qwords' of GIF data in an open section, handing back the writer to put it in.
+    // Splits the section when the current block runs out, which is invisible to the caller: the
+    // state a section programmed lives in the GS's registers, not in the block.
+    //
+    // **The writer is only good until the next call.** A split replaces it, and so does anything
+    // that fences the GS (a texture upload), so take it again after either rather than holding it.
+    gs::GifWriter & GifData(int qwords);
+
+    // Closes the open 2D section, so what follows draws under it. Called at every 2D->3D
+    // boundary and at EndFrame; a no-op when nothing has accumulated.
+    void FlushPending2D();
+
+    // --------------------------------------------------------------------------------------------
+    // 2D primitives. Each opens the 2D section on demand - callers just draw, no bracket - and
+    // the section is closed automatically before the next 3D draw, so 2D always lands on top.
+    // --------------------------------------------------------------------------------------------
+
+    // A solid rectangle. Alpha below 255 blends with the framebuffer.
+    void FillRect(int x, int y, int width, int height, u8 r, u8 g, u8 b, u8 a);
+
+    // A textured rectangle sampling 'texture' over texel range [u0,v0]..[u1,v1], made resident
+    // first if it is not already. 'brightness' modulates the texel colour per RGB channel:
+    // 128 leaves it unchanged. Texels with alpha 0 are cut out by the alpha test.
+    void DrawTexturedRect(const tex::Texture & texture, int x, int y, int width, int height,
+                          int u0, int v0, int u1, int v1, const u8 brightness[3]);
+
 private:
     // The half being recorded into. Inline and cached by cmdbuf, so this costs what naming a
     // member would.
@@ -227,5 +259,42 @@ Q_ALWAYS_INLINE RenderContext & Ctx()
 {
     return detail::g_context;
 }
+
+// --------------------------------------------------------------------------------------------
+// Frame lifecycle
+// --------------------------------------------------------------------------------------------
+
+// Reads the cvars the frame is steered by. Call once, after gs::Init and cmdbuf::Init.
+void Init();
+
+// Opens the frame: shows the previous one if it was left drawing, rewinds the command buffer
+// and writes the screen clear at the head of it. 2D and 3D may then be drawn in any order, and
+// both record into the same buffer.
+void BeginFrame();
+
+// Closes the frame: flushes any pending 2D, submits the command buffer, and - unless
+// ps2_gs_latency leaves it drawing for the next BeginFrame to show - waits for the GS and flips.
+void EndFrame();
+
+// The GS drawing context (0 or 1) being rendered into this frame. Every context-indexed register
+// a caller programs itself, and the prim CTXT bit, must match it.
+int CurrentDrawContext();
+
+// Makes the texture's pixels resident in GS VRAM, uploading them on a miss and evicting the
+// least-recently-bound textures when the heap is full. Already-resident textures only have their
+// LRU stamp refreshed, unless their pixels were marked dirty, which re-uploads in place.
+//
+// May fence the GS - submitting the frame so far and waiting for it - when an upload would land
+// on VRAM that queued draws still sample. That closes and reopens any open GIF section, so a
+// GifWriter taken before this call must not be used after it.
+void EnsureTextureResident(const tex::Texture & texture);
+
+// Closes the open 2D section, so what follows draws under it. What the 3D paths call at a
+// 2D->3D boundary; a no-op when nothing has accumulated.
+void FlushPending2D();
+
+// The most qwords one GIF block has held. Shown as "Gif2DPk" in the draw-stats overlay; what it
+// measures against is the command buffer half it has to fit inside (cmdbuf::kHalfBytes).
+int Gif2DPeakQwords();
 
 } // namespace ps2::rc

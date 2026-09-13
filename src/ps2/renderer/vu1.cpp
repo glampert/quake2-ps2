@@ -522,11 +522,11 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     // Send any 2D accumulated before this 3D burst so it draws underneath (and
     // its textures are consumed before our uploads can evict them). A no-op once
     // the batch is already flushed - only the first 3D draw after 2D pays it.
-    gs::FlushPending2D();
+    rc::FlushPending2D();
 
-    gs::EnsureTextureResident(texture);
+    rc::EnsureTextureResident(texture);
 
-    const int drawCtx = gs::CurrentContext();
+    const int drawCtx = rc::CurrentDrawContext();
     rc::RenderContext & ctx = rc::Ctx();
 
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
@@ -644,16 +644,16 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(posChunks) & 15u) == 0, "Position chunks must be 16-byte aligned!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(attribs) & 15u) == 0, "Attribute stream must be 16-byte aligned!");
 
-    gs::FlushPending2D();
+    rc::FlushPending2D();
 
-    gs::EnsureTextureResident(texture);
+    rc::EnsureTextureResident(texture);
 
     // A property of the texture, so it is resolved here rather than threaded
     // down from every caller; StScaleFor is pure arithmetic on its dimensions.
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
-    const int drawCtx = gs::CurrentContext();
+    const int drawCtx = rc::CurrentDrawContext();
     rc::RenderContext & ctx = rc::Ctx();
 
     // Chunking as in DrawTriangles. The positions are already grouped this way -
@@ -775,9 +775,9 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     PS2_AssertMsg(count > 0, "DrawParticles wants at least one particle!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(particles) & 15u) == 0, "Particle data must be 16-byte aligned!");
 
-    gs::FlushPending2D();
+    rc::FlushPending2D();
 
-    gs::EnsureTextureResident(texture);
+    rc::EnsureTextureResident(texture);
 
     // The corner offset transforms once for the whole call, as a direction
     // (w = 0). Because it is orthogonal to the view axis its clip z and w both
@@ -791,7 +791,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
-    const int drawCtx = gs::CurrentContext();
+    const int drawCtx = rc::CurrentDrawContext();
     rc::RenderContext & ctx = rc::Ctx();
 
     for (int first = 0; first < count; first += kMaxParticlesPerBatch)

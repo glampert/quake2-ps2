@@ -84,23 +84,6 @@ constexpr int kRenderHeight = 448;
 // else the GS is told to do now goes through the frame chain.
 constexpr int kTexUploadQwords = 128;
 
-// Room every GIF block keeps back for its own tail: the EOP terminator CloseGifBlock always
-// writes. It used to hold a FINISH as well, for the fence FenceGs emitted into the open block;
-// the chain's own terminator carries that now.
-constexpr int kBlockTailQwords = 1;
-
-// What a GIF block opened in the frame chain must be able to take before it may be split,
-// which is what the chain is asked to reserve when one opens.
-//
-// The clear knows its whole size up front: ~10 qwords of register state plus a 640-pixel
-// strip fill, which draw_rect_filled_strips emits in 32-pixel strips at a qword each. The 2D
-// overlay does not - an empty HUD is a handful of qwords and a full console is thousands - so
-// it takes whatever is left of the chain half and Ensure2DSpace splits the block when that
-// runs out. For it this is only the floor one more primitive needs, which is the largest
-// EnsureSpace in the 2D path plus the tail.
-constexpr int kClearBlockQwords = 64;
-constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
-
 // A GIF packet with a buffer of its own, sent down the GIF channel by the EE. The frame's
 // command buffer carries everything else; what is left for this are the transfers that cannot
 // ride it - the one-time context setup in Init, which runs before the command buffer exists,
@@ -185,33 +168,6 @@ static zbuffer_t     s_zbuffer;
 
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
 
-// The GIF block currently open in the frame chain - the clear at the top of the frame, or the
-// 2D overlay - as a cursor into the chain's own memory. Engaged only between OpenGifBlock and
-// CloseGifBlock, which is also what says whether a block is open; the chain owns the memory
-// and submits it.
-static std::optional<GifWriter> s_gifBlock;
-
-// High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
-// rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
-static int s_gifBlockPeakQwords = 0;
-
-static int s_drawCtx = 1; // which framebuffer/context we render into this frame
-
-// The framebuffer the chain in flight is drawing into - what DISPFB is pointed at once it has
-// been fenced. Not the same as s_drawCtx once a frame is left drawing while the next one is
-// built: that is the whole of what "one frame of latency" means here. -1 until the first frame
-// has been kicked, which is the one frame with nothing finished to show.
-static int s_inFlightCtx = -1;
-
-// ps2_gs_latency: leave the frame's chain drawing at EndFrame and show it at the *next* one,
-// so the GS rasterises frame N while the EE builds N+1, instead of the EE standing at the
-// fence waiting for it. Costs one frame of input lag, which is why it is a cvar and not a
-// constant - sampled each EndFrame so it can be flipped live and judged on hardware.
-static const cvar_t * s_gsLatency = nullptr;
-
-static bool s_frameStarted = false;
-static bool s_in2D         = false;
-
 // Screen clean color. Distinctive dark blue.
 static u8 s_clearColor[3] = { 0x20, 0x20, 0x38 };
 
@@ -239,12 +195,9 @@ constexpr signed char kDitherMatrix[16] =
      1, -1,  0, -2,
 };
 
-// Texture bound in the current 2D section, and the texel offset draws through it
-// must be shifted by - nonzero only while a scrap atlas is bound, where the bound
-// texture is the atlas and the requested image is a sub-rectangle of it.
+// Texture bound for 2D draws in the current drawing context, for dropping redundant TEX0
+// writes. The atlas when a scrapped image was bound; see ResolveBind2D.
 static const tex::Texture * s_currentTex = nullptr;
-static int s_texOriginU = 0;
-static int s_texOriginV = 0;
 
 // The three CLUTs, all living at fixed VRAM spots outside the texture heap
 // (see clut.h for their layout).
@@ -294,52 +247,6 @@ Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
     return texture.width * texture.height * tex::BytesPerTexel(texture.format);
 }
 
-// Opens a DIRECT block in the frame chain and points the libdraw writer at its payload, so
-// every draw_* wrapper below builds GIF data straight into the frame's chain.
-//
-// 'minQwords' is what the caller must be able to write before the block can be closed and
-// another opened; the chain reserves it, which may drain and rewind. That is safe at both
-// call sites and for the same reason: a GIF block only ever opens where no span into the
-// chain is live - the top of the frame, and a 2D section, which by construction has no 3D
-// gather in flight.
-//
-// The block's capacity is not what was reserved but everything left in the half, because the
-// 2D overlay's real size is not knowable up front. Reserve is the floor; Ensure2DSpace is
-// what watches the ceiling.
-GifWriter & OpenGifBlock(const int minQwords)
-{
-    PS2_AssertMsg(!s_gifBlock.has_value(), "A GIF block is already open in the frame chain!");
-
-    cmdbuf::Reserve(minQwords + rc::RenderContext::kDirectOverheadQwords);
-
-    rc::RenderContext & ctx = rc::Ctx();
-    ctx.OpenDirect();
-
-    const int capacity = cmdbuf::QwordCapacity() - cmdbuf::QwordCount();
-    PS2_Assert(capacity >= minQwords);
-
-    return s_gifBlock.emplace(ctx.DirectCursor(), capacity);
-}
-
-// Closes the open block, handing the chain back the cursor the libdraw emitters advanced.
-// Does not submit: what happens to the block afterwards is the caller's business, and for
-// the 2D splits it is nothing at all - the next block simply follows it in the same chain.
-void CloseGifBlock()
-{
-    PS2_AssertMsg(s_gifBlock.has_value(), "No GIF block open in the frame chain!");
-
-    s_gifBlock->EndGifPacket();
-
-    rc::RenderContext & ctx = rc::Ctx();
-    ctx.SetDirectCursor(s_gifBlock->Cursor());
-    ctx.CloseDirect();
-
-    const int used = s_gifBlock->QwordCount();
-    if (used > s_gifBlockPeakQwords) { s_gifBlockPeakQwords = used; }
-
-    s_gifBlock.reset();
-}
-
 } // namespace
 
 // ------------------------------------------------------------------------------------------------
@@ -348,11 +255,6 @@ void CloseGifBlock()
 
 int Width()  { return kRenderWidth; }
 int Height() { return kRenderHeight; }
-
-int CurrentContext()
-{
-    return s_drawCtx;
-}
 
 int DepthTestMethod()
 {
@@ -370,14 +272,6 @@ void SetClearColor(u8 r, u8 g, u8 b)
     s_clearColor[0] = r;
     s_clearColor[1] = g;
     s_clearColor[2] = b;
-}
-
-int Gif2DPeakQwords()
-{
-    // Folds in the block still open, so a mid-frame reader (the overlay is drawn during the
-    // 2D pass) reports honestly rather than only what previous blocks held.
-    const int used = s_gifBlock.has_value() ? s_gifBlock->QwordCount() : 0;
-    return (used > s_gifBlockPeakQwords) ? used : s_gifBlockPeakQwords;
 }
 
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
@@ -524,10 +418,6 @@ void Init()
 
     s_intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
     BuildLitPalette();
-
-    s_gsLatency = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
-
-    s_drawCtx = 1;
 }
 
 float IntensityScale()
@@ -546,403 +436,6 @@ vram::Address ClutAddressFor(const tex::Texture & texture)
     default :
         return vram::Address::Invalid;
     }
-}
-
-// Waits for the chain in flight to have been drawn, then puts its framebuffer on screen.
-// A no-op when there is nothing outstanding, which is how the two ps2_gs_latency paths share it.
-//
-// **Why this is the top of a frame and not the bottom of the previous one.** There are two
-// framebuffers, so the one the GS may be drawing into and the one being scanned out have to be
-// the two different ones - which means the flip to the frame just finished has to happen before
-// anything of the next frame reaches the GS, not after. Doing it here, ahead of the clear,
-// leaves the whole of the frame's build with the display parked on the previous image and the
-// other buffer free: a mid-frame kick - an overflow rewind, a texture fence - then lands
-// somewhere nobody is looking. Doing it at EndFrame instead would have put the flip *after* a
-// frame's worth of drawing into the buffer still on screen.
-//
-// The vsync earns its place twice over here: DISPFB has to be rewritten inside the blanking
-// interval or the change tears, and the spin is the frame's pacing. It costs nothing to move it
-// - the loop still turns once per field - and the wait above it is the one this stage exists to
-// make free, because by now the GS has had the engine's whole frame of C code to finish in.
-static void PresentFrameInFlight()
-{
-    // Nothing waiting to be shown: either EndFrame already presented this frame (ps2_gs_latency
-    // off, where this is then the no-op at the next BeginFrame) or none has been kicked yet.
-    // The early out has to come before the vsync, not after - falling through to it would spend
-    // a whole field here and a second one at the frame's real present, halving the frame rate.
-    if (s_inFlightCtx < 0)
-    {
-        return;
-    }
-
-    cmdbuf::WaitIdle(); // the GS fence; marks its own GsWait
-
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
-        graph_wait_vsync();
-    }
-
-    graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[s_inFlightCtx].address),
-                                   static_cast<int>(s_frameBuffer[s_inFlightCtx].width),
-                                   static_cast<int>(s_frameBuffer[s_inFlightCtx].psm), 0, 0);
-
-    s_inFlightCtx = -1; // shown; EndFrame is what puts the next one up
-}
-
-void BeginFrame()
-{
-    PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
-    s_frameStarted = true;
-
-    // Retires and shows the previous frame when ps2_gs_latency left it drawing. Already done -
-    // by EndFrame itself - when the cvar is off, and this is then the no-op that lets the two
-    // paths share everything below.
-    PresentFrameInFlight();
-
-    cmdbuf::BeginFrame();
-
-    // The clear is the first thing in the frame's chain - a DIRECT block of GIF data at the
-    // head of it - so the VU1 3D world that follows in the same chain cannot land on an
-    // uncleared framebuffer whatever the two GIF paths do. The z=0 sprite with an ALLPASS
-    // z-test clears color and depth in one pass (0 = farthest).
-    GifWriter & clear = OpenGifBlock(kClearBlockQwords);
-
-    draw_disable_blending(); // draw_clear must overwrite, never blend
-    clear.DisableTests(s_drawCtx, s_zbuffer);
-
-    // Re-arm depth writes: a blended VU1 batch (ZMSK = 1) may have been this
-    // context's last word on ZBUF two frames ago, and draw_disable_tests only
-    // touches TEST - without this the z=0 sprite would clear color but leave
-    // stale depth behind.
-    clear.SetRegister(static_cast<u64>(GS_REG_ZBUF + s_drawCtx), ZBufData(false));
-
-    // Dithering hides the banding a 5:5:5 framebuffer would otherwise show on
-    // smooth gradients. Rewritten every frame (one qword) purely so the cvar can
-    // be flipped live to compare; it does nothing to a 32-bit framebuffer.
-    const bool dither = (s_frameBuffer[0].psm == GS_PSM_16) && (s_enableDither->value != 0.0f);
-    clear.SetRegister(static_cast<u64>(GS_REG_DTHE), GS_SET_DTHE(dither ? 1 : 0));
-
-    clear.Clear(s_drawCtx,
-                0.0f, 0.0f,
-                static_cast<float>(kRenderWidth), static_cast<float>(kRenderHeight),
-                static_cast<int>(s_clearColor[0]), static_cast<int>(s_clearColor[1]), static_cast<int>(s_clearColor[2]));
-    clear.EnableTests(s_drawCtx, s_zbuffer); // restore the real z-test for the 3D world
-    CloseGifBlock();
-
-    // Nothing is sent here. The clear sits at the head of the chain and goes out with the rest
-    // of the frame at EndFrame - which is the whole point of the stage, and is safe precisely
-    // because the chain is ordered: the VU1 world that follows it cannot reach the GS first.
-    //
-    // The two lines below still need the GS to be idle, and it still is: whether the previous
-    // frame was fenced at its own EndFrame or left drawing until PresentFrameInFlight above, it
-    // has been fenced by the time the clear is built. That is the property the present being at
-    // the *top* of a frame buys, and it is what keeps everything from here down - the eviction
-    // pins, the reuse hazard, the one-frame LRU stamp - reading exactly as it did before.
-    PS2_AssertMsg(!cmdbuf::KickInFlight(), "BeginFrame with a frame still drawing!");
-    vram::ClearReuseHazard();
-    vram::BeginFrame();
-}
-
-// Opens the pending 2D batch on demand: the first 2D primitive after a flush
-// (or after BeginFrame) lands here. Cheap no-op once the batch is already open.
-static void Ensure2D()
-{
-    PS2_AssertMsg(s_frameStarted, "2D draw outside Begin/EndFrame!");
-    if (s_in2D)
-    {
-        return;
-    }
-    s_in2D       = true;
-    s_currentTex = nullptr; // the TEX0 dedupe state is per 2D batch
-    s_texOriginU = 0;
-    s_texOriginV = 0;
-
-    // The 2D overlay accumulates in a DIRECT block of the frame's chain and goes out at the
-    // next flush, after any 3D drawn so far: always-pass z-test so it lands on top. ZBUF is
-    // re-armed too, in case a blended 3D batch (ZMSK = 1) drew before this batch opened.
-    GifWriter & pkt = OpenGifBlock(k2DBlockMinQwords);
-    pkt.DisableTests(s_drawCtx, s_zbuffer);
-    pkt.SetRegister(static_cast<u64>(GS_REG_ZBUF + s_drawCtx), ZBufData(false));
-}
-
-// Room for the next 2D emission, and the replacement for the frame packet's EnsureSpace.
-//
-// The 2D section has no size known in advance - an empty HUD is a handful of qwords, a full
-// console is thousands - so its block takes whatever is left of the chain half and this is
-// what notices when that runs out: close the block and open another. The new one simply
-// follows the old in the chain unless the half is genuinely full, in which case OpenGifBlock's
-// reservation drains and rewinds it. Either way the split is invisible to what is being drawn,
-// because the state the section programmed lives in the GS's registers, not in the chain.
-static void Ensure2DSpace(const int qwords)
-{
-    PS2_AssertMsg(s_in2D && s_gifBlock.has_value(), "2D emission with no block open!");
-
-    // Plus the block's tail: keeping room for it here is what lets the FINISH and the EOP
-    // terminator never be the things that overrun the block.
-    if (s_gifBlock->QwordCount() + qwords + kBlockTailQwords <= s_gifBlock->QwordCapacity()) [[likely]]
-    {
-        return;
-    }
-
-    CloseGifBlock();
-    OpenGifBlock(qwords + kBlockTailQwords);
-}
-
-void FlushPending2D()
-{
-    if (!s_in2D)
-    {
-        return; // nothing accumulated since the last flush
-    }
-    s_in2D = false;
-
-    CloseGifBlock();
-
-    // Closed, not sent. The block stays where it is and goes out with the frame, and what used
-    // to be an EE drain here is now two things the chain does on its own: 3D that follows
-    // lands after it because it is later in the chain, and cannot overtake it at the GIF
-    // because every block opens with a VIF FLUSH.
-    //
-    // The one job this no longer does is making the GS idle, so the VRAM reuse hazard is not
-    // cleared here - a texture bound by the 2D just closed may still be sampled by draws
-    // nothing has sent. FenceGs is what clears it, and vram::TryAllocate refusing to evict
-    // anything bound this frame is what keeps that rare.
-}
-
-void FillRect(int x, int y, int w, int h, u8 r, u8 g, u8 b, u8 a)
-{
-    Ensure2D();
-    Ensure2DSpace(64);
-
-    GifWriter & pkt = *s_gifBlock;
-
-    rect_t rect;
-    rect.v0.x = static_cast<float>(x);
-    rect.v0.y = static_cast<float>(y);
-    rect.v0.z = 0u;
-    rect.v1.x = static_cast<float>(x + w);
-    rect.v1.y = static_cast<float>(y + h);
-    rect.v1.z = 0u;
-    rect.color.r = r;
-    rect.color.g = g;
-    rect.color.b = b;
-    rect.color.q = 1.0f;
-
-    if (a == 255)
-    {
-        // Fully opaque: plain overwrite.
-        draw_disable_blending();
-        rect.color.a = 0x80;
-        pkt.RectFilled(s_drawCtx, rect);
-    }
-    else
-    {
-        // Translucent (fade screen and friends). GS alpha is 0..0x80 = 0..1.
-        draw_enable_blending();
-        rect.color.a = static_cast<u8>(a >> 1);
-
-        // The GS is slow on very large polygons; libdraw recommends strips for
-        // near-fullscreen fills.
-        if (w >= kRenderWidth / 2)
-        {
-            pkt.RectFilledStrips(s_drawCtx, rect);
-        }
-        else
-        {
-            pkt.RectFilled(s_drawCtx, rect);
-        }
-        draw_disable_blending();
-    }
-}
-
-// Empties the whole pipeline: sends the frame's chain as far as it has been built and blocks
-// until the GS has finished drawing every bit of it - and anything left over from the frame
-// before, which under ps2_gs_latency may still be rasterising. The frame then carries on
-// building where it left off: this is a stall, not a reset, and no pointer into the chain moves.
-//
-// It replaces the old SyncGsBeforeVramReuse, and the difference is the first step. Draining
-// the GS was enough while every batch was kicked and waited on as it was built, because then
-// everything that existed had been sent. Now the draws this is protecting are sitting in the
-// chain unsent, so the chain has to go out before the wait means anything.
-//
-// The FINISH used to be this function's own business - emitted into the open 2D block, or sent
-// on the scratch packet over PATH3 when there was no block to put it in. The chain's terminator
-// carries one now, so a Drain *is* a GS fence and all that is left here is closing the 2D block
-// around it. The section resumes in a fresh one afterwards, which costs nothing: the state it
-// programmed lives in the GS's registers, not in the chain.
-//
-// Its chain cost is the terminator the kick writes, which every draw already reserves - see
-// the note on cmdbuf::kTerminatorQwords in vu1.h. It must not reserve anything itself: this
-// fires in the middle of a draw, with the gather it is about to reference already in the
-// chain, and a reservation that overflowed would rewind that away.
-static void FenceGs()
-{
-    if (s_in2D)
-    {
-        CloseGifBlock();
-    }
-
-    cmdbuf::Drain(); // marks its own DmaSend/DmaFlush/GsWait
-
-    if (s_in2D)
-    {
-        OpenGifBlock(k2DBlockMinQwords);
-    }
-
-    vram::ClearReuseHazard();
-}
-
-// Finds 'sizeWords' of VRAM for the texture, escalating when the heap is full.
-//
-// The normal path evicts the least-recently-bound textures, but never ones bound
-// this frame: their draws are still in the chain, or queued at the GS. When that
-// leaves nothing to take, the pins are the only thing in the way - and the sole
-// reason they exist is work that has not been drawn yet. Fencing the GS retires
-// that work, after which dropping the pins is legitimate and the whole heap is
-// fair game again. The frame still renders correctly; it just spends its one kick
-// early and pays a second one at EndFrame, and anything evicted re-uploads when it
-// is next bound.
-//
-// The last rung repacks the heap into one free block, so it can only come up
-// short for a texture larger than the entire heap - which the caller rejects
-// before ever getting here.
-static vram::Address AllocateVramFor(const tex::Texture & texture, int sizeWords)
-{
-    vram::Address addr = vram::TryAllocate(texture, sizeWords);
-
-    if (addr == vram::Address::Invalid)
-    {
-        Com_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), fencing the GS to unpin.\n",
-                    texture.name, sizeWords * 4 / 1024);
-
-        FenceGs();
-        s_currentTex = nullptr; // the 2D dedupe must not survive an eviction
-        vram::UnpinAll();
-        vram::NoteOomSync();
-
-        addr = vram::TryAllocate(texture, sizeWords);
-    }
-
-    if (addr == vram::Address::Invalid)
-    {
-        // Enough free words, just not contiguous. The GS is already idle from
-        // the rung above, so the wholesale evict-and-repack is safe here.
-        vram::Defragment();
-        s_currentTex = nullptr;
-
-        addr = vram::TryAllocate(texture, sizeWords);
-    }
-
-    if (addr == vram::Address::Invalid) [[unlikely]]
-    {
-        vram::DumpAllBlocks();
-        Sys_Error("GS VRAM allocation failed for '%s' (%d KB) even after draining and defragmenting!",
-                  texture.name, sizeWords * 4 / 1024);
-    }
-
-    return addr;
-}
-
-void EnsureTextureResident(const tex::Texture & texture)
-{
-    PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
-
-    // A scrapped image has no VRAM of its own and its pixels are a window into
-    // the atlas: residency is the atlas's, and binding it here would upload the
-    // whole atlas under the wrong name and sample from the wrong corner. Only
-    // the 2D path can produce one, and it resolves the atlas before calling in.
-    PS2_AssertMsg(texture.atlas == nullptr, "EnsureTextureResident on a scrapped image - bind its atlas!");
-
-    const int psm    = tex::GsPsm(texture.format);
-    const int stride = tex::TextureStridePixels(texture, psm);
-
-    if (texture.vramAddr != tex::Texture::kNotResident)
-    {
-        if (!texture.dirtyPixels)
-        {
-            vram::Touch(texture); // protect from eviction until the next frame
-            return;
-        }
-
-        // Dynamic texture with rewritten pixels: re-upload over its own block.
-        // Draws queued earlier this frame would sample the new texels instead
-        // of the ones they were issued with - drain the GS first. (Its block
-        // is still owned, so the eviction/reuse hazard does not apply here.)
-        const bool boundThisFrame = vram::BoundThisFrame(texture);
-        vram::Touch(texture);
-        if (boundThisFrame)
-        {
-            FenceGs();
-        }
-    }
-    else
-    {
-        const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
-
-        // Nothing below can service a texture bigger than the whole heap, and
-        // trying would evict the entire working set first and then report it as
-        // a working-set problem. Say what is actually wrong instead.
-        if (sizeWords > vram::HeapTotalWords()) [[unlikely]]
-        {
-            Sys_Error("Texture '%s' (%dx%d) needs %d KB of GS VRAM, but the whole texture heap is only %d KB!",
-                      texture.name, texture.width, texture.height,
-                      sizeWords * 4 / 1024, vram::HeapTotalWords() * 4 / 1024);
-        }
-
-        const vram::Address addr = AllocateVramFor(texture, sizeWords);
-
-        // Queued or in-flight draws may still sample VRAM the allocation just
-        // recycled; the upload below would pull it out from under them.
-        if (vram::HasReuseHazard())
-        {
-            FenceGs();
-        }
-
-        texture.vramAddr = addr;
-
-        Com_DPrintf("VRAM: uploaded '%s' (%dx%d, %d KB)\n", texture.name,
-                    texture.width, texture.height, sizeWords * 4 / 1024);
-    }
-
-    if (texture.dirtyPixels)
-    {
-        // The CPU just wrote these pixels; part of them may still sit in the
-        // data cache, and SendChain only writes back the chain-tag buffer, not
-        // REF'd data - flush the range or the GS reads stale texels. Built-ins
-        // are never dirty (the ELF loader wrote them) and skip this.
-        void * pixels = const_cast<void *>(texture.pixels);
-        SyncDCache(pixels, static_cast<u8 *>(pixels) + PixelBufferBytes(texture));
-        texture.dirtyPixels = false;
-    }
-
-    // Synchronous DMA upload; the chain references the pixels in EE RAM.
-    // TextureTransfer cannot EnsureSpace up front - only draw_texture_transfer
-    // knows how many chain tags a given texture needs - but GifWriter::Advance
-    // checks afterwards and Sys_Errors, so a texture that outgrows this 128-qword
-    // scratch packet says so instead of scribbling past it.
-    GifWriter & pkt = s_texUploadPacket.Begin();
-    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
-    pkt.TextureFlush();
-
-    // Nothing may reach the GS over PATH3 while a chain is still being fed to it over PATH1 and
-    // PATH2: the two would interleave at the GIF, and an image transfer cut in half is the one
-    // thing it does not put back together. Nothing is outstanding here today - every mid-frame
-    // kick drains, and the frame ps2_gs_latency leaves drawing is retired at the next BeginFrame,
-    // before any of this frame's binds - so this reads as free. It is the guard that keeps that
-    // true: a kick left in flight anywhere upstream would otherwise surface as a corrupt texture
-    // on 5% of frames, which is the kind of bug that takes a week.
-    cmdbuf::WaitIdle();
-
-    s_texUploadPacket.SendChain();
-    {
-        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        GifPacket::Wait();
-    }
-
-    vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count
-
-    // Sanity check.
-    PS2_Assert(texture.vramAddr != tex::Texture::kNotResident);
 }
 
 void ReleaseTexture(const tex::Texture & texture)
@@ -976,33 +469,194 @@ void DefragVramHeap()
     s_currentTex = nullptr;
 }
 
-void SetTextureFor2D(const tex::Texture & texture)
+// ------------------------------------------------------------------------------------------------
+// Presentation
+// ------------------------------------------------------------------------------------------------
+
+void PresentFramebuffer(const int drawCtx)
+{
+    PS2_Assert(drawCtx == 0 || drawCtx == 1);
+
+    // DISPFB has to be rewritten inside the blanking interval or the change tears, and the spin
+    // doubles as the frame's pacing.
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
+        graph_wait_vsync();
+    }
+
+    graph_set_framebuffer_filtered(static_cast<int>(s_frameBuffer[drawCtx].address),
+                                   static_cast<int>(s_frameBuffer[drawCtx].width),
+                                   static_cast<int>(s_frameBuffer[drawCtx].psm), 0, 0);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Texture upload
+// ------------------------------------------------------------------------------------------------
+
+void UploadTexture(const tex::Texture & texture)
+{
+    PS2_Assert(texture.pixels != nullptr);
+    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident,
+                  "UploadTexture before VRAM was allocated for it!");
+
+    const int psm    = tex::GsPsm(texture.format);
+    const int stride = tex::TextureStridePixels(texture, psm);
+
+    if (texture.dirtyPixels)
+    {
+        // The CPU just wrote these pixels; part of them may still sit in the data cache, and
+        // SendChain only writes back the chain-tag buffer, not REF'd data - flush the range or
+        // the GS reads stale texels. Built-ins are never dirty (the ELF loader wrote them).
+        void * pixels = const_cast<void *>(texture.pixels);
+        SyncDCache(pixels, static_cast<u8 *>(pixels) + PixelBufferBytes(texture));
+        texture.dirtyPixels = false;
+    }
+
+    // Synchronous DMA upload; the chain references the pixels in EE RAM. TextureTransfer cannot
+    // EnsureSpace up front - only draw_texture_transfer knows how many chain tags a given
+    // texture needs - but GifWriter::Advance checks afterwards under asserts, so a texture that
+    // outgrows this scratch packet says so instead of scribbling past it.
+    GifWriter & pkt = s_texUploadPacket.Begin();
+    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
+    pkt.TextureFlush();
+
+    // Nothing may reach the GS over PATH3 while a chain is still being fed to it over PATH1 and
+    // PATH2: the two would interleave at the GIF, and an image transfer cut in half is the one
+    // thing it does not put back together. Nothing is outstanding here today - every mid-frame
+    // kick drains, and the frame ps2_gs_latency leaves drawing is retired at the next BeginFrame,
+    // before any of this frame's binds - so this reads as free. It is the guard that keeps that
+    // true: a kick left in flight anywhere upstream would otherwise surface as a corrupt texture
+    // on 5% of frames, which is the kind of bug that takes a week.
+    cmdbuf::WaitIdle();
+
+    s_texUploadPacket.SendChain();
+    {
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+        GifPacket::Wait();
+    }
+
+    vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count
+}
+
+// ------------------------------------------------------------------------------------------------
+// 2D texture binding
+// ------------------------------------------------------------------------------------------------
+
+Bind2D ResolveBind2D(const tex::Texture & texture)
 {
     PS2_Assert(texture.type != tex::ImageType::Null && texture.pixels != nullptr);
-    Ensure2D();
 
-    // A scrapped image is a window onto a shared atlas: the atlas is what gets
-    // bound and made resident, and the draw's texel coordinates shift into it.
+    // A scrapped image is a window onto a shared atlas: the atlas is what gets bound and made
+    // resident, and the draw's texel coordinates shift into it.
     const bool isInScrapAtlas = (texture.atlas != nullptr);
     const tex::Texture & bindTex = isInScrapAtlas ? *texture.atlas : texture;
 
-    // Update the origin before the dedupe below, not after: two different images
-    // in the same scrap resolve to the same atlas, so the second one correctly
-    // skips the TEX0 write - but it still has to draw from its own corner.
-    s_texOriginU = isInScrapAtlas ? texture.atlasX : 0;
-    s_texOriginV = isInScrapAtlas ? texture.atlasY : 0;
+    Bind2D bind;
+    bind.texture = &bindTex;
+    bind.originU = isInScrapAtlas ? texture.atlasX : 0;
+    bind.originV = isInScrapAtlas ? texture.atlasY : 0;
 
-    if (&bindTex == s_currentTex && !bindTex.dirtyPixels)
+    // Two different images in the same scrap resolve to the same atlas, so the second correctly
+    // needs no TEX0 write - but it still draws from its own corner, which is why the origins are
+    // set either way.
+    bind.needsBind = (&bindTex != s_currentTex) || bindTex.dirtyPixels;
+    return bind;
+}
+
+void Invalidate2DBinding()
+{
+    s_currentTex = nullptr;
+}
+
+// ------------------------------------------------------------------------------------------------
+// GIF emission
+// ------------------------------------------------------------------------------------------------
+
+void EmitClear(GifWriter & w, const int drawCtx, const bool dither)
+{
+    w.EnsureSpace(kClearQwords);
+
+    draw_disable_blending(); // draw_clear must overwrite, never blend
+    w.DisableTests(drawCtx, s_zbuffer);
+
+    // Re-arm depth writes: a blended VU1 batch (ZMSK = 1) may have been this context's last word
+    // on ZBUF two frames ago, and draw_disable_tests only touches TEST - without this the z=0
+    // sprite would clear color but leave stale depth behind.
+    w.SetRegister(static_cast<u64>(GS_REG_ZBUF + drawCtx), ZBufData(false));
+
+    // Dithering hides the banding a 5:5:5 framebuffer would otherwise show on smooth gradients.
+    // Rewritten every frame (one qword) purely so the cvar can be flipped live to compare; it
+    // does nothing to a 32-bit framebuffer.
+    const bool dtheOn = (s_frameBuffer[0].psm == GS_PSM_16) && dither;
+    w.SetRegister(static_cast<u64>(GS_REG_DTHE), GS_SET_DTHE(dtheOn ? 1 : 0));
+
+    // The z=0 sprite with an ALLPASS z-test clears color and depth in one pass (0 = farthest).
+    w.Clear(drawCtx, 0.0f, 0.0f,
+            static_cast<float>(kRenderWidth), static_cast<float>(kRenderHeight),
+            static_cast<int>(s_clearColor[0]), static_cast<int>(s_clearColor[1]),
+            static_cast<int>(s_clearColor[2]));
+
+    w.EnableTests(drawCtx, s_zbuffer); // restore the real z-test for the 3D world
+}
+
+void EmitBegin2D(GifWriter & w, const int drawCtx)
+{
+    w.EnsureSpace(kBegin2DQwords);
+
+    w.DisableTests(drawCtx, s_zbuffer);
+    w.SetRegister(static_cast<u64>(GS_REG_ZBUF + drawCtx), ZBufData(false));
+}
+
+void EmitFillRect(GifWriter & w, const int drawCtx, const int x, const int y,
+                  const int width, const int height, const u8 r, const u8 g, const u8 b, const u8 a)
+{
+    w.EnsureSpace(kFillRectQwords);
+
+    rect_t rect;
+    rect.v0.x = static_cast<float>(x);
+    rect.v0.y = static_cast<float>(y);
+    rect.v0.z = 0u;
+    rect.v1.x = static_cast<float>(x + width);
+    rect.v1.y = static_cast<float>(y + height);
+    rect.v1.z = 0u;
+    rect.color.r = r;
+    rect.color.g = g;
+    rect.color.b = b;
+    rect.color.q = 1.0f;
+
+    if (a == 255)
     {
-        return; // already bound (and made resident); EE RAM pixels not dirty.
+        // Fully opaque: plain overwrite.
+        draw_disable_blending();
+        rect.color.a = 0x80;
+        w.RectFilled(drawCtx, rect);
     }
+    else
+    {
+        // Translucent (fade screen and friends). GS alpha is 0..0x80 = 0..1.
+        draw_enable_blending();
+        rect.color.a = static_cast<u8>(a >> 1);
 
-    EnsureTextureResident(bindTex);
-    s_currentTex = &bindTex;
+        // The GS is slow on very large polygons; libdraw recommends strips for near-fullscreen
+        // fills.
+        if (width >= kRenderWidth / 2)
+        {
+            w.RectFilledStrips(drawCtx, rect);
+        }
+        else
+        {
+            w.RectFilled(drawCtx, rect);
+        }
+        draw_disable_blending();
+    }
+}
 
-    // After EnsureTextureResident, which may have split the block out from under us.
-    Ensure2DSpace(16);
-    GifWriter & pkt = *s_gifBlock;
+void EmitTextureBind(GifWriter & w, const int drawCtx, const Bind2D & bind)
+{
+    PS2_AssertMsg(bind.needsBind, "EmitTextureBind for a binding that did not need one!");
+    const tex::Texture & bindTex = *bind.texture;
+
+    w.EnsureSpace(kTextureBindQwords);
 
     lod_t lod;
     lod.calculation   = LOD_USE_K;
@@ -1017,9 +671,9 @@ void SetTextureFor2D(const tex::Texture & texture)
     const vram::Address clutAddr = ClutAddressFor(bindTex);
     if (clutAddr != vram::Address::Invalid)
     {
-        // Reload the on-chip CLUT cache on every bind: cheap (1 KB) at the 2D
-        // path's bind rate. TODO: CLUT_COMPARE_CBP0 skips redundant reloads -
-        // worthwhile once world textures bind per-surface.
+        // Reload the on-chip CLUT cache on every bind: cheap (1 KB) at the 2D path's bind rate.
+        // TODO: CLUT_COMPARE_CBP0 skips redundant reloads - worthwhile once world textures bind
+        // per-surface.
         clut.address      = static_cast<unsigned int>(clutAddr);
         clut.psm          = GS_PSM_32;
         clut.storage_mode = CLUT_STORAGE_MODE1;
@@ -1039,9 +693,8 @@ void SetTextureFor2D(const tex::Texture & texture)
     const int psm    = tex::GsPsm(bindTex.format);
     const int stride = tex::TextureStridePixels(bindTex, psm);
 
-    // Fill the libdraw descriptor used when binding. The stride (TEX0's TBW)
-    // differs from the width for narrow 8-bit textures; the page-grid footprint
-    // already covers the rounding.
+    // The stride (TEX0's TBW) differs from the width for narrow 8-bit textures; the page-grid
+    // footprint already covers the rounding.
     texbuffer_t texbuf;
     texbuf.address         = static_cast<unsigned int>(bindTex.vramAddr);
     texbuf.width           = static_cast<unsigned int>(stride);
@@ -1051,37 +704,38 @@ void SetTextureFor2D(const tex::Texture & texture)
     texbuf.info.components = static_cast<unsigned char>(tex::GsComponents(bindTex.components));
     texbuf.info.function   = static_cast<unsigned char>(tex::GsFunction(bindTex.function));
 
-    pkt.TextureSampling(s_drawCtx, lod);
-    pkt.TextureBuffer(s_drawCtx, texbuf, clut);
+    w.TextureSampling(drawCtx, lod);
+    w.TextureBuffer(drawCtx, texbuf, clut);
+
+    s_currentTex = &bindTex;
 }
 
-void DrawTexturedRect(int x, int y, int w, int h,
-                      int u0, int v0, int u1, int v1,
-                      const u8 brightness[3])
+void EmitTexturedRect(GifWriter & w, const int drawCtx, const int x, const int y,
+                      const int width, const int height,
+                      const int u0, const int v0, const int u1, const int v1,
+                      const Bind2D & bind, const u8 brightness[3])
 {
-    PS2_AssertMsg(s_currentTex != nullptr, "DrawTexturedRect without SetTextureFor2D!");
-    PS2_AssertMsg(s_in2D, "DrawTexturedRect without an open 2D batch!");
+    PS2_AssertMsg(s_currentTex != nullptr, "EmitTexturedRect with nothing bound!");
 
-    Ensure2DSpace(8);
-    GifWriter & pkt = *s_gifBlock;
+    w.EnsureSpace(kTexturedRectQwords);
 
-    // s_texOriginU/V both zero unless a scrap atlas is bound, in which case they shift the
-    // coordinates from the image's own space into its corner of the atlas.
+    // The bind's origins are both zero unless a scrap atlas is bound, in which case they shift
+    // the coordinates from the image's own space into its corner of the atlas.
     texrect_t rect;
     rect.v0.x = static_cast<float>(x);
     rect.v0.y = static_cast<float>(y);
     rect.v0.z = 0u;
-    rect.t0.u = static_cast<float>(u0 + s_texOriginU);
-    rect.t0.v = static_cast<float>(v0 + s_texOriginV);
-    rect.v1.x = static_cast<float>(x + w);
-    rect.v1.y = static_cast<float>(y + h);
+    rect.t0.u = static_cast<float>(u0 + bind.originU);
+    rect.t0.v = static_cast<float>(v0 + bind.originV);
+    rect.v1.x = static_cast<float>(x + width);
+    rect.v1.y = static_cast<float>(y + height);
     rect.v1.z = 0u;
-    rect.t1.u = static_cast<float>(u1 + s_texOriginU);
-    rect.t1.v = static_cast<float>(v1 + s_texOriginV);
+    rect.t1.u = static_cast<float>(u1 + bind.originU);
+    rect.t1.v = static_cast<float>(v1 + bind.originV);
 
-    // Modulate: 0x80 = 1.0, so 'brightness' 128 leaves texels unchanged. Vertex
-    // alpha 0x80 likewise preserves texel alpha, which the alpha test then uses
-    // to cut out transparent texels (e.g. the console font background).
+    // Modulate: 0x80 = 1.0, so 'brightness' 128 leaves texels unchanged. Vertex alpha 0x80
+    // likewise preserves texel alpha, which the alpha test then uses to cut out transparent
+    // texels (e.g. the console font background).
     rect.color.r = brightness[0];
     rect.color.g = brightness[1];
     rect.color.b = brightness[2];
@@ -1089,45 +743,7 @@ void DrawTexturedRect(int x, int y, int w, int h,
     rect.color.q = 1.0f;
 
     draw_disable_blending();
-    pkt.RectTextured(s_drawCtx, rect);
-}
-
-void EndFrame()
-{
-    PS2_AssertMsg(s_frameStarted, "EndFrame without BeginFrame!");
-    s_frameStarted = false;
-
-    // Close whatever 2D accumulated since the last flush (the HUD/console overlay in the
-    // common case) so it lands on top before the buffer is displayed.
-    FlushPending2D();
-
-    // Everything the frame told the GS to do has been sitting in the chain since BeginFrame -
-    // the clear, every VU1 batch, every 2D block - and this is where all of it goes out, in one
-    // kick, with one FlushCache(0), against the fifty-odd a frame used to take.
-    s_inFlightCtx = s_drawCtx;
-    cmdbuf::Kick();
-
-    // ps2_gs_latency is only about who waits for that kick. Off, this frame is fenced and shown
-    // before EndFrame returns, which is what the renderer did before the cvar existed. On, it is
-    // left drawing and PresentFrameInFlight at the next BeginFrame picks it up - so the GS
-    // rasterises it across the engine's own frame work instead of the EE standing at the fence.
-    //
-    // Turning it off mid-run costs one frame: the one left drawing is fenced by the Kick above
-    // and then never shown, because the line above it has already claimed s_inFlightCtx. That is
-    // a duplicated field on screen, not a corrupt one, and it is not worth code to avoid.
-    if (s_gsLatency->value == 0.0f)
-    {
-        PresentFrameInFlight();
-    }
-
-    // Rolls the frame chain's high-water and latches its counters for the overlay. Everything
-    // the frame told the GS to do went through it, so from here those counters measure the
-    // whole frame.
-    cmdbuf::EndFrame();
-
-    s_drawCtx ^= 1; // draw into the other buffer next frame
-
-    vram::EndFrame();
+    w.RectTextured(drawCtx, rect);
 }
 
 } // namespace ps2::gs

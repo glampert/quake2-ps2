@@ -31,6 +31,7 @@
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/batch.h"
 #include "ps2/renderer/cmd_buffer.h"
+#include "ps2/renderer/render_context.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/math/vec_mat.h"
@@ -1510,7 +1511,7 @@ void RenderBlendedOverlay(const refdef_t & viewDef)
         return; // Fully transparent: nothing to tint.
     }
 
-    gs::FillRect(0, 0, gs::Width(), gs::Height(),
+    rc::Ctx().FillRect(0, 0, gs::Width(), gs::Height(),
                  BlendChannelToByte(viewDef.blend[0]),
                  BlendChannelToByte(viewDef.blend[1]),
                  BlendChannelToByte(viewDef.blend[2]),
@@ -2498,7 +2499,7 @@ void RenderParticles(const refdef_t & viewDef)
     // Closing the 2D section first, because taking the chain is what the boundary
     // actually is: a pending 2D batch holds an open DMA tag and an allocation
     // cannot land inside one (see batch.h).
-    gs::FlushPending2D();
+    rc::FlushPending2D();
     cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
     vu1::ParticleVertex * const particles = cmdbuf::Alloc<vu1::ParticleVertex>(numParticles);
 

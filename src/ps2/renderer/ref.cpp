@@ -491,6 +491,9 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     (void)hinstance;
     (void)wndproc;
 
+    const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
+    const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);
+
     // The cvars the GS and the texture cache are configured with. Both are latched here: the
     // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
     // GS may only have rewritten while it is idle, so a change to either takes effect next run.
@@ -504,8 +507,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::gs::Config gsConfig;
     gsConfig.palette          = global_palette;
     gsConfig.intensity        = intensityScale;
-    gsConfig.width            = 640;
-    gsConfig.height           = 448;
+    gsConfig.width            = static_cast<int>(fbWidth->value);
+    gsConfig.height           = static_cast<int>(fbHeight->value);
     gsConfig.framebuffer16Bit = (fb16Bit->value != 0.0f);
 
     ps2::gs::Init(gsConfig);

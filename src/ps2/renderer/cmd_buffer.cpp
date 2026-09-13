@@ -292,7 +292,7 @@ void * detail::AllocQwords(const int qwords, const bool committable)
     // An allocation fronts itself with a NEXT tag, which has to be part of the tag stream
     // rather than of somebody else's payload - so nothing may have a tag open here. In practice
     // that means a pending 2D batch: rc's FlushPending2D closes it, and the rule is that whoever
-    // claims the chain calls it first (see batch.h), not that the draw eventually will.
+    // claims the buffer calls it first (see rc::TriangleStream), not that the draw eventually will.
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
                   "cmdbuf::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
 

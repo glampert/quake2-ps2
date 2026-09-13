@@ -39,16 +39,16 @@ struct VUCode
 
 // An entry point in VU1 micro memory, in 64-bit instruction units - what MPG destinations and
 // MSCAL take, not qwords.
-enum struct ProgramAddr : u32
-{
-};
+enum struct ProgramAddr : u32 {};
 
 enum class Program
 {
     Textured,  // world geometry: transform, guard-band clip, textured gouraud triangles
-    Lit,       // the same, with the vertex colour computed from the frame's dynamic lights
     Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
     Particles, // camera-facing billboards expanded to GS sprites
+    Lit,       // world geometry, with the vertex colour computed from the frame's dynamic lights
+
+    Count      // Number of VU1 programs - not valid for ProgramAddress.
 };
 
 // Where 'prog' was uploaded. Init must have run.

@@ -31,7 +31,7 @@ namespace {
 static bool s_initialized = false;
 
 // Micro memory entry point of each program, indexed by Program. Set by Init().
-static ProgramAddr s_progAddr[4] = {};
+static ProgramAddr s_progAddr[static_cast<int>(Program::Count)];
 
 } // namespace
 
@@ -40,6 +40,7 @@ ProgramAddr ProgramAddress(const Program prog)
     // The one assert standing in for the old per-draw "vu1::Init not called!" checks: every chunk
     // emitted for every draw path comes through here for its MSCAL entry point.
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
+    PS2_Assert(prog < Program::Count);
     return s_progAddr[static_cast<int>(prog)];
 }
 
@@ -50,6 +51,35 @@ void Init()
 
     dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_VIF1);
+
+    /*
+    const struct { VUCode code; u32 instructionCount; } programs[] = {
+        { VU1Prog_TexturedTriangles_Code(), VU1Prog_TexturedTriangles_InstructionCount() },
+        { VU1Prog_LerpedTriangles_Code(),   VU1Prog_LerpedTriangles_InstructionCount()   },
+        { VU1Prog_Particles_Code(),         VU1Prog_Particles_InstructionCount()         },
+        { VU1Prog_LitTriangles_Code(),      VU1Prog_LitTriangles_InstructionCount()      },
+    };
+    static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");
+
+    rc::RenderContext & ctx = rc::Ctx();
+
+    u32 nextProgramIdx  = 0;
+    u32 nextProgramAddr = 0;
+
+    for (const auto& program : programs)
+    {
+        PS2_AssertMsg(nextProgramAddr + program.instructionCount <= 2048,
+                      "Microprograms overflow VU1 micro memory!");
+
+        s_progAddr[nextProgramIdx++] = ProgramAddr(nextProgramAddr);
+        ctx.AddMicroProgram(ProgramAddr(nextProgramAddr), program.code);
+
+        nextProgramAddr += (program.instructionCount + 1u) & ~1u;
+    }
+
+    ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
+    cmdbuf::Drain();
+    */
 
     // The textured program sits at micro address 0, then the lerped one, the particle one and the
     // lit one. MPG uploads round an odd instruction count up to even, so each base rounds up too.

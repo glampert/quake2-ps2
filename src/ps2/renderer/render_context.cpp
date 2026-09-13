@@ -956,4 +956,36 @@ void SetDynamicLights(const vu1::DynamicLight * lights, const int count)
     s_lightConstants.posZ = { pz[0], pz[1], pz[2], pz[3] };
 }
 
+// ------------------------------------------------------------------------------------------------
+// Particles
+// ------------------------------------------------------------------------------------------------
+
+vu1::ParticleVertex * RenderContext::BeginParticles(const int count)
+{
+    PS2_AssertMsg(count > 0, "BeginParticles with nothing to draw!");
+    PS2_AssertMsg(m_particles == nullptr, "BeginParticles without an EndParticles!");
+
+    // Taking the buffer is the 2D->3D boundary: a pending 2D section holds an open DMA tag and an
+    // allocation cannot land inside one. The reservation covers the chunks the draw appends on top
+    // as well, because those must not drain the buffer out from under the span they reference.
+    FlushPending2D();
+    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(count) + DrawParticlesChainCost(count));
+
+    m_particles     = cmdbuf::Alloc<vu1::ParticleVertex>(count);
+    m_particleCount = count;
+    return m_particles;
+}
+
+void RenderContext::EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
+                                 const math::Vec3 & quadOffset, const DrawFlags flags)
+{
+    PS2_AssertMsg(m_particles != nullptr, "EndParticles without a BeginParticles!");
+
+    ++view::GetDrawStats().drawBatches;
+    DrawParticles(mvp, texture, quadOffset, m_particles, m_particleCount, flags);
+
+    m_particles     = nullptr;
+    m_particleCount = 0;
+}
+
 } // namespace ps2::rc

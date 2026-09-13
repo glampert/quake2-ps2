@@ -126,16 +126,6 @@ struct alignas(16) FrameConstants
 // without moving the buffers.
 static_assert(sizeof(FrameConstants) == 8 * 16, "Must match the VU memory layout");
 
-// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an
-// A+D qword because the native RGBAQ layout is the vertex's packed color u32
-// with Q in the word above - the VU raw-copies the color instead of spreading
-// one byte per word as the PACKED RGBAQ descriptor would want. Q rides in the
-// A+D data, so nothing relies on the ST-latched Q. XYZ2 last: it kicks the
-// vertex with whatever ST/RGBAQ hold.
-constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
-                               (u64(GIF_REG_AD)   << 4) |
-                               (u64(GIF_REG_XYZ2) << 8);
-
 // Packs 0-255 channels into DrawVertex::rgba, the GS native RGBAQ byte order
 // (r in the low byte). Alpha 0x80 = 1.0 on the GS.
 constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
@@ -155,6 +145,16 @@ constexpr int kMaxVertsPerBatch = 96;
 // Batch layout, relative to the current double buffer (XTOP).
 constexpr int kBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
+
+// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an
+// A+D qword because the native RGBAQ layout is the vertex's packed color u32
+// with Q in the word above - the VU raw-copies the color instead of spreading
+// one byte per word as the PACKED RGBAQ descriptor would want. Q rides in the
+// A+D data, so nothing relies on the ST-latched Q. XYZ2 last: it kicks the
+// vertex with whatever ST/RGBAQ hold.
+constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
+                               (u64(GIF_REG_AD)   << 4) |
+                               (u64(GIF_REG_XYZ2) << 8);
 
 // One triangle vertex, 2 qwords, matching the microprogram's input layout.
 // The packed color must sit in the first word of its qword: the microprogram

@@ -3,7 +3,7 @@
  * File: batch.h
  * Brief: The triangle gather buffer every 3D path fills, then hands to VU1 as one batch.
  *
- *  vu1::DrawTriangles wants whole triangle lists, and a draw call costs a DMA
+ *  rc::DrawTriangles wants whole triangle lists, and a draw call costs a DMA
  *  chain of its own, so nothing submits a triangle at a time: each path gathers
  *  into a scratch buffer and flushes it when the texture changes, when the batch
  *  state changes or when it fills up. The buffer is referenced in place by the
@@ -94,7 +94,7 @@ public:
     // because the chunk loop reserves as it goes and a reservation that overflowed
     // half way through would rewind the chain out from under the span.
     static constexpr int kClaimQwords = cmdbuf::CalcAllocCost<vu1::DrawVertex>(MaxVerts)
-                                      + vu1::DrawTrianglesChainCost(MaxVerts);
+                                      + rc::DrawTrianglesChainCost(MaxVerts);
 
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
     Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
@@ -104,7 +104,7 @@ public:
     // of them must flush with the *outgoing* ones first. Does nothing when the
     // buffer is empty, so flushing an already-flushed batch is free.
     void Flush(const math::Mat4 & mvp, const tex::Texture & texture,
-               const vu1::DrawFlags flags = vu1::DrawFlags::None)
+               const rc::DrawFlags flags = rc::DrawFlags::None)
     {
         if (m_vertCount > 0)
         {
@@ -114,7 +114,7 @@ public:
             cmdbuf::Commit(m_verts, m_vertCount);
 
             ++view::GetDrawStats().drawBatches;
-            vu1::DrawTriangles(mvp, texture, m_verts, m_vertCount, flags);
+            rc::DrawTriangles(mvp, texture, m_verts, m_vertCount, flags);
 
             m_vertCount = 0;
             m_verts     = nullptr;
@@ -154,7 +154,7 @@ public:
     // so callers count nothing of their own for the triangles they hand over.
     template<typename ColorFn>
     void GatherTriangle(clip::ClipVertex (&corners)[3], const math::Mat4 & mvp,
-                        const tex::Texture & texture, const vu1::DrawFlags flags,
+                        const tex::Texture & texture, const rc::DrawFlags flags,
                         ColorFn && vertexColor)
     {
         const clip::ClipVertex * verts = nullptr;
@@ -268,7 +268,7 @@ public:
     // (vu1.cpp asserts kMaxLerpVertsPerBatch is one), so a triangle never
     // straddles two of them and PushTriangle only ever has to notice that the
     // current group is full.
-    static constexpr int kMaxChunks = vu1::ChunkCount(MaxVerts, vu1::kMaxLerpVertsPerBatch);
+    static constexpr int kMaxChunks = rc::ChunkCount(MaxVerts, vu1::kMaxLerpVertsPerBatch);
 
     // What one flush cycle claims from the chain: the groups, the tags of the
     // draw that sends them - and a second draw's worth of tags, because
@@ -276,7 +276,7 @@ public:
     // thing that overflows. An overflow between the two would rewind the chain
     // out from under the span the redraw exists to reference.
     static constexpr int kClaimQwords = cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(kMaxChunks)
-                                      + (2 * vu1::DrawLerpedTrianglesChainCost(MaxVerts));
+                                      + (2 * rc::DrawLerpedTrianglesChainCost(MaxVerts));
 
     Q_ALWAYS_INLINE bool IsFull()  const { return m_vertCount == MaxVerts; }
     Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
@@ -300,7 +300,7 @@ public:
     void Flush(const math::Mat4 & mvp, const tex::Texture & texture,
                const math::Vec3 & frontv, const math::Vec3 & backv,
                const math::Vec4 & shadeLight,
-               const vu1::FaceCull faceCull, const vu1::DrawFlags flags)
+               const rc::FaceCull faceCull, const rc::DrawFlags flags)
     {
         // Recorded even when there is nothing to send, so RedrawLastFlush after
         // an empty flush draws nothing rather than the previous caller's model.
@@ -314,10 +314,10 @@ public:
 
             // Whole groups: the tail of a partly filled last group is the only
             // thing a flush cycle wastes, and it is bounded by one group.
-            cmdbuf::Commit(m_chunks, vu1::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
+            cmdbuf::Commit(m_chunks, rc::ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
             ++view::GetDrawStats().drawBatches;
-            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
+            rc::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
                                      m_chunks, m_attribs, m_vertCount, faceCull, flags);
 
             // Past what this cycle submitted, so a model that needed more than one
@@ -347,14 +347,14 @@ public:
     void RedrawLastFlush(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
                          const math::Vec4 & shadeLight,
-                         const vu1::FaceCull faceCull, const vu1::DrawFlags flags)
+                         const rc::FaceCull faceCull, const rc::DrawFlags flags)
     {
         PS2_AssertMsg(m_vertCount == 0, "RedrawLastFlush after pushing new vertices!");
 
         if (m_lastFlushedCount > 0)
         {
             ++view::GetDrawStats().drawBatches;
-            vu1::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
+            rc::DrawLerpedTriangles(mvp, texture, frontv, backv, shadeLight,
                                      m_lastFlushed, m_lastFlushedAttribs, m_lastFlushedCount,
                                      faceCull, flags);
         }

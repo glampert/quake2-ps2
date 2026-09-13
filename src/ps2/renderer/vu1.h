@@ -1,22 +1,23 @@
 #pragma once
 /* ================================================================================================
  * File: vu1.h
- * Brief: VU1-accelerated 3D drawing: microprogram upload and triangle batch submission.
- *        The microprogram transforms vertices by the caller's MVP matrix, performs
- *        guard-band clipping (whole triangles) and XGKICKs the result to the GS.
+ * Brief: The VU1 microprograms: their upload and entry points, the VU1 data memory layout they
+ *        read, and the vertex formats and constants they consume. The draw paths that feed them
+ *        belong to ps2::rc.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
-#include "ps2/renderer/cmd_buffer.h"
 
-namespace ps2::tex { struct Texture; }
+#include <tamtypes.h>
+#include <gif_tags.h>
 
 namespace ps2::vu1 {
 
 // ------------------------------------------------------------------------------------------------
-// Utilities
+// Microprograms
 // ------------------------------------------------------------------------------------------------
 
 // An assembled microprogram's extent in the ELF's .vudata section.
@@ -36,6 +37,55 @@ struct VUCode
     inline u32 progName##_InstructionCount()  { return u32((&progName##_CodeEnd - &progName##_CodeStart) / 2); } \
     inline ps2::vu1::VUCode progName##_Code() { return { &progName##_CodeStart, &progName##_CodeEnd }; }
 
+// An entry point in VU1 micro memory, in 64-bit instruction units - what MPG destinations and
+// MSCAL take, not qwords.
+enum struct ProgramAddr : u32
+{
+};
+
+enum class Program
+{
+    Textured,  // world geometry: transform, guard-band clip, textured gouraud triangles
+    Lit,       // the same, with the vertex colour computed from the frame's dynamic lights
+    Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
+    Particles, // camera-facing billboards expanded to GS sprites
+};
+
+// Where 'prog' was uploaded. Init must have run.
+ProgramAddr ProgramAddress(Program prog);
+
+// Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory and programs the
+// double-buffer registers. Call once, after gs::Init() and cmdbuf::Init() - the upload rides the
+// command buffer.
+void Init();
+
+// ------------------------------------------------------------------------------------------------
+// VU1 data memory layout (1024 qwords; addresses in qwords)
+//
+//      0-7       the frame constants below
+//      8-999     the two XTOP double buffers (VIF1 BASE=8, OFFSET=496)
+//      1000-1011 the dynamic light block
+// ------------------------------------------------------------------------------------------------
+
+// Frame constants at fixed low VU addresses (below kDoubleBufferBase).
+constexpr int kFrameConstantsAddr = 0;
+
+// VIF1 double-buffer registers: two 496-qword buffers above the constants.
+constexpr int kDoubleBufferBase   = 8;
+constexpr int kDoubleBufferOffset = 496;
+
+constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
+constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
+
+// Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
+// 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
+constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
+
+// rc::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps, up
+// against the near end. ref_gl's glDepthRange(0, 0.3) over the same inverted
+// range this projection produces.
+constexpr float kDepthHackScale = 0.15f;
+
 // The NDC guard band the microprogram accepts: a triangle with any vertex at
 // |x/w| or |y/w| beyond this (or outside the exact [-1, +1] z range) is
 // rejected whole, not clipped - bounded by the reach of the GS 12.4 window
@@ -45,86 +95,46 @@ struct VUCode
 // band still leaves several screens of margin fully to the VU.
 constexpr float kGuardBandNdcLimit = 0.8f;
 
-// Optional batch draw flags (OR-able). Blended batches combine with the
-// framebuffer through the A+D block's source-alpha blend and mask their
-// depth writes - the z-test still reads, so they sort against opaque
-// geometry but never occlude. Untextured batches draw pure gouraud colour
-// (the texture argument is still bound, just not sampled).
-//
-// Additive replaces Blended's equation with Cs * As + Cd - the source colour
-// added to the framebuffer instead of interpolated with it - and implies
-// everything else Blended does, including the depth-write mask. Note the alpha
-// still scales the contribution, so a fully opaque (As = 0x80) additive batch
-// is exactly OpenGL's glBlendFunc(GL_ONE, GL_ONE) while a fading one needs no
-// second blend mode. Additive results saturate rather than wrap: gs::Init
-// leaves the GS COLCLAMP register enabled.
-//
-// Modulate is the third equation, Cd * As: it scales what is already in the
-// framebuffer by the batch's alpha and contributes no colour of its own. This
-// is how the lightmap pass darkens the diffuse pass under it. The GS blend unit
-// multiplies by a scalar alpha and never by a second colour, so this is as close
-// to OpenGL's glBlendFunc(GL_ZERO, GL_SRC_COLOR) as the hardware gets - what it
-// modulates by is the source's *alpha*, not its RGB. The colour half of a luxel
-// therefore cannot come through here at all; it reaches the screen through the
-// diffuse pass's vertex colour instead (see lm::AtlasColors).
-//
-// The three are mutually exclusive; passing more than one asserts. Each implies
-// the ABE bit and the depth-write mask.
-//
-// DepthHack is orthogonal to all of the above and touches no GS register: it
-// compresses the batch's depth into the slice of the z-buffer nearest the
-// camera, so the view weapon can never poke through a wall it is visually in
-// front of (Quake 2's RF_DEPTHHACK, ref_gl's glDepthRange(0, 0.3)). It applies
-// where OpenGL's depth range does - to the window coordinate, *after* the clip
-// judgement - by scaling the microprogram's NDC-to-GS z conversion. Folding an
-// equivalent remap into the caller's projection instead would run it before the
-// judgement, which is not the same thing: clipw tests |z| against |w|, so a
-// remapped z stops being rejected once w goes negative and the geometry behind
-// the camera reaches the GS mirrored through the origin.
-//
-// NoDepthWrite is likewise orthogonal: it masks the batch's depth writes on
-// their own, without the blend equation and ABE bit the three modes above drag
-// along with theirs. The z-test still reads, so the batch sorts against what is
-// already in the buffer but leaves nothing behind for later ones to sort
-// against - what an opaque primitive standing in for infinity wants. The
-// skybox is the caller: it draws at a finite 2300 units so the world can
-// occlude it, and must not occlude anything drawn after it out there in return.
-//
-// DynamicLights run the lit microprogram: the batch's vertex colour is computed
-// from the frame's dynamic point lights (see SetDynamicLights) instead of taken
-// from the input vertices, and Modulate batches add it on top of what they
-// modulate. Only meaningful for geometry submitted in world space.
-enum class DrawFlags : u32
+// The clip judgement multiplies x/y by this before clipw tests them against |w|, so triangles
+// survive out to |ndc| = kGuardBandNdcLimit - about 5x the half-screen (the visible screen ends at
+// ndc 640/4096 = 0.15) while staying inside the representable 12.4 coordinate range. The GS
+// scissor does the actual on-screen cut; only triangles beyond the band (or crossing the near/far
+// planes, z scale 1) are dropped whole via the ADC bit.
+constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
+
+// Values FrameConstants::clipScale and ::colorClamp are always set to.
+constexpr math::Vec4 kClipScale  = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
+constexpr math::Vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
+
+// Unpacked to kFrameConstantsAddr when a draw opens its chain. Built in a span of the
+// command buffer itself rather than in a static the REF tag points at: once submission is one
+// kick per frame, a static would be rewritten by the next draw long before the DMAC had read it
+// for this one. It is the same bytes on the wire either way - the block was always REF'd.
+struct alignas(16) FrameConstants
 {
-    None          = 0,
-    Blended       = 1 << 0,
-    Untextured    = 1 << 1,
-    Additive      = 1 << 2,
-    Modulate      = 1 << 3,
-    DepthHack     = 1 << 4,
-    NoDepthWrite  = 1 << 5,
-    DynamicLights = 1 << 6,
+    math::Mat4 mvp;
+    math::Vec4 gsScale;
+    math::Vec4 gsOffset;
+    math::Vec4 clipScale;
+
+    // The ceiling a computed vertex color is clamped to before ftoi0 packs it
+    // into GS bytes. A frame constant rather than a batch one because it is the
+    // same 255 for everybody, and qword 7 was reserved anyway.
+    math::Vec4 colorClamp;
 };
+// Exactly the 8 qwords below kDoubleBufferBase, so this block cannot grow again
+// without moving the buffers.
+static_assert(sizeof(FrameConstants) == 8 * 16, "Must match the VU memory layout");
 
-constexpr DrawFlags operator|(DrawFlags a, DrawFlags b)
-{
-    return static_cast<DrawFlags>(static_cast<u32>(a) | static_cast<u32>(b));
-}
-
-constexpr bool HasDrawFlag(DrawFlags flags, DrawFlags test)
-{
-    return (static_cast<u32>(flags) & static_cast<u32>(test)) != 0;
-}
-
-// Backface culling mode for DrawLerpedTriangles: which sign of a triangle's
-// screen-space signed area gets rejected on the VU. Which of the two is
-// facing away depends on the winding and the projection's Y orientation.
-enum class FaceCull : u32
-{
-    None     = 0,
-    Negative = 1,
-    Positive = 2,
-};
+// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an
+// A+D qword because the native RGBAQ layout is the vertex's packed color u32
+// with Q in the word above - the VU raw-copies the color instead of spreading
+// one byte per word as the PACKED RGBAQ descriptor would want. Q rides in the
+// A+D data, so nothing relies on the ST-latched Q. XYZ2 last: it kicks the
+// vertex with whatever ST/RGBAQ hold.
+constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
+                               (u64(GIF_REG_AD)   << 4) |
+                               (u64(GIF_REG_XYZ2) << 8);
 
 // Packs 0-255 channels into DrawVertex::rgba, the GS native RGBAQ byte order
 // (r in the low byte). Alpha 0x80 = 1.0 on the GS.
@@ -134,94 +144,17 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Chain budget
-// ------------------------------------------------------------------------------------------------
-
-// What a draw costs the frame chain besides its vertex data, so a caller whose vertex data is
-// *itself* in the chain can reserve the pair together.
-//
-// It has to reserve the pair. The chunk loop reserves as it goes, and cmdbuf::Reserve rewinds when
-// it comes up short - which would pull the chain out from under the very span the chunks being
-// emitted reference. Reserving the whole draw up front means that reservation can never fire half
-// way through one.
-
-// Vertices one VU1 run carries. Draws longer than this are split into chunks of this size,
-// submitted back to back in the same chain.
-constexpr int kMaxVertsPerBatch = 96;
-
-// Chain qwords one chunk appends: the header/GIF-tag inline unpack (1 tag qword plus 8 of
-// payload), the vertex REF unpack (1 - its VIFcodes ride in the tag's upper half) and the
-// FLUSH + MSCAL (1). 11 in practice, declared with room to spare; over-declaring only reserves
-// slightly more of the chain than a chunk needs.
-constexpr int kChunkChainQwords = 16;
-
-// Chain qwords a draw's opening costs: the transform block and the dynamic-light block, both
-// built in the chain rather than referenced out of a static. 8 and 12 qwords of payload, each
-// fronted by the skip tag cmdbuf::Alloc needs and followed by the REF tag that sends it, plus
-// the VIF FLUSH in front of the pair.
-//
-// That FLUSH is what stops the two unpacks landing on VU memory a microprogram is still
-// reading. Both go to *absolute* addresses - the constants sit below the double buffer and the
-// light block above it - so unlike a chunk's data they get no protection from the buffer swap,
-// and since draws stopped being kicked and waited on one at a time the previous draw's last
-// chunk is routinely still running when the next draw's setup arrives.
-constexpr int kDrawSetupQwords = 1 + (8 + 2) + (12 + 2);
-
-// Vertices one lerped VU run carries, and what one of its chunks costs: the 3-qword-per-vertex
-// batch (2 position qwords + 1 attribute) fits fewer than the world path's 96. Whole triangles,
-// and even - so every full chunk's slice of the 8-byte position stream is whole source qwords
-// starting 16-byte aligned. The chunk is the header/frontv/backv/shadeLight/tags inline unpack
-// (1 tag + 11 payload), two REF unpacks and the FLUSH + MSCAL: 15 in practice.
-constexpr int kMaxLerpVertsPerBatch  = 78;
-constexpr int kLerpChunkChainQwords  = 22;
-
-// Vertices one particle VU run carries, and what one of its chunks costs: the same shape, with
-// an 11-qword header/constants/tag payload instead of 8.
-constexpr int kMaxParticlesPerBatch = 78;
-constexpr int kParticleChunkQwords  = 22;
-
-constexpr int ChunkCount(const int items, const int perChunk)
-{
-    return (items + perChunk - 1) / perChunk;
-}
-
-// Chain qwords the three draws need for 'count' vertices / particles, not counting the data
-// itself.
-//
-// The peak the chunk loop *demands*, which is one setup block more than the draw ever
-// appends: every chunk reserves the setup alongside itself, because a reservation that
-// overflowed would rewind the setup with everything else and the next chunk has to be able to
-// re-emit it. So the last chunk asks for room the draw will not end up using, and reserving
-// only what is written would let that final ask rewind the chain mid-draw.
-//
-// Plus the terminator. A draw no longer ends in a kick, but it can still contain one: the GS
-// fence rc::EnsureTextureResident takes when an upload is about to land on VRAM that queued
-// draws may still sample has to send the chain now that nothing else will until EndFrame, and
-// a kick writes its FLUSH + END into the chain at the cursor. Budgeted here rather than
-// reserved where it fires, because reserving there is exactly what must not happen - a
-// reservation that overflowed would rewind the chain out from under the span the draw is
-// about to reference.
-constexpr int DrawTrianglesChainCost(const int vertCount)
-{
-    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
-         + (ChunkCount(vertCount, kMaxVertsPerBatch) * kChunkChainQwords);
-}
-
-constexpr int DrawLerpedTrianglesChainCost(const int vertCount)
-{
-    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
-         + (ChunkCount(vertCount, kMaxLerpVertsPerBatch) * kLerpChunkChainQwords);
-}
-
-constexpr int DrawParticlesChainCost(const int count)
-{
-    return cmdbuf::kTerminatorQwords + (2 * kDrawSetupQwords)
-         + (ChunkCount(count, kMaxParticlesPerBatch) * kParticleChunkQwords);
-}
-
-// ------------------------------------------------------------------------------------------------
 // Generic VU1 triangles (static world geometry)
 // ------------------------------------------------------------------------------------------------
+
+// Vertices one VU1 run carries, bounded by the VU double buffer: input (8 + 2n) plus output
+// (7 + 3n) qwords must fit in one 496-qword buffer half, so n <= 96 - and chunks are whole
+// triangles, hence 96. Draws longer than this are split into chunks of this size.
+constexpr int kMaxVertsPerBatch = 96;
+
+// Batch layout, relative to the current double buffer (XTOP).
+constexpr int kBatchHeaderAddr = 0; // vertex count in .w
+constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 
 // One triangle vertex, 2 qwords, matching the microprogram's input layout.
 // The packed color must sit in the first word of its qword: the microprogram
@@ -262,30 +195,30 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
         : "$8", "$9");
 }
 
-// Draws a batch of triangles (3 verts each, triangle list) through VU1 with
-// the given transform and texture (uploaded to GS VRAM on demand). Any whole-
-// triangle count works: draws beyond kMaxVertsPerBatch are split into chunks
-// submitted back to back in the same DMA chain, overlapping each chunk's
-// upload with the previous one's transform. Call between gs::Begin/EndFrame.
-//
-// **Not synchronous.** This appends to the frame's chain and returns; nothing is
-// sent until rc::EndFrame kicks it. So the vertex data has to stay valid for the
-// rest of the frame, not for the duration of the call - which is why 'verts' is a
-// span of the frame chain itself (cmdbuf::Alloc) rather than a gather static, and
-// why a static is no longer a thing a caller can hand over.
-//
-// Such a caller must have reserved DrawTrianglesChainCost(vertCount) on top of the
-// span - see the chain budget above - so that nothing here can rewind the chain out
-// from under it. A kick is harmless (it leaves the chain where it is); a rewind
-// would leave the REF tags below pointing at memory the next gather is about to
-// write.
-void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
-                   const DrawVertex * verts, int vertCount,
-                   DrawFlags flags = DrawFlags::None);
+// ------------------------------------------------------------------------------------------------
+// Keyframe-lerped triangles (MD2 alias models), must match lerped_triangles.vcl
+// ------------------------------------------------------------------------------------------------
 
-// ------------------------------------------------------------------------------------------------
-// Keyframe-lerped triangles (MD2 alias models)
-// ------------------------------------------------------------------------------------------------
+// Vertices one lerped VU run carries: the 3-qword-per-vertex batch (2 position qwords + 1
+// attribute) fits fewer than the world path's 96. Whole triangles, and even - so every full
+// chunk's slice of the 8-byte position stream is whole source qwords starting 16-byte aligned.
+constexpr int kMaxLerpVertsPerBatch = 78;
+
+// The regions sit at fixed offsets sized for the maximum chunk (short
+// chunks leave gaps), so the microprogram addresses them with immediates.
+constexpr int kLerpBatchHeaderAddr = 0; // vertex count in .w
+constexpr int kLerpFrontVAddr      = 1; // current frame scale * (1 - backlerp)
+constexpr int kLerpBackVAddr       = 2; // old frame scale * backlerp
+constexpr int kLerpShadeLightAddr  = 3; // entity light in GS units, vertex alpha in .w
+constexpr int kLerpGifTagsAddr     = 4; // the same 7-qword block as the world path
+constexpr int kLerpPositionsAddr   = kLerpGifTagsAddr + kNumGifTagQwords;              // 2 qwords per vertex
+constexpr int kLerpAttribsAddr     = kLerpPositionsAddr + (2 * kMaxLerpVertsPerBatch); // 1 qword per vertex
+constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // the GS packet
+
+static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 167 && kLerpOutputAddr == 245, "Batch layout must match the #defines in lerped_triangles.vcl");
+static_assert(kLerpOutputAddr + kNumGifTagQwords + (3 * kMaxLerpVertsPerBatch) <= kDoubleBufferOffset, "Lerp batch input + GS packet must fit one double-buffer half");
+static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
+static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
 
 // The two keyframes' quantized positions of one vertex, interleaved: the
 // current frame's dtrivertx_t bytes, then the old frame's, both copied
@@ -313,16 +246,15 @@ struct LerpVertexBytes
 //
 // The attributes are not beside them any more: they are the model's own baked
 // vertices, referenced where they lie in the model hunk, so there is only one
-// stream left to gather and it no longer needs the two-streams-in-one-block
-// grouping that vu1::LerpChunk existed for.
+// stream left to gather.
 struct alignas(16) LerpPosChunk
 {
     LerpVertexBytes pos[kMaxLerpVertsPerBatch];
 };
 static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole number of qwords");
 
-// Per-vertex attributes for DrawLerpedTriangles - everything but the position
-// and the shade. One qword, matching the microprogram's input layout.
+// Per-vertex attributes for a lerped draw - everything but the position and the
+// shade. One qword, matching the microprogram's input layout.
 //
 // **Nothing writes one of these any more.** mod::AliasVertex has exactly this
 // shape, so a model's baked attributes are handed to the DMA where they lie and
@@ -340,27 +272,39 @@ struct alignas(16) LerpDrawAttrib
 };
 static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qword");
 
-// Draws 'vertCount' keyframe-lerped vertices: 'posChunks' is the gathered position
-// stream, one LerpPosChunk per VU run, and 'attribs' is a contiguous run of
-// vertCount per-vertex attributes the chunks slice in the same order.
-//
-// The two come from different places on purpose. Positions are an indexed gather
-// and have to be built, so they live in the frame chain like every other gather;
-// attributes are the model's own baked array in draw order, so they are referenced
-// where they lie and never copied. Both must stay valid until the frame's kick -
-// the chain does by construction, the model hunk because nothing unloads a model
-// mid-frame - and 'attribs' must be qword aligned, which mod::AliasVertex is.
-void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
-                         const math::Vec3 & frontv, const math::Vec3 & backv,
-                         const math::Vec4 & shadeLight,
-                         const LerpPosChunk * posChunks, const LerpDrawAttrib * attribs,
-                         int vertCount,
-                         FaceCull faceCull = FaceCull::None,
-                         DrawFlags flags = DrawFlags::None);
+// ------------------------------------------------------------------------------------------------
+// Particles, must match particles.vcl
+// ------------------------------------------------------------------------------------------------
 
-// ------------------------------------------------------------------------------------------------
-// Particles
-// ------------------------------------------------------------------------------------------------
+// Particles one VU run carries. Input is 1 qword each and the sprite output 5, so a chunk
+// occupies kPrtDataAddr + 6n qwords of a double-buffer half; 78 leaves a little room under 496.
+constexpr int kMaxParticlesPerBatch = 78;
+
+constexpr int kPrtBatchHeaderAddr = 0;  // particle count in .w
+constexpr int kPrtQuadOffsetAddr  = 1;  // clip-space corner offset in .xyz, blow-up rate in .w
+constexpr int kPrtUV0Addr         = 2;  // anchor corner UV
+constexpr int kPrtUV1Addr         = 3;  // opposite corner UV
+constexpr int kPrtGifTagsAddr     = 4;  // the same 7-qword block as the world path
+constexpr int kPrtDataAddr        = kPrtGifTagsAddr + kNumGifTagQwords; // 1 qword per particle
+
+static_assert(kPrtQuadOffsetAddr == 1 && kPrtUV0Addr == 2 && kPrtUV1Addr == 3 && kPrtGifTagsAddr == 4 && kPrtDataAddr == 11, "Batch layout must match the #defines in particles.vcl");
+static_assert(kPrtDataAddr + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
+
+// ref_gl's "hack a scale up to keep particles from disappearing": past 20 units
+// the billboard grows with distance so it stays wide enough to cover a pixel.
+// The microprogram applies 1 + rate * distance unconditionally rather than
+// branching at 20 - below that the factor only reaches 1.08, and erring large is
+// the direction the hack is pushing anyway.
+constexpr float kParticleBlowUpRate = 0.004f;
+
+// The five GIF registers one particle sprite emits: an A+D qword setting its
+// RGBAQ (same raw-copy reasoning as kVertexRegList), then a UV/XYZ2 pair per
+// corner. Two XYZ2 kicks complete one sprite.
+constexpr u64 kParticleRegList = (u64(GIF_REG_AD)   <<  0) |
+                                 (u64(GIF_REG_UV)   <<  4) |
+                                 (u64(GIF_REG_XYZ2) <<  8) |
+                                 (u64(GIF_REG_UV)   << 12) |
+                                 (u64(GIF_REG_XYZ2) << 16);
 
 // One particle billboard, 1 qword. The packed color must sit in the first word
 // for the same reason DrawVertex's does: the microprogram raw-copies it into an
@@ -373,33 +317,38 @@ struct alignas(16) ParticleVertex
 };
 static_assert(sizeof(ParticleVertex) == 16, "ParticleVertex must be exactly 1 qword");
 
-// Draws camera-facing particle billboards as GS sprites, expanded entirely on
-// VU1 - the caller transforms nothing.
-//
-// 'quadOffset' is the world-space vector from a particle's anchor corner to its
-// opposite corner: the camera's (up + right), pre-scaled by whatever blow-up the
-// caller wants (ref_gl uses 1.5). It must be orthogonal to the view axis, which
-// is what makes every corner share the centre's depth and lets the billboard
-// draw as a single axis-aligned sprite; DrawParticles transforms it once per
-// call as a direction.
-//
-// The billboard also grows with distance the way ref_gl's particles do. The
-// texture is sampled corner to corner through UV (no perspective correction,
-// which a screen-aligned sprite does not need).
-//
-// Chunking, texture residency and synchronicity as DrawTriangles.
-void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
-                   const math::Vec3 & quadOffset, const ParticleVertex * particles,
-                   int count, DrawFlags flags = DrawFlags::Blended);
-
 // ------------------------------------------------------------------------------------------------
-// Dynamic point lights
+// Dynamic point lights, must match lit_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
 // How many lights the microprogram evaluates at once. Four is not arbitrary: the
 // VU's SIMD lanes are four wide, so packing one light per lane costs the same as
 // packing one, and the FMAC's four-cycle latency is covered exactly.
 constexpr int kMaxDynamicLights = 4;
+
+// VU data address of the light block. Deliberately above the double buffers
+// (which end at 8 + 2*496 = 1000) rather than beside the frame constants, so
+// adding it costs no vertex capacity: qwords 1000-1023 were unused.
+constexpr int kLightBlockAddr = 1000;
+
+// The GS alpha the lit colour carries. The lightmap pass needs its source alpha
+// left at 1.0 so the blend still modulates by the luxel intensity; the lighting
+// only ever touches .xyz, so this rides through untouched and ftoi0 turns it
+// into the GS 0x80.
+constexpr float kLitVertexAlpha = 128.0f;
+
+// The lit program's per-vertex registers. Same three slots as kVertexRegList,
+// but the colour goes through PACKED RGBAQ instead of an A+D write: the lit
+// program *computes* its colour as four floats, and ftoi0 of a float vector
+// lands one byte per word, which is exactly what the PACKED descriptor reads.
+// The A+D route exists for the other programs because their colour arrives as a
+// packed u32 that must be raw-copied; that does not apply here.
+//
+// ST must stay first: PACKED RGBAQ takes Q from the internal register the
+// preceding ST write latches (word 2 of the ST qword carries it).
+constexpr u64 kLitVertexRegList = (u64(GIF_REG_ST)    << 0) |
+                                  (u64(GIF_REG_RGBAQ) << 4) |
+                                  (u64(GIF_REG_XYZ2)  << 8);
 
 // One point light, in world space. Attenuation is distance-only (no N.L term)
 // and reaches zero at 'radius' - Quake 2's dlight intensity is exactly that
@@ -411,22 +360,21 @@ struct DynamicLight
     float      radius; // world units; attenuation is zero beyond it.
 };
 
-// Sets the frame's lights, shared by every batch drawn with
-// DrawFlags::DynamicLights until the next call. Fewer than kMaxDynamicLights is
-// fine - unused slots are zeroed and contribute nothing. Pass count 0 to turn
-// the lighting off without clearing the flag.
-//
-// Colours are pre-scaled here into the GS 0-255 range and pre-divided by the
-// radius squared, which is what lets the microprogram attenuate with a single
-// multiply-add and no divide or square root.
-void SetDynamicLights(const DynamicLight * lights, int count);
-
-// ------------------------------------------------------------------------------------------------
-// VU1 initialization
-// ------------------------------------------------------------------------------------------------
-
-// Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory
-// and programs the double-buffer registers. Call once, after gs::Init().
-void Init();
+// The light block as the microprogram reads it. Positions are transposed - all
+// four lights' X in one quadword, all four Y in the next - so one SIMD lane
+// carries one light and the whole four-light distance calculation is three
+// subtracts and three multiply-accumulates. That transposition is the whole
+// trick; see the header comment in lit_triangles.vcl.
+struct alignas(16) LightConstants
+{
+    math::Vec4 posX;
+    math::Vec4 posY;
+    math::Vec4 posZ;
+    math::Vec4 negColorDivR2[kMaxDynamicLights]; // -(color / radius^2), GS units
+    math::Vec4 color[kMaxDynamicLights];         // color, GS units
+    math::Vec4 clamp;                            // (255, 255, 255, 128)
+};
+static_assert(sizeof(LightConstants) == 12 * 16, "Must match the VU memory layout");
+static_assert(kLightBlockAddr + 12 <= 1024, "Light block overruns VU1 data memory");
 
 } // namespace ps2::vu1

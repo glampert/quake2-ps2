@@ -61,7 +61,7 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
 void BeginRegistration();
 
 // Draws the 3D scene described by 'viewDef': the world's visible BSP geometry
-// (PVS + frustum culled), submitted per texture through vu1::DrawTriangles.
+// (PVS + frustum culled), submitted per texture through rc::DrawTriangles.
 // Call between gs::Begin/EndFrame.
 void RenderFrame(const refdef_t & viewDef);
 

@@ -7,7 +7,7 @@
  *  tree front-to-back culling against the view frustum and threads every visible
  *  opaque surface onto its texture's draw chain, and DrawTextureChains then
  *  gathers each chain's triangles into a scratch buffer and submits them through
- *  vu1::DrawTriangles - one batch per texture. Translucent surfaces
+ *  rc::DrawTriangles - one batch per texture. Translucent surfaces
  *  are routed aside and drawn back-to-front at the end of the frame by
  *  RenderAlphaSurfaces, and sky surfaces aside to render_sky.cpp, which draws
  *  the skybox behind them once the opaque world is down.
@@ -56,7 +56,7 @@ constexpr float kZFar  = 4096.0f;
 // good part of the gun straddles the near plane - and the VU rejects straddling
 // triangles whole rather than cutting them, which would punch holes in it. The
 // weapon's depth is remapped into a fixed slice of the z-buffer regardless of
-// the projection (vu1::DrawFlags::DepthHack), so a near plane this close costs
+// the projection (rc::DrawFlags::DepthHack), so a near plane this close costs
 // it no precision it can use: the gun still spans thousands of z values inside
 // its slice.
 constexpr float kZNearWeapon = 0.25f;
@@ -176,7 +176,7 @@ static math::Mat4 s_alphaEntityMatrices[MAX_ENTITIES];
 static int s_alphaEntityMatrixCount = 0;
 
 // Triangle gather buffer: texture chains append here and flush through
-// vu1::DrawTriangles when full (see batch.h). The vertices live in the frame
+// rc::DrawTriangles when full (see batch.h). The vertices live in the frame
 // chain, so an instance is 8 bytes and rides in the draw state rather than
 // sitting in .bss - which also means a pass cannot gather under one state and
 // flush under another by forgetting which static it shared.
@@ -295,7 +295,7 @@ void SetUpDynamicLights(const refdef_t & viewDef)
 {
     if (!VuDynamicLightsEnabled())
     {
-        vu1::SetDynamicLights(nullptr, 0);
+        rc::SetDynamicLights(nullptr, 0);
         return;
     }
 
@@ -337,7 +337,7 @@ void SetUpDynamicLights(const refdef_t & viewDef)
         }
     }
 
-    vu1::SetDynamicLights(chosen, count);
+    rc::SetDynamicLights(chosen, count);
 }
 
 // Extracts the six planes bounding the VU1 clip volume from a view-projection.
@@ -798,7 +798,7 @@ struct SurfaceDrawState
     u32 rgba = 0;
 
     // Batch flags, i.e. whether the submission blends.
-    vu1::DrawFlags flags = vu1::DrawFlags::None;
+    rc::DrawFlags flags = rc::DrawFlags::None;
 
     // Gouraud alpha: take each vertex's alpha from its own ClipVertex::st.z
     // (0..1) instead of from 'rgba', whose RGB is still used for all three
@@ -1319,7 +1319,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
     // white, so what survives the lightmap pass over it is the lighting alone.
     if (s_lightmapOnly->value != 0.0f)
     {
-        state.flags = vu1::DrawFlags::Untextured;
+        state.flags = rc::DrawFlags::Untextured;
         state.rgba  = vu1::PackColorRGBA(255, 255, 255, 0x80);
     }
 
@@ -1368,7 +1368,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
 // intensity, one batch per lightmap atlas. This is the second half of the two
 // pass lightmapping: same geometry, same transform, but sampling the atlas
 // through the vertices' second UV set and blending with Cd * As, so each pixel
-// is scaled by how lit it is. Intensity only - see vu1::DrawFlags::Modulate for
+// is scaled by how lit it is. Intensity only - see rc::DrawFlags::Modulate for
 // why the GS cannot carry the colour too, and SurfaceDrawState::lightmapTint
 // for where it goes instead.
 //
@@ -1386,7 +1386,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
     SurfaceDrawState state = base;
     state.rgba = kFullBright; // alpha 0x80 keeps the luxel's own alpha
-    state.flags = vu1::DrawFlags::Modulate;
+    state.flags = rc::DrawFlags::Modulate;
 
     // Dynamic lights ride this pass rather than a third one: the Modulate blend
     // leaves its source-colour term at zero, so the vertex colour was going
@@ -1397,7 +1397,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     // model's vertices are in its own model space (see the same guard below).
     if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
     {
-        state.flags = state.flags | vu1::DrawFlags::DynamicLights;
+        state.flags = state.flags | rc::DrawFlags::DynamicLights;
     }
 
     state.vertexAlpha  = false;
@@ -1568,7 +1568,7 @@ void RenderAlphaSurfaces()
     SurfaceDrawState state = {
         .batch = &batch,
         .mvp   = nullptr, // Per entry, below; no entry ever carries null, so the first always switches.
-        .flags = vu1::DrawFlags::Blended,
+        .flags = rc::DrawFlags::Blended,
         .vertexAlpha = false
     };
 
@@ -1692,7 +1692,7 @@ void RenderDLights(const refdef_t & viewDef)
         .batch = &batch,
         .mvp   = &s_viewProjMatrix, // Billboards are built in world space.
         .rgba  = 0, // Per light; filled in below.
-        .flags = vu1::DrawFlags::Additive | vu1::DrawFlags::Untextured,
+        .flags = rc::DrawFlags::Additive | rc::DrawFlags::Untextured,
         .vertexAlpha = true // The centre-to-rim fade rides in st.z.
     };
 
@@ -2092,7 +2092,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         .batch = &batch,
         .mvp   = &mvp,
         .rgba  = translucent ? vu1::PackColorRGBA(128, 128, 128, 0x80 / 4) : kFullBright,
-        .flags = translucent ? vu1::DrawFlags::Blended : vu1::DrawFlags::None,
+        .flags = translucent ? rc::DrawFlags::Blended : rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2240,7 +2240,7 @@ void DrawSpriteEntity(const entity_t & entity)
         .batch = &batch,
         .mvp   = &s_viewProjMatrix, // The quad is built in world space already.
         .rgba  = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f)),
-        .flags = (alpha < 1.0f) ? vu1::DrawFlags::Blended : vu1::DrawFlags::None,
+        .flags = (alpha < 1.0f) ? rc::DrawFlags::Blended : rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2319,7 +2319,7 @@ void DrawBeamEntity(const entity_t & entity)
         .batch = &batch,
         .mvp   = &s_viewProjMatrix, // Built in world space.
         .rgba  = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
-        .flags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured,
+        .flags = rc::DrawFlags::Blended | rc::DrawFlags::Untextured,
         .vertexAlpha = false
     };
 
@@ -2405,7 +2405,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
         .batch = &batch,
         .mvp   = &mvp,
         .rgba  = vu1::PackColorRGBA(channel(color[0]), channel(color[1]), channel(color[2]), 0x80),
-        .flags = vu1::DrawFlags::None,
+        .flags = rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2500,7 +2500,7 @@ void RenderParticles(const refdef_t & viewDef)
     // actually is: a pending 2D batch holds an open DMA tag and an allocation
     // cannot land inside one (see batch.h).
     rc::Ctx().FlushPending2D();
-    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(numParticles) + vu1::DrawParticlesChainCost(numParticles));
+    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(numParticles) + rc::DrawParticlesChainCost(numParticles));
     vu1::ParticleVertex * const particles = cmdbuf::Alloc<vu1::ParticleVertex>(numParticles);
 
     for (int i = 0; i < numParticles; ++i)
@@ -2520,7 +2520,7 @@ void RenderParticles(const refdef_t & viewDef)
     s_drawStats.particles += numParticles;
     ++s_drawStats.drawBatches;
 
-    vu1::DrawParticles(s_viewProjMatrix, texture, quadOffset, particles, numParticles, vu1::DrawFlags::Blended);
+    rc::DrawParticles(s_viewProjMatrix, texture, quadOffset, particles, numParticles, rc::DrawFlags::Blended);
 }
 
 // ------------------------------------------------------------------------------------------------

@@ -19,7 +19,7 @@
  *  The cube is drawn at a finite 2300 units, as ref_gl draws it, so the world's
  *  depth values reject the parts of it hidden behind geometry - the sky costs
  *  fill only where it is actually visible. It writes no depth of its own
- *  (vu1::DrawFlags::NoDepthWrite), which is where this departs from ref_gl:
+ *  (rc::DrawFlags::NoDepthWrite), which is where this departs from ref_gl:
  *  there the sky occluded anything drawn later past 2300 units, which on the
  *  larger outdoor maps eats distant entities and rail trails.
  *
@@ -152,7 +152,7 @@ using SkyBatch = batch::TriangleBatch<kBatchMaxVerts>;
 
 // The sky draws at a finite distance so the world can occlude it, and must not
 // occlude anything drawn after it in return - hence the masked depth writes.
-constexpr vu1::DrawFlags kSkyDrawFlags = vu1::DrawFlags::NoDepthWrite;
+constexpr rc::DrawFlags kSkyDrawFlags = rc::DrawFlags::NoDepthWrite;
 
 // ------------------------------------------------------------------------------------------------
 // Bounds accumulation (ref_gl's DrawSkyPolygon / ClipSkyPolygon)
@@ -562,7 +562,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
             MakeSkyVertex(s_skyMaxs[0][i], s_skyMins[1][i], i, face, viewDef.vieworg, rotateDegrees)
         };
 
-        // Winding is free here: vu1::DrawTriangles has no back-face test of its
+        // Winding is free here: rc::DrawTriangles has no back-face test of its
         // own, and the sky has nothing to cull against.
         clip::ClipVertex tri0[3] = { quad[0], quad[1], quad[2] };
         clip::ClipVertex tri1[3] = { quad[0], quad[2], quad[3] };

@@ -620,7 +620,7 @@ Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
 // the shade the clipper interpolated, packed back down on the way out.
 Q_ALWAYS_INLINE void GatherClippedTriangle(AliasBatch & batch, clip::ClipVertex (&corners)[3],
                                            const math::Mat4 & mvp, const tex::Texture & texture,
-                                           const vu1::DrawFlags flags)
+                                           const rc::DrawFlags flags)
 {
     batch.GatherTriangle(corners, mvp, texture, flags, PackClipColor);
 }
@@ -679,7 +679,7 @@ math::Mat4 ShadowMatrix(const entity_t & entity, const LerpConsts & lc,
 }
 
 // The flags a shadow batch draws with: flat, blended, and never textured.
-constexpr vu1::DrawFlags kShadowFlags = vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured;
+constexpr rc::DrawFlags kShadowFlags = rc::DrawFlags::Blended | rc::DrawFlags::Untextured;
 
 // A shadow's light: no colour at all, so whatever shade term the vertex carries
 // multiplies out to black, at the half alpha in .w. That is what lets both shadow
@@ -696,7 +696,7 @@ void DrawAliasMD2Shadow(LerpBatch & batch, const entity_t & entity,
                         const daliasframe_t * frame, const daliasframe_t * oldFrame,
                         const LerpConsts & lc, const math::Mat4 & viewProj,
                         const tex::Texture & skin, const vec3_t lightSpot,
-                        const vu1::FaceCull faceCull)
+                        const rc::FaceCull faceCull)
 {
     const math::Mat4 mvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 
@@ -874,7 +874,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // only some overdraw, since the gun is opaque and the z-buffer sorts it.
     const bool clipOnEE = (entity.flags & RF_WEAPONMODEL) && (s_clipWeapon->value != 0.0f);
     const bool vuLerp   = (s_vuLerp->value != 0.0f) && !(entity.flags & kShellFlags) && !clipOnEE;
-    const auto faceCull = static_cast<vu1::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
+    const auto faceCull = static_cast<rc::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
 
     // The VU path shades on the VU: it takes the entity's light as a batch
     // constant and each vertex's raw shade dot, so there is no table to build.
@@ -897,12 +897,12 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // z here instead would defeat that judgement for the one entity that most
     // needs it - see the DrawFlags::DepthHack notes in vu1.h.
     auto batchFlags = (entity.flags & RF_TRANSLUCENT)
-                    ? vu1::DrawFlags::Blended
-                    : vu1::DrawFlags::None;
+                    ? rc::DrawFlags::Blended
+                    : rc::DrawFlags::None;
 
     if (entity.flags & RF_DEPTHHACK)
     {
-        batchFlags = batchFlags | vu1::DrawFlags::DepthHack;
+        batchFlags = batchFlags | rc::DrawFlags::DepthHack;
     }
 
     // Expand the glcmds over the pose. Note MD2 triangles are not near-plane
@@ -1015,7 +1015,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // depth range survives (Blended is idempotent if it was already set).
             const bool powersuit = (entity.flags & kShellFlags) != 0;
             const auto flags = powersuit
-                             ? (batchFlags | vu1::DrawFlags::Blended | vu1::DrawFlags::Untextured)
+                             ? (batchFlags | rc::DrawFlags::Blended | rc::DrawFlags::Untextured)
                              : batchFlags;
 
             // Scoped to the EE lerp path, which is the only one that gathers

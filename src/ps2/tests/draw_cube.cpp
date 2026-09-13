@@ -278,10 +278,10 @@ void DrawRotatingCube()
         {
             EmitFace(s_faceVerts, kFaces[face], tess);
 
-            const int numChunks = vu1::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
+            const int numChunks = rc::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
             cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
                          + cmdbuf::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
-                         + vu1::DrawLerpedTrianglesChainCost(numVerts));
+                         + rc::DrawLerpedTrianglesChainCost(numVerts));
 
             // Two exact allocations rather than one committable block: both sizes are
             // known before anything is written, so neither has to be cut back.
@@ -290,18 +290,18 @@ void DrawRotatingCube()
 
             const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, attribs, numVerts);
 
-            vu1::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
+            rc::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
                                      shadeLight, chunks, attribs, numVerts);
         }
         else
         {
             cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::DrawVertex>(numVerts)
-                         + vu1::DrawTrianglesChainCost(numVerts));
+                         + rc::DrawTrianglesChainCost(numVerts));
 
             vu1::DrawVertex * const verts = cmdbuf::Alloc<vu1::DrawVertex>(numVerts);
             EmitFace(verts, kFaces[face], tess);
 
-            vu1::DrawTriangles(mvp, tex::DebugTexture(variant), verts, numVerts);
+            rc::DrawTriangles(mvp, tex::DebugTexture(variant), verts, numVerts);
         }
     }
 }

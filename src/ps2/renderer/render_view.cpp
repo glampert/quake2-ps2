@@ -1103,8 +1103,6 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
             vu1::CopyDrawVertex(dst[1], src[tri.vertexes[1]]);
             vu1::CopyDrawVertex(dst[2], src[tri.vertexes[2]]);
         }
-
-        ++s_drawStats.trisDrawn;
     }
 }
 
@@ -1259,8 +1257,6 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
                 vu1::CopyDrawVertex(dst[0], s_polyVertexCache[0]);
                 vu1::CopyDrawVertex(dst[1], s_polyVertexCache[t + 1]);
                 vu1::CopyDrawVertex(dst[2], s_polyVertexCache[t + 2]);
-
-                ++s_drawStats.trisDrawn;
             }
             continue;
         }
@@ -2510,7 +2506,6 @@ void RenderParticles(const refdef_t & viewDef)
         dst.z = p.origin[2];
     }
 
-    s_drawStats.particles += numParticles;
     ctx.EndParticles(s_viewProjMatrix, texture, quadOffset);
 }
 

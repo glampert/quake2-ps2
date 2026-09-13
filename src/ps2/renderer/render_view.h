@@ -8,9 +8,29 @@
 
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
-#include "ps2/renderer/draw_stats.h"
+
 
 namespace ps2::view {
+
+// What the view decided to submit this frame - what it walked, culled and chained. What the
+// renderer then did with it is rc::DrawStats; the two were one struct until the submission half
+// became the streams' business to count.
+//
+// Zeroed at the top of each RenderFrame; read by the ps2_show_drawstats overlay and the frame log.
+struct DrawStats
+{
+    int nodesWalked;    // BSP nodes + leafs visited by the world walk.
+    int surfaces;       // Opaque world surfaces drawn.
+    int surfacesAlpha;  // Translucent surfaces deferred to the final alpha pass.
+    int skyFaces;       // Skybox cube faces submitted (0-6).
+    int surfsUnclipped; // World surface gathers that skipped the clipper, counted once per pass.
+    int boxesCulled;    // Whole meshes culled via bounding box checks.
+    int entities;       // Entity models drawn (after frustum culling).
+    int dlights;        // Dynamic light flares drawn.
+};
+
+// Stats of the most recent RenderFrame; all zeros before the first 3D frame.
+DrawStats & GetDrawStats();
 
 void Init();
 

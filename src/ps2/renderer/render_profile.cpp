@@ -7,7 +7,8 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/render_profile.h"
-#include "ps2/renderer/draw_stats.h"
+#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_view.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
@@ -217,23 +218,25 @@ void FrameLogCapture()
         s.cycles[i] = s_events[i]->lastFrameCycles;
     }
 
-    // Both of these still hold the finished frame's values here: DrawStats is
-    // cleared at the top of view::RenderFrame and the lightmap counters by
-    // lm::BeginFrame, neither of which has run yet for the new frame.
+    // All of these still hold the finished frame's values here: the view counters are cleared at
+    // the top of view::RenderFrame, the submission counters by rc::BeginFrame and the lightmap
+    // ones by lm::BeginFrame, none of which has run yet for the new frame.
     const view::DrawStats & d = view::GetDrawStats();
     s.nodes          = d.nodesWalked;
     s.surfs          = d.surfaces;
     s.surfsAlpha     = d.surfacesAlpha;
     s.surfsUnclipped = d.surfsUnclipped;
     s.skyFaces       = d.skyFaces;
-    s.tris           = d.trisDrawn;
-    s.trisClipped    = d.trisClipped;
-    s.trisCulled     = d.trisCulled;
     s.boxesCulled    = d.boxesCulled;
-    s.batches        = d.drawBatches;
     s.entities       = d.entities;
-    s.particles      = d.particles;
     s.dlights        = d.dlights;
+
+    const rc::DrawStats & r = rc::Ctx().Stats();
+    s.tris        = r.trisDrawn;
+    s.trisClipped = r.trisClipped;
+    s.trisCulled  = r.trisCulled;
+    s.batches     = r.drawBatches;
+    s.particles   = r.particles;
 
     const lm::Stats l = lm::GetStats();
     s.lmAtlases = l.atlases;

@@ -28,7 +28,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/render_sky.h"
-#include "ps2/renderer/draw_stats.h"
+#include "ps2/renderer/render_view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/clip.h"

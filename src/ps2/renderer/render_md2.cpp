@@ -1101,7 +1101,6 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         }
 
     }
-    GetDrawStats().trisDrawn += emittedVerts / 3;
 
     // The projected blob shadow. Skipped for the view weapon,
     // translucents and shells/fullbright entities.

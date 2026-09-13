@@ -405,6 +405,10 @@ void BeginFrame(const bool dither)
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
 
+    // Safe here rather than a frame late: PS2_BeginFrame runs debug::FrameLogCapture, which reads
+    // the finished frame's counters, before it calls this.
+    Ctx().Stats() = {};
+
     // Retires and shows the previous frame when EndFrame left it drawing. Already done - by
     // EndFrame itself - when it presented immediately, and this is then the no-op that lets the
     // two paths share everything below.
@@ -981,7 +985,9 @@ void RenderContext::EndParticles(const math::Mat4 & mvp, const tex::Texture & te
 {
     PS2_AssertMsg(m_particles != nullptr, "EndParticles without a BeginParticles!");
 
-    ++view::GetDrawStats().drawBatches;
+    ++m_stats.drawBatches;
+    m_stats.particles += m_particleCount;
+
     DrawParticles(mvp, texture, quadOffset, m_particles, m_particleCount, flags);
 
     m_particles     = nullptr;

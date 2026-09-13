@@ -15,7 +15,6 @@
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/draw_stats.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/vu1.h"
 
@@ -115,6 +114,18 @@ enum class FaceCull : u32
     Positive = 2,
 };
 
+// What the renderer submitted this frame, as opposed to what the view decided to submit - that
+// half is view::DrawStats. Everything here is counted by the streams and the draw paths below, so
+// no caller adds to it. Cleared by BeginFrame.
+struct DrawStats
+{
+    int trisDrawn;   // Triangles handed to VU1, after EE clipping.
+    int trisClipped; // Triangles re-cut against the VU clip volume.
+    int trisCulled;  // Triangles dropped whole, entirely outside it.
+    int drawBatches; // VU1 batches submitted (one or more per texture).
+    int particles;   // Particle billboards submitted.
+};
+
 class RenderContext final
 {
 public:
@@ -123,6 +134,10 @@ public:
     // Non-copyable: there is one recorder for the frame, reached through Ctx().
     RenderContext(const RenderContext &) = delete;
     RenderContext & operator=(const RenderContext &) = delete;
+
+    // What this frame has submitted so far. A member so the streams can bump it without a call.
+    Q_ALWAYS_INLINE DrawStats & Stats() { return m_stats; }
+    Q_ALWAYS_INLINE const DrawStats & Stats() const { return m_stats; }
 
     // Qwords written into the command buffer's current half, and what may be written there.
     int QwordCount() const { return cmdbuf::QwordCount(); }
@@ -355,6 +370,8 @@ private:
     // The span BeginParticles claimed, until EndParticles submits it.
     vu1::ParticleVertex * m_particles     = nullptr;
     int                   m_particleCount = 0;
+
+    DrawStats m_stats = {};
 };
 
 namespace detail {
@@ -710,13 +727,13 @@ public:
 
         if (count == 0)
         {
-            ++view::GetDrawStats().trisCulled;
+            ++Ctx().Stats().trisCulled;
             return;
         }
 
         if (wasClipped)
         {
-            ++view::GetDrawStats().trisClipped;
+            ++Ctx().Stats().trisClipped;
         }
 
         // The survivors fan-triangulate.
@@ -729,8 +746,6 @@ public:
             EmitVertex(verts[v],     vertexColor(verts[v]));
             EmitVertex(verts[v + 1], vertexColor(verts[v + 1]));
         }
-
-        view::GetDrawStats().trisDrawn += numTriangles;
     }
 
     // Sends what has been gathered, under the stream's current draw state, and empties it. Does
@@ -752,7 +767,10 @@ public:
             // makes room for them.
             cmdbuf::Commit(m_verts, m_vertCount);
 
-            ++view::GetDrawStats().drawBatches;
+            DrawStats & stats = Ctx().Stats();
+            ++stats.drawBatches;
+            stats.trisDrawn += m_vertCount / 3;
+
             DrawTriangles(*m_mvp, *m_texture, m_verts, m_vertCount, m_drawFlags);
 
             m_vertCount = 0;
@@ -964,7 +982,9 @@ public:
             // wastes, and it is bounded by one group.
             cmdbuf::Commit(m_chunks, ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
-            ++view::GetDrawStats().drawBatches;
+            DrawStats & stats = Ctx().Stats();
+            ++stats.drawBatches;
+            stats.trisDrawn += m_vertCount / 3;
 
             // Through locals, not the members directly. DrawLerpedTriangles takes these by const
             // reference, so handing it &m_frontv would make the whole stream address-taken - and
@@ -1010,7 +1030,9 @@ public:
 
         if (m_lastFlushedCount > 0)
         {
-            ++view::GetDrawStats().drawBatches;
+            // A batch, but not new geometry: this re-submits the span the last Flush already
+            // counted, so trisDrawn is deliberately left alone.
+            ++Ctx().Stats().drawBatches;
 
             const math::Vec3 frontv = m_frontv; // as Flush, see there
             const math::Vec3 backv  = m_backv;

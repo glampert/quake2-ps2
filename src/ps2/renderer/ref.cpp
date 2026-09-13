@@ -402,6 +402,7 @@ void DrawDrawStatsOverlay()
     }
 
     const ps2::view::DrawStats & stats = ps2::view::GetDrawStats();
+    const ps2::rc::DrawStats & rcStats = ps2::rc::Ctx().Stats();
     const ps2::lm::Stats lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
@@ -410,13 +411,13 @@ void DrawDrawStatsOverlay()
         { "Alpha",   stats.surfacesAlpha  },
         { "NoClip",  stats.surfsUnclipped },
         { "Sky",     stats.skyFaces       },
-        { "Tris",    stats.trisDrawn      },
+        { "Tris",    rcStats.trisDrawn    },
         { "Ents",    stats.entities       },
-        { "Prts",    stats.particles      },
+        { "Prts",    rcStats.particles    },
         { "DLights", stats.dlights        },
-        { "Batches", stats.drawBatches    },
-        { "Clipped", stats.trisClipped    },
-        { "Culled",  stats.trisCulled     },
+        { "Batches", rcStats.drawBatches  },
+        { "Clipped", rcStats.trisClipped  },
+        { "Culled",  rcStats.trisCulled   },
         { "BoxCull", stats.boxesCulled    },
         // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and
         // LmRest the surfaces they have just left; both should fall back to

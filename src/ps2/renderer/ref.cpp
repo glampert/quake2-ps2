@@ -427,10 +427,10 @@ void DrawDrawStatsOverlay()
         // overflow emergency rather than the end of the frame. One kick and zero
         // emergency drains is the target; a drain firing every frame means
         // cmdbuf::kHalfBytes is too small for the level.
-        { "ChainKB",  static_cast<int>(ps2::cmdbuf::PeakBytes() / 1024u)      },
-        { "ChainCap", static_cast<int>(ps2::cmdbuf::kHalfBytes / 1024u) },
-        { "ChainKck", ps2::cmdbuf::KicksLastFrame()                           },
-        { "ChainDrn", ps2::cmdbuf::EmergencyDrainsLastFrame()                 },
+        { "ChainKB",  static_cast<int>(ps2::cmdbuf::PeakBytes() / 1024u) },
+        { "ChainCap", static_cast<int>(ps2::cmdbuf::kHalfBytes / 1024u)  },
+        { "ChainKck", ps2::cmdbuf::KicksLastFrame()                      },
+        { "ChainDrn", ps2::cmdbuf::EmergencyDrainsLastFrame()            },
     };
 
     constexpr int kLineHeight = kGlyphSize + 2; // Matches DrawInternalString spacing.

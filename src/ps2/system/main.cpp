@@ -8,7 +8,7 @@
 
 #include "ps2/common.h"
 #include "ps2/system/iop_boot.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/debug/exception_handler.h"
 
 int main()

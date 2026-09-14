@@ -1,6 +1,6 @@
 #pragma once
 /* ================================================================================================
- * File: render_profile.h
+ * File: profile.h
  * Brief: Profile events shared by more than one source file, and the CSV frame log.
  *
  *        Mostly renderer events, but not exclusively: the frame log writes one column

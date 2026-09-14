@@ -1,5 +1,5 @@
 /* ================================================================================================
- * File: render_sky.cpp
+ * File: sky.cpp
  * Brief: Skybox rendering, ported from ref_gl's gl_warp.c.
  *
  *  Quake's sky is not geometry the map ships. SURF_SKY faces are holes: they
@@ -26,15 +26,13 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/common.h"
-#include "ps2/renderer/render_sky.h"
-#include "ps2/renderer/render_view.h"
+#include "ps2/renderer/sky.h"
+#include "ps2/renderer/view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/clip.h"
-#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
-#include "ps2/math/vec_mat.h"
+#include "ps2/renderer/render_system.h"
 
 #include <cmath>
 #include <cstdio>
@@ -393,7 +391,7 @@ clip::ClipVertex MakeSkyVertex(float s, float t, const int axis,
 // Public API
 // ------------------------------------------------------------------------------------------------
 
-void InitSkyRendering()
+void Init()
 {
     s_skipSky    = Cvar_Get("ps2_skip_sky",        "0", 0); // Debug: drop the sky pass entirely.
     s_fullBounds = Cvar_Get("ps2_sky_full_bounds", "0", 0); // Debug: draw all six faces whole, ignoring what is visible.

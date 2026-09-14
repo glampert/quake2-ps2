@@ -1,5 +1,5 @@
 /* ================================================================================================
- * File: render_view.cpp
+ * File: view.cpp
  * Brief: View/3D frame rendering: the world geometry pass behind PS2_RenderFrame.
  *
  *  RenderFrame walks the world BSP for the refdef's camera: MarkLeaves stamps the
@@ -20,21 +20,18 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/common.h"
-#include "ps2/renderer/render_profile.h"
-#include "ps2/renderer/render_view.h"
-#include "ps2/renderer/render_md2.h"
-#include "ps2/renderer/render_sky.h"
+#include "ps2/renderer/view.h"
+#include "ps2/renderer/profile.h"
+#include "ps2/renderer/md2.h"
+#include "ps2/renderer/sky.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/math/vec_mat.h"
 #include "ps2/builtin/builtin.h" // global_palette (beam and particle colours)
 
 #include <cmath>
@@ -2558,9 +2555,9 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
         switch (model->type)
         {
         case mod::ModelType::AliasMD2:
-            DrawAliasMD2Entity(viewDef, entity, (entity.flags & RF_WEAPONMODEL)
-                                              ? s_weaponViewProjMatrix
-                                              : s_viewProjMatrix);
+            md2::DrawAliasMD2Entity(viewDef, entity, (entity.flags & RF_WEAPONMODEL)
+                                                    ? s_weaponViewProjMatrix
+                                                    : s_viewProjMatrix);
             break;
 
         case mod::ModelType::Brush:
@@ -2611,8 +2608,8 @@ void Init()
         s_turbSin[i] = kTurbSinAmplitude * math::Sinf(static_cast<float>(i) * kRadiansPerStep);
     }
 
-    sky::InitSkyRendering();
-    view::InitEntityRendering();
+    sky::Init();
+    md2::Init();
 }
 
 void BeginRegistration()

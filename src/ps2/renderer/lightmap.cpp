@@ -31,7 +31,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/scrap_atlas.h" // SkylinePacker, shared with the 2D scrap atlases
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/gs.h"
 
 #include <cmath>

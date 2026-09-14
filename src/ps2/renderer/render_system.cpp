@@ -1,5 +1,5 @@
 /* ================================================================================================
- * File: render_context.cpp
+ * File: render_system.cpp
  * Brief: The renderer's command recorder and the frame it records. See render_system.h.
  *
  *  Frame structure: BeginFrame opens the command buffer and writes the colour+depth clear at the
@@ -32,7 +32,7 @@
 
 #include "ps2/renderer/render_system.h"
 #include "ps2/debug/profile.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/texture.h"
 
 #include <cstdint>
@@ -579,8 +579,19 @@ void EnsureTextureResident(const tex::Texture & texture)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Frame lifecycle
+// Initialization / frame lifecycle
 // ------------------------------------------------------------------------------------------------
+
+void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes)
+{
+    gs::Init(gsConfig);
+
+    // NOTE: Must happen after mod::Init since the chain halves live in the arena it reserves.
+    cmdbuf::Init(memory, memorySizeBytes);
+
+    // NOTE: Must happen after cmdbuf::Init since the microprogram upload goes out on the cmdbuf chain.
+    vu1::Init();
+}
 
 void SetClearColor(const u8 r, const u8 g, const u8 b)
 {

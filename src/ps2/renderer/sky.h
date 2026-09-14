@@ -1,6 +1,6 @@
 #pragma once
 /* ================================================================================================
- * File: render_sky.h
+ * File: sky.h
  * Brief: Skybox rendering - the six textured cube faces behind SURF_SKY surfaces.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -14,7 +14,7 @@ namespace ps2::mod { struct ModelSurface; }
 namespace ps2::sky {
 
 // Registers the sky cvars. Call once from view::Init().
-void InitSkyRendering();
+void Init();
 
 // Forgets the current map's sky. Call when a new map loads
 // (PS2_BeginRegistration): tex::EndRegistration() frees the level's Sky

@@ -136,8 +136,11 @@ Q_ALWAYS_INLINE DrawStats & GetStats()
 int Gif2DPeakQwords();
 
 // ------------------------------------------------------------------------------------------------
-// Frame lifecycle
+// Initialization / frame lifecycle
 // ------------------------------------------------------------------------------------------------
+
+// Brings up all the low-level rendering systems and hardware.
+void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes);
 
 // Background colour the frame clear fills with.
 void SetClearColor(u8 r, u8 g, u8 b);

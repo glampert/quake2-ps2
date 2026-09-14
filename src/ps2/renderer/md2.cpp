@@ -1,5 +1,5 @@
 /* ================================================================================================
- * File: render_md2.cpp
+ * File: md2.cpp
  * Brief: MD2 "alias" entity model rendering.
  *
  *  An MD2 pose is two keyframes of byte-quantized vertices interpolated by the
@@ -26,18 +26,16 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/common.h"
-#include "ps2/renderer/render_md2.h"
-#include "ps2/renderer/render_view.h"
+#include "ps2/renderer/md2.h"
+#include "ps2/renderer/view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/clip.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
-#include "ps2/math/vec_mat.h"
-#include "ps2/renderer/render_profile.h"
 
-namespace ps2::view {
+namespace ps2::md2 {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
@@ -185,7 +183,7 @@ constexpr int kLerpBatchMaxVerts = 3 * 768;
 // alias models are the ones that take +pitch.
 Q_ALWAYS_INLINE math::Mat4 MakeAliasMatrix(const entity_t & entity)
 {
-    return MakeEntityMatrix(entity, /*flipPitchAngle=*/true);
+    return view::MakeEntityMatrix(entity, /*flipPitchAngle=*/true);
 }
 
 // Conservative frustum cull (ref_gl's R_CullAliasModel): the model-space
@@ -226,13 +224,13 @@ bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, cons
         radiusSqr += extent * extent;
     }
 
-    switch (FrustumCullsSphere(entity.origin, math::Sqrtf(radiusSqr)))
+    switch (view::FrustumCullsSphere(entity.origin, math::Sqrtf(radiusSqr)))
     {
-    case SphereCull::Outside :
+    case view::SphereCull::Outside :
         return true;  // Wholly outside one plane: so is every corner.
-    case SphereCull::Inside :
+    case view::SphereCull::Inside :
         return false; // Wholly inside all four: so is every corner.
-    case SphereCull::Straddling :
+    case view::SphereCull::Straddling :
         break;        // Only the corners can decide.
     }
 
@@ -267,7 +265,7 @@ bool ShouldCullEntity(const entity_t & entity, const daliasframe_t * frame, cons
         corners[i] = math::Transform(local, toWorld);
     }
 
-    return FrustumCullsPoints(corners, ArrayLength(corners));
+    return view::FrustumCullsPoints(corners, ArrayLength(corners));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -343,7 +341,7 @@ math::Vec3 ShadeEntity(const refdef_t & viewDef, const entity_t & entity, vec3_t
     }
     else
     {
-        CalcPointLightColor(viewDef, entity.origin, color, outLightSpot);
+        view::CalcPointLightColor(viewDef, entity.origin, color, outLightSpot);
     }
 
     if (entity.flags & RF_MINLIGHT)
@@ -769,7 +767,7 @@ const tex::Texture & SkinForEntity(const entity_t & entity, const mod::ModelInst
 // Public API
 // ------------------------------------------------------------------------------------------------
 
-void InitEntityRendering()
+void Init()
 {
     s_lerpModels = Cvar_Get("ps2_md2_lerp_on",     "1", 0);
     s_vuLerp     = Cvar_Get("ps2_md2_vu_lerp",     "1", 0);
@@ -831,13 +829,13 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     {
         if (ShouldCullEntity(entity, frame, oldFrame))
         {
-            ++GetStats().boxesCulled;
+            ++view::GetStats().boxesCulled;
             return;
         }
     }
 
     PS2_Assert(mesh.numXyz > 0 && mesh.numXyz <= MAX_VERTS);
-    ++GetStats().entities;
+    ++view::GetStats().entities;
 
     // The entity's shade colour. The normal index is read from the *current*
     // frame only - the pose interpolates, the lighting does not (ref_gl
@@ -1134,4 +1132,4 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     }
 }
 
-} // namespace ps2::view
+} // namespace ps2::md2

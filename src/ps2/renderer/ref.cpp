@@ -1,11 +1,11 @@
 /* ================================================================================================
- * File: ref.cpp
+ * File: ref.cpp - the "refresh" module. Glue between the PS2 renderer and Quake 2.
  * Brief: The refexport_t implementation - the functions the Quake II client calls
  *        to draw. Implements the full 2D overlay path (console, HUD, menus) -
  *        pics, glyphs, tile fills, solid fills and fades - plus cinematic
  *        playback (cinematic.cpp) and the image/model registration cycle
  *        (assets load from disk on first use and are freed when a level stops
- *        referencing them). RenderFrame draws the 3D world geometry (render_view.cpp)
+ *        referencing them). RenderFrame draws the 3D world geometry (view.cpp)
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -17,19 +17,19 @@
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/model.h"
+#include "ps2/renderer/model_load.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/cinematic.h"
-#include "ps2/renderer/render_view.h"
-#include "ps2/renderer/render_md2.h"
-#include "ps2/renderer/render_sky.h"
+#include "ps2/renderer/view.h"
+#include "ps2/renderer/md2.h"
+#include "ps2/renderer/sky.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/builtin/builtin.h"
-#include "ps2/debug/profile.h"
-#include "ps2/renderer/render_profile.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -492,6 +492,14 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     (void)hinstance;
     (void)wndproc;
 
+    s_gsLatency        = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
+    s_enableDither     = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+    s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showDrawStats    = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_showProfileStats = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", 0);
+
     const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
     const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);
 
@@ -505,28 +513,20 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     // - ref_gl floors it at 1 too.
     const float intensityScale = (intensity->value < 1.0f) ? 1.0f : intensity->value;
 
-    ps2::gs::Config gsConfig;
-    gsConfig.palette          = global_palette;
-    gsConfig.intensity        = intensityScale;
-    gsConfig.width            = static_cast<int>(fbWidth->value);
-    gsConfig.height           = static_cast<int>(fbHeight->value);
-    gsConfig.framebuffer16Bit = (fb16Bit->value != 0.0f);
-
-    ps2::gs::Init(gsConfig);
+    ps2::mod::Init();
     ps2::tex::Init(intensityScale);
     ps2::lm::Init();
-    ps2::mod::Init();
-    ps2::cmdbuf::Init(); // after mod::Init: the chain halves live in the arena it reserves
-    ps2::vu1::Init();    // after cmdbuf::Init: the microprogram upload goes out on the chain
     ps2::view::Init();
 
-    s_gsLatency        = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
-    s_enableDither     = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
-    s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showDrawStats    = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showProfileStats = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    const auto scratch = ps2::mod::WorldScratchBlock();
+    const ps2::gs::Config gsConfig = {
+        .palette          = global_palette,
+        .intensity        = intensityScale,
+        .width            = static_cast<int>(fbWidth->value),
+        .height           = static_cast<int>(fbHeight->value),
+        .framebuffer16Bit = (fb16Bit->value != 0.0f)
+    };
+    ps2::rs::Init(gsConfig, scratch.base, scratch.sizeBytes);
 
     s_texConchars = ps2::tex::Find("conchars", ps2::tex::ImageType::Pic);
     s_texBacktile = ps2::tex::Find("backtile", ps2::tex::ImageType::Pic);

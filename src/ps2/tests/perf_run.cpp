@@ -21,7 +21,7 @@
 #if PS2_QUAKE_DEBUG
 #include "ps2/common.h"
 #include "ps2/tests/perf_run.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 
 namespace ps2::test {
 namespace {

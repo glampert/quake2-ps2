@@ -8,8 +8,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/model_load.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 
 #include <cstdint>
 #include <dma.h>
@@ -145,25 +144,23 @@ packet2_t * detail::g_packet = nullptr;
 // Lifecycle
 // ------------------------------------------------------------------------------------------------
 
-void Init()
+void Init(void * memory, const u32 memorySizeBytes)
 {
     PS2_AssertMsg(!s_initialized, "cmdbuf::Init called twice!");
-
-    const mod::ScratchBlock scratch = mod::WorldScratchBlock();
-    PS2_AssertMsg(scratch.base != nullptr, "cmdbuf::Init before the world arena was reserved!");
-    PS2_AssertMsg(scratch.sizeBytes >= 2u * kHalfBytes, "World scratch cannot hold both chain halves!");
+    PS2_AssertMsg(memory != nullptr, "cmdbuf::Init before the world arena was reserved!");
+    PS2_AssertMsg(memorySizeBytes >= 2u * kHalfBytes, "cmdbuf memory cannot hold both chain halves!");
 
     // 64-byte aligned because that is a cache line: the whole buffer is written by the EE and
     // read by the DMAC, and a half that started mid-line would share its first line with the
     // other half. ReserveWorldArena aligns the arena and kWorldHunkCapacity is a multiple of 64,
     // so the scratch base inherits it - assert rather than assume, since both are easy to change.
-    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(scratch.base) & 63u) == 0, "World scratch must be 64-byte aligned for the frame chain!");
+    PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(memory) & 63u) == 0, "cmdbuf memory must be 64-byte aligned for the frame chain!");
     static_assert((kHalfBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
 
     dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_VIF1);
 
-    u8 * const base = static_cast<u8 *>(scratch.base);
+    u8 * const base = static_cast<u8 *>(memory);
 
     for (int i = 0; i < 2; ++i)
     {
@@ -188,7 +185,7 @@ void Init()
     PublishCurrent();
 
     Com_DPrintf("Frame chain: 2 x %u KB inside the world lump scratch (%u KB), no heap of its own.\n",
-                kHalfBytes / 1024u, scratch.sizeBytes / 1024u);
+                kHalfBytes / 1024u, memorySizeBytes / 1024u);
 }
 
 void BeginFrame()

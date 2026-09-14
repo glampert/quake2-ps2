@@ -54,7 +54,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/debug/profile.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
 
 #include <cstring> // memset

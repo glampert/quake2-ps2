@@ -1,6 +1,6 @@
 #pragma once
 /* ================================================================================================
- * File: render_view.h
+ * File: view.h
  * Brief: View/3D frame rendering helpers.
  *
  * This source code is released under the GNU GPL v2 license.

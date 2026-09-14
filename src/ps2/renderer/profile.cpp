@@ -1,18 +1,18 @@
 /* ================================================================================================
- * File: render_profile.cpp
+ * File: profile.cpp
  * Brief: Profile events shared by more than one renderer source file.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/common.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
-#include "ps2/renderer/render_view.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
+#include "ps2/renderer/view.h"
 
 #include <cstdio>
 

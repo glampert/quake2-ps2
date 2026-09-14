@@ -60,7 +60,7 @@ constexpr int kTerminatorQwords = 4;
 
 // Points the two halves at the loader scratch and opens the first one. Call once at renderer
 // init, after mod::Init() - the arena the halves live in is reserved from there.
-void Init();
+void Init(void * memory, u32 memorySizeBytes);
 
 // Swaps halves and rewinds the write cursor. Nothing written before this survives.
 void BeginFrame();

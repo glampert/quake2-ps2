@@ -17,7 +17,7 @@
 #include "ps2/audio/audsrv_device.h"
 #include "ps2/audio/mix_ring.h"
 #include "ps2/common.h"
-#include "ps2/renderer/render_profile.h"
+#include "ps2/renderer/profile.h"
 
 // The sound backend is client code (the engine's own win32/snd_win.c is the same): it
 // fills in the shared dma_t and reads the mixer's paintedtime. The legacy headers

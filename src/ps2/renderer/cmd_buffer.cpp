@@ -160,6 +160,9 @@ void Init()
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(scratch.base) & 63u) == 0, "World scratch must be 64-byte aligned for the frame chain!");
     static_assert((kHalfBytes & 63u) == 0, "Chain halves must be a whole number of cache lines");
 
+    dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
+    dma_channel_fast_waits(DMA_CHANNEL_VIF1);
+
     u8 * const base = static_cast<u8 *>(scratch.base);
 
     for (int i = 0; i < 2; ++i)

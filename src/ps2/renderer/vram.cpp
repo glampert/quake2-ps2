@@ -375,9 +375,8 @@ int HeapTotalWords()
 Address TryAllocate(const tex::Texture & texture, int sizeWords)
 {
     PS2_AssertMsg(s_blockList != nullptr, "vram::Init not called!");
-    PS2_AssertMsg(texture.vramAddr == tex::Texture::kNotResident, "Texture already resident!");
+    PS2_AssertMsg(!texture.IsVramResident(), "Texture already resident!");
     PS2_Assert(sizeWords > 0);
-
 
     for (;;)
     {
@@ -466,7 +465,7 @@ void UnpinAll()
 
 void Touch(const tex::Texture & texture)
 {
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "Touch on a non-resident texture!");
+    PS2_AssertMsg(texture.IsVramResident(), "Touch on a non-resident texture!");
 
     Block * block = FindBlockFor(texture);
     if (block != nullptr) [[likely]]
@@ -480,7 +479,7 @@ void Touch(const tex::Texture & texture)
 
 bool BoundThisFrame(const tex::Texture & texture)
 {
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "BoundThisFrame on a non-resident texture!");
+    PS2_AssertMsg(texture.IsVramResident(), "BoundThisFrame on a non-resident texture!");
 
     const Block * block = FindBlockFor(texture);
     if (block != nullptr) [[likely]]
@@ -494,7 +493,7 @@ bool BoundThisFrame(const tex::Texture & texture)
 
 void Free(const tex::Texture & texture)
 {
-    if (texture.vramAddr == tex::Texture::kNotResident)
+    if (!texture.IsVramResident())
     {
         return;
     }

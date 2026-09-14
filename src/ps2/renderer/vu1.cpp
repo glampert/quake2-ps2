@@ -31,10 +31,10 @@ namespace {
 // VU1 micro memory, in the 64-bit instruction units MPG destinations count in (4 KB / 8 bytes).
 constexpr u32 kMicroMemInstructions = 2048;
 
-static bool s_initialized = false;
-
 // Micro memory entry point of each program, indexed by Program. Set by Init().
 static ProgramAddr s_progAddr[static_cast<int>(Program::Count)];
+
+static bool s_initialized = false;
 
 } // namespace
 
@@ -51,9 +51,6 @@ void Init()
 {
     PS2_AssertMsg(!s_initialized, "vu1::Init called twice!");
     s_initialized = true;
-
-    dma_channel_initialize(DMA_CHANNEL_VIF1, nullptr, 0);
-    dma_channel_fast_waits(DMA_CHANNEL_VIF1);
 
     // Uploaded back to back from micro address 0, in this array's order - which is Program's
     // order, since the loop below indexes s_progAddr by position. MPG rounds an odd instruction
@@ -86,7 +83,7 @@ void Init()
     }
 
     ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    cmdbuf::Drain();
+    ctx.KickAndWait();
 }
 
 } // namespace ps2::vu1

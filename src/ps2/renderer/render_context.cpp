@@ -334,10 +334,9 @@ void EnsureTextureResident(const tex::Texture & texture)
     // residency is the atlas's, and binding it here would upload the whole atlas under the wrong
     // name and sample from the wrong corner. Only the 2D path can produce one, and
     // gs::ResolveBind2D resolves the atlas before this is called.
-    PS2_AssertMsg(texture.atlas == nullptr,
-                  "EnsureTextureResident on a scrapped image - bind its atlas!");
+    PS2_AssertMsg(texture.atlas == nullptr, "EnsureTextureResident on a scrapped image - bind its atlas!");
 
-    if (texture.vramAddr != tex::Texture::kNotResident)
+    if (texture.IsVramResident())
     {
         if (!texture.dirtyPixels)
         {
@@ -466,7 +465,7 @@ void EndFrame(const bool deferPresent)
     // Rolls the command buffer's high-water and latches its counters for the overlay.
     cmdbuf::EndFrame();
 
-    detail::g_drawCtx = gs::Other(detail::g_drawCtx); // draw into the other buffer next frame
+    detail::g_drawCtx = gs::NextDrawContext(detail::g_drawCtx); // draw into the other buffer next frame
 }
 
 int Gif2DPeakQwords()
@@ -820,8 +819,6 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     EnsureTextureResident(texture);
 
-    const gs::DrawContext drawCtx = CurrentDrawContext();
-
     // One chunk per VU run; the double buffer overlaps each chunk's unpack
     // with the previous chunk's transform.
     for (int firstVert = 0; firstVert < vertCount; firstVert += vu1::kMaxVertsPerBatch)
@@ -830,7 +827,7 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < vu1::kMaxVertsPerBatch) ? remaining : vu1::kMaxVertsPerBatch;
-        AddBatchChunk(ctx, texture, drawCtx, verts + firstVert, chunkVerts, flags);
+        AddBatchChunk(ctx, texture, detail::g_drawCtx, verts + firstVert, chunkVerts, flags);
     }
 }
 
@@ -854,8 +851,6 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
-    const gs::DrawContext drawCtx = CurrentDrawContext();
-
     // Chunking as in DrawTriangles. The positions are already grouped this way -
     // one LerpPosChunk is one VU run - and the attributes are simply sliced at the
     // same boundary, which works because the caller gathered the positions from the
@@ -868,7 +863,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < vu1::kMaxLerpVertsPerBatch) ? remaining : vu1::kMaxLerpVertsPerBatch;
 
-        AddLerpBatchChunk(ctx, texture, drawCtx, frontv, backv, shadeLight, stScaleS, stScaleT,
+        AddLerpBatchChunk(ctx, texture, detail::g_drawCtx, frontv, backv, shadeLight, stScaleS, stScaleT,
                           posChunks[c], attribs + firstVert, chunkVerts, faceCull, flags);
     }
 }
@@ -897,15 +892,13 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
-    const gs::DrawContext drawCtx = CurrentDrawContext();
-
     for (int first = 0; first < count; first += vu1::kMaxParticlesPerBatch)
     {
         ReserveChunk(ctx, kParticleChunkQwords, mvp, flags, /*firstChunk=*/first == 0);
 
         const int remaining  = count - first;
         const int chunkCount = (remaining < vu1::kMaxParticlesPerBatch) ? remaining : vu1::kMaxParticlesPerBatch;
-        AddParticleChunk(ctx, texture, drawCtx, clipOffset, uvMaxU, uvMaxV,
+        AddParticleChunk(ctx, texture, detail::g_drawCtx, clipOffset, uvMaxU, uvMaxV,
                          particles + first, chunkCount, flags);
     }
 }

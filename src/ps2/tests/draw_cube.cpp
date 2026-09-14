@@ -280,8 +280,8 @@ void DrawRotatingCube()
 
             const int numChunks = rc::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
             cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
-                         + cmdbuf::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
-                         + rc::DrawLerpedTrianglesChainCost(numVerts));
+                          + cmdbuf::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
+                          + rc::DrawLerpedTrianglesChainCost(numVerts));
 
             // Two exact allocations rather than one committable block: both sizes are
             // known before anything is written, so neither has to be cut back.

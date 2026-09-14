@@ -33,9 +33,8 @@
 
 #include "ps2/common.h"
 
-#include <packet2.h>
-
 #include <cstdint>
+#include <packet2.h>
 
 namespace ps2::cmdbuf {
 

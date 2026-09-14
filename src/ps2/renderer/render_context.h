@@ -160,6 +160,12 @@ public:
 #endif // PS2_QUAKE_ASSERTS
     }
 
+    // Full sync/drain of the underlying cmdbuf. Kicks the current frame and waits for it to finish.
+    void KickAndWait()
+    {
+        cmdbuf::Drain();
+    }
+
     // --------------------------------------------------------------------------------------------
     // VU1 microprogram and data transfers; each appends DMA tags/VIF codes and advances.
     // --------------------------------------------------------------------------------------------
@@ -245,8 +251,15 @@ public:
         packet2_add_2x_s64(Packet(), static_cast<s64>(lo), static_cast<s64>(hi));
     }
 
-    void AddFloat(const float value) { packet2_add_float(Packet(), value); }
-    void AddU32(const u32 value) { packet2_add_u32(Packet(), value); }
+    void AddFloat(const float value)
+    {
+        packet2_add_float(Packet(), value);
+    }
+
+    void AddU32(const u32 value)
+    {
+        packet2_add_u32(Packet(), value);
+    }
 
     // --------------------------------------------------------------------------------------------
     // DIRECT blocks: GIF data carried through VIF1 to the GIF over PATH2
@@ -409,10 +422,6 @@ void BeginFrame(bool dither);
 // otherwise stand at. Clear it and this waits for the GS and flips before returning.
 void EndFrame(bool deferPresent);
 
-// The GS drawing context being rendered into this frame. Every context-indexed register a caller
-// programs itself, and the prim CTXT bit, must match it.
-Q_ALWAYS_INLINE gs::DrawContext CurrentDrawContext() { return detail::g_drawCtx; }
-
 // Background colour the frame clear fills with.
 void SetClearColor(u8 r, u8 g, u8 b);
 
@@ -450,9 +459,9 @@ int Gif2DPeakQwords();
 // half) and the FLUSH + MSCAL (1). 11 in practice, declared with room to spare; over-declaring
 // only reserves slightly more of the buffer than a chunk needs. The lerped path adds a second REF
 // unpack and a longer header (15 in practice), the particle path an 11-qword header (14).
-constexpr int kChunkChainQwords      = 16;
-constexpr int kLerpChunkChainQwords  = 22;
-constexpr int kParticleChunkQwords   = 22;
+constexpr int kChunkChainQwords     = 16;
+constexpr int kLerpChunkChainQwords = 22;
+constexpr int kParticleChunkQwords  = 22;
 
 // Chain qwords a draw's opening costs: the transform block and the dynamic-light block, both
 // built in the buffer rather than referenced out of a static. 8 and 12 qwords of payload, each
@@ -705,7 +714,6 @@ public:
     Q_ALWAYS_INLINE vu1::DrawVertex & PushVertex()
     {
         PS2_AssertMsg(m_vertCount < m_maxVerts, "TriangleStream overflow - Begin undercounted!");
-
         return m_verts[m_vertCount++];
     }
 
@@ -852,7 +860,7 @@ public:
     LerpStream(const LerpStream &) = delete;
     LerpStream & operator=(const LerpStream &) = delete;
 
-    // --- Draw state, as TriangleStream's ---------------------------------------------------------
+    // Draw state, as TriangleStream's:
 
     Q_ALWAYS_INLINE void SetTransform(const math::Mat4 & mvp)
     {
@@ -1098,4 +1106,5 @@ private:
     const int m_maxChunks;
     const int m_claimQwords;
 };
+
 } // namespace ps2::rc

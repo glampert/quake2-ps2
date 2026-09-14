@@ -126,6 +126,9 @@ struct Texture final
     static constexpr auto kNotResident = vram::Address::Invalid;
     mutable vram::Address vramAddr; // GS VRAM word address; kNotResident when not uploaded.
 
+    // True if the texture is uploaded to VRAM and ready to be used by the GS.
+    bool IsVramResident() const { return vramAddr != kNotResident; }
+
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
     // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
     void MarkPixelsDirty() const { dirtyPixels = true; }

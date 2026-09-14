@@ -54,9 +54,8 @@ enum class Program
 // Where 'prog' was uploaded. Init must have run.
 ProgramAddr ProgramAddress(Program prog);
 
-// Brings up the VIF1 DMA channel, uploads the microprograms to VU1 micro memory and programs the
-// double-buffer registers. Call once, after gs::Init() and cmdbuf::Init() - the upload rides the
-// command buffer.
+// Uploads the microprograms to VU1 micro memory and programs the double-buffer registers.
+// Call once, after gs::Init() and cmdbuf::Init() - the upload rides the command buffer.
 void Init();
 
 // ------------------------------------------------------------------------------------------------

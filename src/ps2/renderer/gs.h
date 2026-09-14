@@ -35,7 +35,7 @@ enum struct DrawContext : int
 constexpr int Index(const DrawContext ctx) { return static_cast<int>(ctx); }
 
 // The context the next frame draws into.
-constexpr DrawContext Other(const DrawContext ctx)
+constexpr DrawContext NextDrawContext(const DrawContext ctx)
 {
     return (ctx == DrawContext::Ctx0) ? DrawContext::Ctx1 : DrawContext::Ctx0;
 }

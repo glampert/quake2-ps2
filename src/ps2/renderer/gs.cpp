@@ -72,12 +72,9 @@
 namespace ps2::gs {
 namespace {
 
-// Scratch packet for the transfers that are still the EE's own: streamed texture
-// and CLUT uploads (DMA chain tags only; the pixel data is referenced in place),
-// the one-time context setup in Init - which runs before the frame chain exists -
-// and the bare FINISH the VRAM-reuse sync needs outside a 2D section. Everything
-// else the GS is told to do now goes through the frame chain.
-constexpr int kTexUploadQwords = 128;
+// ------------------------------------------------------------------------------------------------
+// GifPacket
+// ------------------------------------------------------------------------------------------------
 
 // A GIF packet with a buffer of its own, sent down the GIF channel by the EE. The frame's
 // command buffer carries everything else; what is left for this are the transfers that cannot
@@ -101,8 +98,7 @@ public:
         // 64-byte (cache line) aligned and zeroed. Behind the tagged allocator, so it shows up
         // in the memory overlay.
         const size_t sizeBytes = static_cast<size_t>(maxQwords + kGuardQwords) * sizeof(qword_t);
-        m_base = static_cast<qword_t *>(heap::AllocAligned(heap::MemAlign(64), sizeBytes,
-                                                           heap::MemTag::Renderer));
+        m_base = static_cast<qword_t *>(heap::AllocAligned(heap::MemAlign(64), sizeBytes, heap::MemTag::Renderer));
         std::memset(m_base, 0, sizeBytes);
         m_maxQwords = maxQwords;
     }
@@ -114,7 +110,7 @@ public:
         return m_writer.emplace(m_base, m_maxQwords);
     }
 
-    // Sends what has been built as one normal transfer. Fire and forget; the wait is Wait().
+    // Sends what has been built as one normal transfer. Fire and forget; the wait is WaitGifChannel().
     void SendNormal()
     {
         dma_channel_send_normal(DMA_CHANNEL_GIF, m_base, BuiltQwords(), 0, 0);
@@ -129,7 +125,7 @@ public:
 
     // Waits until the GIF channel is usable again.
     // NOTE: assumes fast waits are enabled for it (see Init below).
-    static void Wait() { dma_wait_fast(); }
+    static void WaitGifChannel() { dma_wait_fast(); }
 
     // Waits for the FINISH event a GifWriter::Finish() armed.
     static void WaitFinish() { draw_wait_finish(); }
@@ -148,7 +144,7 @@ private:
 #endif // PS2_QUAKE_ASSERTS
 
     // Qwords Begin()'s writer has built, which is what a send transfers.
-    int BuiltQwords() const
+    Q_ALWAYS_INLINE int BuiltQwords() const
     {
         return m_writer.has_value() ? m_writer->QwordCount() : 0;
     }
@@ -159,6 +155,17 @@ private:
 };
 
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
+
+// ------------------------------------------------------------------------------------------------
+// Local helpers / constants
+// ------------------------------------------------------------------------------------------------
+
+// Scratch packet for the transfers that are still the EE's own: streamed texture
+// and CLUT uploads (DMA chain tags only; the pixel data is referenced in place),
+// the one-time context setup in Init - which runs before the frame chain exists -
+// and the bare FINISH the VRAM-reuse sync needs outside a 2D section. Everything
+// else the GS is told to do now goes through the frame chain.
+constexpr int kTexUploadQwords = 128;
 
 // The 4x4 ordered dither matrix the GS adds before truncating a pixel to 5 bits
 // per channel: it trades banding for a fixed low-amplitude pattern.
@@ -240,7 +247,7 @@ void UploadCluts(const tex::Clut * first, const tex::Clut * second)
     upload.TextureFlush();
 
     s_texUploadPacket.SendChain();
-    GifPacket::Wait();
+    GifPacket::WaitGifChannel();
 }
 
 // Builds the lit palette and uploads it. Called once, from Init.
@@ -291,12 +298,15 @@ void Init(const Config & cfg)
     const int framePsm = cfg.framebuffer16Bit ? GS_PSM_16 : GS_PSM_32;
 
     framebuffer_t * const frames = detail::g_state.framebuffer;
+
+    // Framebuffer[0]
     frames[0].width   = static_cast<unsigned int>(cfg.width);
     frames[0].height  = static_cast<unsigned int>(cfg.height);
     frames[0].mask    = 0;
     frames[0].psm     = static_cast<unsigned int>(framePsm);
     frames[0].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
+    // Framebuffer[1]
     frames[1]         = frames[0];
     frames[1].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
@@ -366,7 +376,7 @@ void Init(const Config & cfg)
     pkt.Finish();
 
     s_texUploadPacket.SendNormal();
-    GifPacket::Wait();
+    GifPacket::WaitGifChannel();
     GifPacket::WaitFinish();
 
     // Build and upload the CLUTs. None of the three ever changes again.
@@ -383,7 +393,7 @@ void Init(const Config & cfg)
 
 u64 MakeTex0(const tex::Texture & texture, const bool lit)
 {
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident, "MakeTex0 for a texture with no VRAM!");
+    PS2_AssertMsg(texture.IsVramResident(), "MakeTex0 for a texture with no VRAM!");
 
     // Indexed formats sample through one of the fixed CLUTs and reload the on-chip CLUT cache on
     // every bind - cheap (1 KB) even at the 2D path's bind rate. Everything else leaves the CLUT
@@ -423,7 +433,7 @@ void ReleaseTexture(const tex::Texture & texture)
         detail::g_state.currentTex = nullptr;
     }
 
-    if (texture.vramAddr == tex::Texture::kNotResident)
+    if (!texture.IsVramResident())
     {
         return;
     }
@@ -470,8 +480,7 @@ void PresentFramebuffer(const DrawContext ctx)
 void UploadTexture(const tex::Texture & texture)
 {
     PS2_Assert(texture.pixels != nullptr);
-    PS2_AssertMsg(texture.vramAddr != tex::Texture::kNotResident,
-                  "UploadTexture before VRAM was allocated for it!");
+    PS2_AssertMsg(texture.IsVramResident(), "UploadTexture before VRAM was allocated for it!");
 
     const int psm    = tex::GsPsm(texture.format);
     const int stride = tex::TextureStridePixels(texture, psm);
@@ -506,7 +515,7 @@ void UploadTexture(const tex::Texture & texture)
     s_texUploadPacket.SendChain();
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
-        GifPacket::Wait();
+        GifPacket::WaitGifChannel();
     }
 
     vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count

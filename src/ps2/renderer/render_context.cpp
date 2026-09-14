@@ -304,13 +304,23 @@ void CloseGifBlock()
     s_gifBlock.reset();
 }
 
+// GifData's cold half: the open block cannot take 'qwords', so close it and open another.
+//
+// Out of line, and separate from the test below, so that the emitters keep paying only the
+// compare. The split itself is invisible to what is being drawn - the state a section programmed
+// lives in the GS's registers, not in the block, so the new one needs no re-arming.
+gs::GifWriter & SplitGifBlock(const int qwords)
+{
+    CloseGifBlock();
+    return OpenGifBlock(qwords + kBlockTailQwords);
+}
+
 // Room for 'qwords' of GIF data in the open section, handing back the writer to put it in. Splits
-// the section when the current block runs out, which is invisible to the caller: the state a
-// section programmed lives in the GS's registers, not in the block.
+// the section when the current block runs out, which is invisible to the caller.
 //
 // **The writer is only good until the next call.** A split replaces it, and so does anything that
 // fences the GS (a texture upload), so take it again after either rather than holding it.
-gs::GifWriter & GifData(const int qwords)
+Q_ALWAYS_INLINE gs::GifWriter & GifData(const int qwords)
 {
     PS2_AssertMsg(s_gifBlock.has_value(), "GIF emission with no block open!");
 
@@ -320,11 +330,7 @@ gs::GifWriter & GifData(const int qwords)
     {
         return *s_gifBlock;
     }
-
-    // The split is invisible to what is being drawn: the state the section programmed lives in
-    // the GS's registers, not in the block, so the new one needs no re-arming.
-    CloseGifBlock();
-    return OpenGifBlock(qwords + kBlockTailQwords);
+    return SplitGifBlock(qwords);
 }
 
 // Opens the 2D section on demand: the first 2D primitive after a flush (or after BeginFrame)

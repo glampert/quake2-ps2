@@ -11,7 +11,6 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/render_context.h"
 #include "ps2/math/vec_mat.h"
 
@@ -53,62 +52,39 @@ constexpr int kFaces[6][4] = {
 constexpr int kMaxTess = 8;
 constexpr int kMaxFaceVerts = kMaxTess * kMaxTess * 6;
 
-// One face's worth of vertices, refilled before each face draw. EE-side only, and only for the
-// ps2_testcube_vulerp path, which reads it back to requantize: a buffer the DMA chain
-// references cannot be reused per face any more, because a draw is not consumed before the
-// next one is built - it is consumed at EndFrame, with all six faces still in the chain. The
-// plain path emits straight into a span of the chain instead.
-static vu1::DrawVertex s_faceVerts[kMaxFaceVerts];
-
-// Requantizes s_faceVerts[0..numVerts) into the two streams the vulerp draw takes:
-// 'chunks' gets the byte positions - byte = (coord + H) * 255 / (2H), the exact inverse of the
-// frontv/backv scale and row-3 offset the draw sets up, both keyframes the same - and
-// 'attribs' the per-vertex ST. Unlike an MD2 the cube has no baked attribute array to
-// reference, so it builds one; both live in the chain.
+// Per-vertex attributes for the ps2_testcube_vulerp path, standing in for the baked vertex array
+// an MD2 hands rc::LerpStream: every face tessellates the same grid, so all six draws point at
+// this one copy and the stream gathers nothing but positions, exactly as it does for a model.
 //
-// The lerped program computes its colour from a scalar shade term times a
-// per-batch light, so the cube's per-vertex colour gradient cannot survive the
-// trip: every vertex shades at 1.0 and the face's first corner becomes the
-// batch light, which leaves the six faces differently coloured but flat. This
-// is a bring-up scene for the transform and texturing, so that is enough -
-// returns the light for the caller to hand to the draw.
-math::Vec4 QuantizeFaceForVuLerp(vu1::LerpPosChunk * const chunks,
-                                 vu1::LerpDrawAttrib * const attribs, int numVerts)
+// Static rather than gathered into the command buffer for the same reason a model's vertices are:
+// the chain only ever references it. Rebuilt at the top of each cube, which is safe because
+// rc::BeginFrame fences the previous frame before anything of this one is built.
+static vu1::LerpDrawAttrib s_faceAttribs[kMaxFaceVerts];
+
+// Walks the tess x tess grid of quads covering a face and hands 'emitTriangle' the (u, v) of
+// each triangle's three corners, wound like the face's own. tess^2 * 2 triangles in all.
+//
+// A template rather than a "where does vertex n land" helper so that the grid arithmetic stays
+// where it belongs, once per cell: the divide and the two corner coordinates are the same for all
+// six vertices of a cell, and working them out per vertex costs an integer division apiece.
+template<typename EmitTriangle>
+void ForEachFaceTriangle(const int tess, EmitTriangle && emitTriangle)
 {
-    constexpr float kQuant = 255.0f / (2.0f * kCubeHalfSize);
+    const float step = 1.0f / static_cast<float>(tess);
 
-    for (int v = 0; v < numVerts; ++v)
+    for (int cy = 0; cy < tess; ++cy)
     {
-        const vu1::DrawVertex & src = s_faceVerts[v];
+        for (int cx = 0; cx < tess; ++cx)
+        {
+            const float u0 = static_cast<float>(cx) * step;
+            const float v0 = static_cast<float>(cy) * step;
+            const float u1 = u0 + step;
+            const float v1 = v0 + step;
 
-        const u32 bx = static_cast<u32>((src.x + kCubeHalfSize) * kQuant + 0.5f);
-        const u32 by = static_cast<u32>((src.y + kCubeHalfSize) * kQuant + 0.5f);
-        const u32 bz = static_cast<u32>((src.z + kCubeHalfSize) * kQuant + 0.5f);
-
-        const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte free for the shade
-
-        vu1::LerpPosChunk & chunk = chunks[v / vu1::kMaxLerpVertsPerBatch];
-        const int i = v % vu1::kMaxLerpVertsPerBatch;
-
-        // The old frame's 4th byte carries the quantized shade term (shade * 128),
-        // which the microprogram reads instead of an attribute lane - so 128 is a
-        // shade of exactly 1.0 and the cube lights at face value. The current
-        // frame's stays the MD2 normal index the VU never reads.
-        chunk.pos[i].cur = packed;
-        chunk.pos[i].old = packed | (128u << 24);
-
-        attribs[v] = { 0u, src.s, src.t, src.q };
+            emitTriangle(u0, v0, u1, v0, u1, v1);
+            emitTriangle(u0, v0, u1, v1, u0, v1);
+        }
     }
-
-    // Divided by 128 to match the shade byte above: the microprogram multiplies
-    // this by shade * 128, so the light it wants is the GS colour over that scale.
-    constexpr float kPerShadeUnit = 1.0f / 128.0f;
-
-    const u32 rgba = s_faceVerts[0].rgba;
-    return { static_cast<float>(rgba & 0xFFu)         * kPerShadeUnit,
-             static_cast<float>((rgba >> 8) & 0xFFu)  * kPerShadeUnit,
-             static_cast<float>((rgba >> 16) & 0xFFu) * kPerShadeUnit,
-             static_cast<float>((rgba >> 24) & 0xFFu) };
 }
 
 // Emits the vertex at (u, v) in [0,1]^2 of a face: position and color are the
@@ -146,35 +122,101 @@ void EmitVertex(vu1::DrawVertex & vert, const int corners[4], float u, float v)
     vert.q = 1.0f;
 }
 
-// Fills destVerts with a tess x tess grid of quads (two triangles each)
-// covering the face; returns the vertex count, tess^2 * 6. Tess 1 is the
-// plain 2-triangle face; 5+ exceeds kMaxVertsPerBatch and so exercises the
-// chunked submission path in DrawTriangles.
-int EmitFace(vu1::DrawVertex * destVerts, const int corners[4], int tess)
+// Gathers a tess x tess grid of quads (two triangles each) covering the face into the stream.
+// Tess 1 is the plain 2-triangle face; 5+ exceeds vu1::kMaxVertsPerBatch and so exercises the
+// chunked submission path behind rc::TriangleStream::Flush.
+void EmitFace(rc::TriangleStream & tris, const int corners[4], const int tess)
 {
-    vu1::DrawVertex * vert = destVerts;
-    const float step = 1.0f / static_cast<float>(tess);
-
-    for (int cy = 0; cy < tess; ++cy)
+    ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
     {
-        for (int cx = 0; cx < tess; ++cx)
-        {
-            const float u0 = static_cast<float>(cx) * step;
-            const float v0 = static_cast<float>(cy) * step;
-            const float u1 = u0 + step;
-            const float v1 = v0 + step;
+        vu1::DrawVertex * const tri = tris.PushTriangle();
+        EmitVertex(tri[0], corners, ua, va);
+        EmitVertex(tri[1], corners, ub, vb);
+        EmitVertex(tri[2], corners, uc, vc);
+    });
+}
 
-            // Two triangles per cell, wound like the original face corners.
-            EmitVertex(*vert++, corners, u0, v0);
-            EmitVertex(*vert++, corners, u1, v0);
-            EmitVertex(*vert++, corners, u1, v1);
-            EmitVertex(*vert++, corners, u0, v0);
-            EmitVertex(*vert++, corners, u1, v1);
-            EmitVertex(*vert++, corners, u0, v1);
-        }
-    }
+// One vertex's position, quantized into the two keyframe byte streams the lerped program reads:
+// byte = (coord + H) * 255 / (2H), the exact inverse of the frontv/backv scale and the row-3
+// offset DrawRotatingCube sets up, both keyframes carrying the same bytes.
+void QuantizeVertex(vu1::LerpVertexBytes & dst, const int corners[4], const float u, const float v)
+{
+    constexpr float kQuant = 255.0f / (2.0f * kCubeHalfSize);
 
-    return tess * tess * 6;
+    vu1::DrawVertex vert;
+    EmitVertex(vert, corners, u, v);
+
+    const u32 bx = static_cast<u32>((vert.x + kCubeHalfSize) * kQuant + 0.5f);
+    const u32 by = static_cast<u32>((vert.y + kCubeHalfSize) * kQuant + 0.5f);
+    const u32 bz = static_cast<u32>((vert.z + kCubeHalfSize) * kQuant + 0.5f);
+
+    const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte free for the shade
+
+    // The old frame's 4th byte carries the quantized shade term (shade * 128), which the
+    // microprogram reads instead of an attribute lane - so 128 is a shade of exactly 1.0 and the
+    // cube lights at face value. The current frame's stays the MD2 normal index the VU never
+    // reads.
+    dst.cur = packed;
+    dst.old = packed | (128u << 24);
+}
+
+// The same grid through the MD2 keyframe path: only the quantized positions are gathered, and
+// the attributes come from s_faceAttribs.
+void EmitFaceLerped(rc::LerpStream & lerp, const int corners[4], const int tess)
+{
+    ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
+    {
+        vu1::LerpVertexBytes * const tri = lerp.PushTriangle();
+        QuantizeVertex(tri[0], corners, ua, va);
+        QuantizeVertex(tri[1], corners, ub, vb);
+        QuantizeVertex(tri[2], corners, uc, vc);
+    });
+}
+
+// Fills s_faceAttribs for a tess x tess grid. Lane 0 is the keyframe index a model would have
+// there and the microprogram never reads it.
+void BuildFaceAttribs(const int tess)
+{
+    vu1::LerpDrawAttrib * attrib = s_faceAttribs;
+
+    ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
+    {
+        *attrib++ = { 0u, ua, va, 1.0f };
+        *attrib++ = { 0u, ub, vb, 1.0f };
+        *attrib++ = { 0u, uc, vc, 1.0f };
+    });
+}
+
+// The batch light for a face, which is all of its colour that survives the lerped path: that
+// program computes its colour from a scalar shade term times one per-batch light, so the cube's
+// per-vertex gradient cannot come through. Every vertex shades at 1.0 and the face's first
+// corner becomes the light, which leaves the six faces differently coloured but flat. This is a
+// bring-up scene for the transform and texturing, so that is enough.
+//
+// Divided by 128 to match the shade byte EmitFaceLerped writes: the microprogram multiplies this
+// by shade * 128, so the light it wants is the GS colour over that scale. The .w is the vertex
+// alpha in GS units and keeps its own scale.
+math::Vec4 FaceShadeLight(const int corners[4])
+{
+    constexpr float kPerShadeUnit = 1.0f / 128.0f;
+
+    // Emitted rather than read off kCorners, so the debug colour override in EmitVertex reaches
+    // this path too.
+    vu1::DrawVertex corner;
+    EmitVertex(corner, corners, 0.0f, 0.0f);
+
+    const u32 rgba = corner.rgba;
+    return { static_cast<float>(rgba & 0xFFu)         * kPerShadeUnit,
+             static_cast<float>((rgba >> 8) & 0xFFu)  * kPerShadeUnit,
+             static_cast<float>((rgba >> 16) & 0xFFu) * kPerShadeUnit,
+             static_cast<float>((rgba >> 24) & 0xFFu) };
+}
+
+// Which debug texture a face samples. With ps2_testcube_vram_tex_eviction on the faces share a
+// 3-variant window that slides every 2 seconds instead of taking one each.
+int FaceVariant(const int face, const int tick, const cvar_t * const evictionCvar)
+{
+    return (evictionCvar->value != 0.0f) ? (((face % 3) + tick) % tex::kNumDebugTextures) : face;
 }
 
 } // namespace
@@ -255,54 +297,51 @@ void DrawRotatingCube()
         mvpLerp.m[3][3] = row3.w;
     }
 
-    // This runs at the end of the frame, after the console and the HUD, so the 2D
-    // section is open and holding a DMA tag - and the faces below allocate from the
-    // chain, which cannot happen inside one. Closing it here rather than leaving it
-    // to the draw is the same rule the batches follow: the 2D->3D boundary is where
-    // the chain is claimed, not where it is submitted.
-    rc::FlushPending2D();
+    // Both paths gather through the same streams the renderer's own passes use, so this scene
+    // exercises the real submission path and knows nothing of the chain budget. The stream also
+    // closes the pending 2D section when it claims - this runs at the end of the frame, after the
+    // console and the HUD, so one is open and holding a DMA tag that an allocation cannot land
+    // inside.
+    //
+    // One stream for the whole cube, flushed per face by the texture change: six batches, as
+    // before. A face fits one flush cycle whatever the tessellation, so its vertices go out in
+    // one batch and only the draw itself chunks them.
+    const int tick     = Sys_Milliseconds() / 2000;
+    const int numVerts = tess * tess * 6;
 
-    const int tick = Sys_Milliseconds() / 2000;
-    for (int face = 0; face < 6; ++face)
+    if (vuLerp)
     {
-        const int variant = (s_testEviction->value != 0.0f)
-                          ? ((face % 3) + tick) % tex::kNumDebugTextures
-                          : face;
+        BuildFaceAttribs(tess);
 
-        // Both paths gather into the frame chain, like every other 3D path: the face has to
-        // stay valid until EndFrame kicks, and the reservation has to cover the draw's tags as
-        // well as the data so that nothing here can rewind what the previous face left behind.
-        const int numVerts = tess * tess * 6;
+        rc::LerpStream lerp{ kMaxFaceVerts };
 
-        if (vuLerp)
+        for (int face = 0; face < 6; ++face)
         {
-            EmitFace(s_faceVerts, kFaces[face], tess);
+            lerp.SetTransform(mvpLerp);
+            lerp.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
+            lerp.SetLerpParams(frontv, backv, FaceShadeLight(kFaces[face]));
+            lerp.SetAttribSource(s_faceAttribs);
 
-            const int numChunks = rc::ChunkCount(numVerts, vu1::kMaxLerpVertsPerBatch);
-            cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::LerpPosChunk>(numChunks)
-                          + cmdbuf::CalcAllocCost<vu1::LerpDrawAttrib>(numVerts)
-                          + rc::DrawLerpedTrianglesChainCost(numVerts));
-
-            // Two exact allocations rather than one committable block: both sizes are
-            // known before anything is written, so neither has to be cut back.
-            vu1::LerpPosChunk   * const chunks  = cmdbuf::Alloc<vu1::LerpPosChunk>(numChunks);
-            vu1::LerpDrawAttrib * const attribs = cmdbuf::Alloc<vu1::LerpDrawAttrib>(numVerts);
-
-            const math::Vec4 shadeLight = QuantizeFaceForVuLerp(chunks, attribs, numVerts);
-
-            rc::DrawLerpedTriangles(mvpLerp, tex::DebugTexture(variant), frontv, backv,
-                                     shadeLight, chunks, attribs, numVerts);
+            lerp.Begin(numVerts);
+            EmitFaceLerped(lerp, kFaces[face], tess);
         }
-        else
+
+        lerp.Flush();
+    }
+    else
+    {
+        rc::TriangleStream tris{ kMaxFaceVerts };
+
+        for (int face = 0; face < 6; ++face)
         {
-            cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::DrawVertex>(numVerts)
-                         + rc::DrawTrianglesChainCost(numVerts));
+            tris.SetTransform(mvp);
+            tris.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
 
-            vu1::DrawVertex * const verts = cmdbuf::Alloc<vu1::DrawVertex>(numVerts);
-            EmitFace(verts, kFaces[face], tess);
-
-            rc::DrawTriangles(mvp, tex::DebugTexture(variant), verts, numVerts);
+            tris.Begin(numVerts);
+            EmitFace(tris, kFaces[face], tess);
         }
+
+        tris.Flush();
     }
 }
 

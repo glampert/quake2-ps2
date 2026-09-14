@@ -234,9 +234,9 @@ void EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 // emitted reference. Reserving the whole draw up front means that reservation can never fire half
 // way through one.
 //
-// The streams below reserve for themselves, so the renderer's own paths never touch this. It stays
-// public for draw_cube.cpp, which submits faces of a known exact size and so allocates directly
-// rather than through a stream's claim-and-commit.
+// Nothing outside this module reserves anything: the streams below reserve for themselves and
+// BeginParticles reserves for the particle draw. This is in the header only because the stream
+// constructors compute their claim from it.
 // ------------------------------------------------------------------------------------------------
 
 // Chain qwords one chunk of each draw appends. The world path: the header/GIF-tag inline unpack

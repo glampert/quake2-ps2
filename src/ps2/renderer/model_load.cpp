@@ -12,12 +12,10 @@
  *  sums exactly what the loaders will allocate; the block is then filled by a
  *  bump-pointer allocator (HunkAllocator) and freed in one shot on eviction.
  *
- *  MD2s are converted rather than stored: the strip/fan glcmds become a flat
- *  triangle list of mod::AliasVertex, laid out so a draw path moves one whole
- *  qword per vertex, and the file's header, st/triangle arrays and skin name
- *  strings are consumed here and dropped. Everything the draw paths used to
- *  re-check per vertex - every glcmds index, every lightnormalindex - is settled
- *  once in LoadAliasMD2Model, which is what lets them run unchecked.
+ *  MD2s are converted rather than stored: the strip/fan glcmds become a flat triangle list of
+ *  mod::AliasVertex, laid out so a draw path moves one whole qword per vertex, and the file's
+ *  header, st/triangle arrays and skin names are consumed here and dropped. Every glcmds index
+ *  and lightnormalindex is validated once in LoadAliasMD2Model, so the draw paths run unchecked.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -52,39 +50,29 @@ constexpr float kSubdivideSizeF = static_cast<float>(kSubdivideSize);
 // ------------------------------------------------------------------------------------------------
 // World arena
 //
-// The world hunk is the largest single allocation the program makes - 6.61 MB on
-// power2 - and it is allocated and freed on every map change. dlmalloc cannot move
-// live blocks, so once a few hundred longer-lived allocations have settled into the
-// holes left behind, no contiguous run that big survives.
+// The world hunk is the largest single allocation the program makes - 6.61 MB on power2 - and it
+// is allocated and freed on every map change. dlmalloc cannot move live blocks, so no contiguous
+// run that big survives once longer-lived allocations settle into the holes left behind. Both it
+// and the loader's staging scratch therefore come out of one block reserved at startup and never
+// returned, which is immune to that by construction rather than merely less likely to hit it.
 //
-// So the world hunk does not come from the general heap at all. It is carved out of
-// one block reserved at startup and never returned, which makes it immune to that
-// by construction rather than merely less likely to hit it. The staging buffer the
-// streamed loader uses gets the same treatment for the same reason.
-//
-// Both capacities start from build/tools/bspinfo, which mirrors the sizers here and
-// reports the worst case over a map set:
+// Both capacities start from build/tools/bspinfo, which mirrors the sizers here and reports the
+// worst case over a map set, plus margin for maps outside pak0:
 //
 //     WORST HUNK   : power2.bsp needs 6932288 bytes (6.61 MB)
 //     WORST SCRATCH: lab.bsp    needs  954048 bytes (0.91 MB)
 //
-// with margin on top for maps that are not in pak0. Re-run bspinfo after adding a
-// mission pack or custom maps, or after changing any struct the hunk holds; a map
-// that does not fit says so and stops, rather than falling back to the heap and
-// quietly reintroducing the problem.
+// Re-run it after adding maps or changing any struct the hunk holds. A map that does not fit says
+// so and stops rather than falling back to the heap.
 //
-// The scratch has a second owner, and that - not bspinfo - is what actually sets its
-// size now. It is claimed only while a .bsp is being parsed and is dead for the whole
-// of gameplay, so the renderer keeps both halves of its frame DMA chain in it (see
-// cmd_buffer.h). No rendering happens during a load and no load happens during a
-// frame, so the two never overlap; LoadBrushModel::Open drains the chain before it
-// takes the memory back. Read kWorldScratchCapacity as
+// The scratch has a second owner, and that is what actually sets its size: the renderer keeps both
+// halves of its frame DMA chain there (see cmd_buffer.h), since it is dead for the whole of
+// gameplay. So read kWorldScratchCapacity as
 //
 //     max(worst load requirement + margin, 2 * cmdbuf::kHalfBytes)
 //
-// and note that the second term currently wins. Deriving it from bspinfo alone would
-// shrink it back to 0.95 MB and silently corrupt the renderer's second buffer, which
-// is what the static_assert below is there to stop.
+// where the second term currently wins. Sizing it from bspinfo alone would shrink it to 0.95 MB
+// and silently corrupt the renderer's second half - which the static_assert below is there to stop.
 // ------------------------------------------------------------------------------------------------
 
 // Alignment of every hunk sub-allocation. Rounding each allocation up keeps the
@@ -629,9 +617,8 @@ struct SurfaceEdges
 // Reconstructs a surface vertex position from a surfedge index (negative indices
 // walk the edge backwards). Shared by every surface-processing helper.
 //
-// Returns by value rather than by reference: the source is now the on-disk
-// dvertex_t (three bare floats, same bytes as the Vec3 this used to hand back a
-// reference into), so there is no Vec3 in the scratch to point at.
+// Returns by value rather than by reference: the source is the on-disk dvertex_t, three bare
+// floats with no Vec3 in the scratch to point at.
 Q_ALWAYS_INLINE Vec3 EdgeVertex(const BspGeometry & geom, int surfEdgeIndex)
 {
     if (surfEdgeIndex > 0)
@@ -1730,9 +1717,9 @@ bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const f
     // LUMP_LIGHTING is a verbatim copy, read straight into the hunk and skipping
     // the scratch entirely; it keeps its original slot in the sequence because
     // LoadFaces resolves surf.samples against mdl.Brush().lightData, which therefore has
-    // to be in place before it runs. LUMP_VISIBILITY is not read at all any more -
-    // cmodel.c owns it (see MarkLeaves). Vertexes, edges and surfedges are absent
-    // too: 'geom' already points at them, pinned in the scratch by the pre-pass.
+    // to be in place before it runs. LUMP_VISIBILITY is not read here at all - cmodel.c owns it
+    // (see MarkLeaves). Vertexes, edges and surfedges are absent too: 'geom' already points at
+    // them, pinned in the scratch by the pre-pass.
     LoadLightingInto(mdl, hunk, bsp, header.lumps[LUMP_LIGHTING]);
     LoadPlanes(mdl, hunk, bsp.ReadLump(LUMP_PLANES), header.lumps[LUMP_PLANES]);
     LoadTexInfo(mdl, hunk, bsp.ReadLump(LUMP_TEXINFO), header.lumps[LUMP_TEXINFO]);
@@ -1843,12 +1830,11 @@ static constexpr u32 AliasFrameStride(const int numXyz)
 //
 // The glcmds are tristrips (count > 0) and trifans (count < 0) of
 // (float s, float t, s32 index) records, zero-terminated: fans pivot on their
-// first vertex, strips flip every odd triangle so the whole strip keeps one
-// facing. That is the walk the renderer used to do every frame, per entity - here
-// it happens once, and the draw paths get a linear array with no primitive state.
+// first vertex, strips flip every odd triangle so the whole strip keeps one facing. Done once at
+// load, so the draw paths get a linear array with no primitive state.
 //
-// Returns the triangle count written, or -1 if the command list is malformed.
-// Everything it can reject here is a check the draw paths no longer have to make.
+// Returns the triangle count written, or -1 if the command list is malformed; everything rejected
+// here is a check the draw paths do not have to make.
 static int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
                                    const int maxTris, AliasVertex * const out, const char * const modelName)
 {
@@ -1952,9 +1938,9 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
         return false;
     }
 
-    // Read and validate the header before committing a hunk to it. Everything the
-    // draw paths used to re-check per vertex, per frame, is settled here instead -
-    // see ExpandGLCmdsToTriangles and the lightnormalindex pass at the end.
+    // Read and validate the header before committing a hunk to it: what the draw paths would
+    // otherwise re-check per vertex per frame is settled here instead - see
+    // ExpandGLCmdsToTriangles and the lightnormalindex pass at the end.
     const long base = std::ftell(file);
     dmdl_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
@@ -2073,9 +2059,8 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     }
 
     // The glcmds are the one thing that needs a scratch buffer: the flat list they
-    // expand into is 1.9x their size, so they cannot be unpacked in place. 32 KB
-    // for the largest model in pak0, freed before the frames are read, which keeps
-    // the peak far below the whole-file image this loader used to hold.
+    // expand into is 1.9x their size, so they cannot be unpacked in place. 32 KB for the largest
+    // model in pak0, freed before the frames are read.
     {
         const u32 glcmdsBytes = static_cast<u32>(header.num_glcmds) * 4;
         auto * const glcmds = static_cast<s32 *>(

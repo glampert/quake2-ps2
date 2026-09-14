@@ -261,10 +261,9 @@ bool Reserve(const int qwords)
                   qwords, capacity);
     }
 
-    // Everything built so far still has to reach the GS, so send it and wait - exactly the work
-    // the per-batch path used to do for every batch - then hand the caller an empty chain. The
-    // rewind is the part that makes this different from an ordinary Drain, and the part that
-    // costs the caller everything it had built.
+    // Everything built so far still has to reach the GS, so send it and wait, then hand the
+    // caller an empty chain. The rewind is what makes this different from an ordinary Drain,
+    // and what costs the caller everything it had built.
     Drain();
     Rewind();
 

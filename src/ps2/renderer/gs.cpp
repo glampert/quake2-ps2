@@ -2,45 +2,18 @@
  * File: gs.cpp
  * Brief: Double-buffered Graphics Synthesizer front-end. See gs.h.
  *
- *  Modelled on the ps2sdk libdraw "font"/"cube" samples: two framebuffers in
- *  VRAM, one displayed while the other is drawn, using the two GS drawing
- *  contexts. draw_setup_environment programs each context so screen coordinates
- *  are direct top-left pixels.
+ *  Two framebuffers in VRAM, one displayed while the other is drawn, one per GS drawing context,
+ *  modelled on the ps2sdk libdraw samples. draw_setup_environment programs each context so that
+ *  screen coordinates are direct top-left pixels.
  *
- *  Config::framebuffer16Bit picks their format. 16-bit costs 560 KB each instead
- *  of 1120 KB, which nearly doubles the texture heap below and halves the GS's
- *  color write and blend-read bandwidth, in exchange for 5:5:5 color - hardware
- *  dithering covers most of the resulting banding.
+ *  Config::framebuffer16Bit picks their format. 16-bit costs 560 KB each instead of 1120 KB,
+ *  which nearly doubles the texture heap and halves the GS's colour write and blend-read
+ *  bandwidth, in exchange for 5:5:5 colour - hardware dithering covers most of the banding.
  *
- *  Frame structure: BeginFrame() opens the frame's DMA chain and writes the
- *  color+depth clear into the head of it. 2D and 3D then draw in any order,
- *  both into that same chain. 2D primitives accumulate in a deferred "pending
- *  batch" (always-pass z-test, so it lands on top); the first primitive after a
- *  flush opens it lazily. The batch is closed at each 2D->3D boundary (the VU1
- *  path calls FlushPending2D() before drawing over PATH1, so its triangles land
- *  under any 2D issued afterwards) and once more by EndFrame().
- *
- *  Nothing is sent until EndFrame: the whole frame is one chain and one kick.
- *  Ordering is the chain's own order plus the VIF FLUSH each block opens with,
- *  and where a frame needs the GS to have actually *finished* - an upload about
- *  to land on VRAM queued draws still sample - FenceGs sends the chain so far
- *  and waits for it.
- *
- *  The clear and the 2D batch are GIF packets, not VU work, and they ride the
- *  chain as DIRECT blocks: VIF1 hands their qwords to the GIF over PATH2 as it
- *  walks past them. That is what puts them in frame order with the VU1 3D that
- *  surrounds them without the EE having to drain anything - each block opens
- *  with a VIF FLUSH, which is the same ordering expressed one stage further
- *  down the pipe. Only the synchronous texture uploads still own a packet and a
- *  channel of their own (see s_texUploadPacket).
- *
- *  Textures stream on first bind into the VRAM left over after the
- *  framebuffers and z-buffer (~1.27 MB), managed by vram.cpp. While a texture
- *  is resident, binding it is just a TEX0/TEX1 register write - no DMA upload,
- *  no pipeline flush. When the heap fills, the least-recently-bound textures
- *  are evicted; an upload over reused VRAM first fences the GS - sending the
- *  frame's chain so far and waiting for it - so the draws already built keep
- *  sampling the old texels, not the new ones.
+ *  Textures stream on first bind into the VRAM left over after the framebuffers and z-buffer
+ *  (~1.27 MB), managed by vram.cpp. While one is resident, binding it is a TEX0/TEX1 register
+ *  write and nothing more. The frame, the command buffer and the residency policy belong to
+ *  ps2::rs; the uploads here are synchronous and own a packet and channel of their own.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -250,14 +223,9 @@ void UploadCluts(const tex::Clut * first, const tex::Clut * second)
     GifPacket::WaitGifChannel();
 }
 
-// Builds the lit palette and uploads it. Called once, from Init.
-//
-// This used to run at the top of every frame so the intensity could be dialled in
-// on hardware without a restart. The value is settled now, and a CLUT the GS
-// samples may only be rewritten when the GS is idle - which stopped being true
-// of the top of a frame the moment the previous frame was left drawing into it.
-// Keeping the knob would have meant fencing the GS to turn it, every frame, to
-// re-upload nothing.
+// Builds the lit palette and uploads it. Called once, from Init: a CLUT the GS samples may only
+// be rewritten while the GS is idle, which the top of a frame is not once the previous frame can
+// still be drawing.
 //
 // Note this reaches Palette8 images only, which is every image the retail game
 // ships. A PixelFormat::RGBA32 texture (a .tga replacement) carries the scale in

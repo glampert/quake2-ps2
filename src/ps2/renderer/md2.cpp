@@ -76,8 +76,8 @@ static const float s_vertexNormals[kNumVertexNormals][3] = {
 #pragma GCC diagnostic pop
 
 // The same 16 rows quantized to bytes: shade * 128, which lands inside 0..255
-// exactly because the dots run [0.70, 1.99]. Built once by InitEntityRendering
-// rather than per entity, since neither input changes at runtime.
+// exactly because the dots run [0.70, 1.99]. Built once by md2::Init rather than per
+// entity, since neither input changes at runtime.
 //
 // This is what the VU-lerp gather writes into each vertex's position stream, and
 // it is a byte rather than the float for two reasons: it has to fit the spare
@@ -173,7 +173,6 @@ constexpr int kBatchMaxVerts = 3 * 512;
 // call site). 768 triangles covers 115 of the 119 stock models - everything but
 // the four bosses, which appear once each in a playthrough and fallback to a full shadow pass.
 constexpr int kLerpBatchMaxVerts = 3 * 768;
-// One rs::LerpStream per entity, at kLerpBatchMaxVerts.
 
 // ------------------------------------------------------------------------------------------------
 // Entity transform and frustum cull
@@ -411,10 +410,8 @@ Q_ALWAYS_INLINE float ScaledEntityAlpha(const float alpha)
 // of what the VU path needs; no per-entity table at all.
 Q_ALWAYS_INLINE math::Vec4 VertexShadeLight(const math::Vec3 & shadeLight, const float alpha)
 {
-    // No *128 here any more, and for a reason worth stating: the microprogram
-    // multiplies this by the vertex's shade term, and that term now arrives
-    // quantized as shade * 128. The scale that used to sit on the light is
-    // carried by every vertex instead, so the product is the same colour.
+    // No *128 here: the microprogram multiplies this by the vertex's shade term, which arrives
+    // quantized as shade * 128, so the scale is carried per vertex instead.
     return { shadeLight.x, shadeLight.y, shadeLight.z, ScaledEntityAlpha(alpha) };
 }
 
@@ -422,11 +419,8 @@ Q_ALWAYS_INLINE math::Vec4 VertexShadeLight(const math::Vec3 & shadeLight, const
 // lightnormalindex: min(shadeDots[n] * shadeLight * 128, 255) per channel
 // (128 = unmodulated texels on the GS; the dots exceed 1.0 by design).
 //
-// Exactly kNumVertexNormals entries, because that is now an invariant of the
-// data rather than a hope: LoadAliasMD2Model clamps every keyframe's
-// lightnormalindex at load, so the draw paths index this straight off a vertex
-// word. It used to be padded to 256 to give a malformed model somewhere
-// harmless to land.
+// Exactly kNumVertexNormals entries, no padding: LoadAliasMD2Model clamps every keyframe's
+// lightnormalindex at load, so the draw paths index this straight off a vertex word.
 static u32 s_colorLUT[kNumVertexNormals];
 
 // Largest value in the shade-dot table (client/anormtab.h). The tables bake in
@@ -438,11 +432,9 @@ constexpr float kMaxShadeDot = 1.99f;
 // by far - only an entity sitting inside a bright dlight goes over.
 constexpr float kNoClampShadeLight = 255.0f / (128.0f * kMaxShadeDot);
 
-// Packed per-normal colors for the paths that cannot compute them on the VU:
-// the EE lerp paths feed the shared textured program, which the world also
-// draws through and which therefore expects a color already packed. That is the
-// view weapon and the powersuit shells, one or two entities a frame - the
-// VU-lerp path, which is everything else, no longer calls this.
+// Packed per-normal colours for the paths that cannot compute them on the VU: the EE lerp paths
+// feed the shared textured program, which expects a colour already packed. That is the view weapon
+// and the powersuit shells, one or two entities a frame.
 const u32 * BuildColorLUT(const entity_t & entity, const math::Vec3 & shadeLight, const float alpha)
 {
     const u32 a = static_cast<u32>(ScaledEntityAlpha(alpha));
@@ -622,10 +614,8 @@ Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
 // multiplies out to black and only the alpha in that vector matters) and neither
 // is the ST, since the draw is untextured and the GS never samples.
 //
-// Which is why neither shadow path needs an attribute of its own: both hand the
-// DMA the model's own baked attributes, and both multiply out to the same black.
-// The rebuild path used to write a constant qword per vertex instead; there is no
-// attribute stream to write into any more.
+// Which is why neither shadow path needs an attribute stream of its own: both hand the DMA the
+// model's own baked attributes, and both multiply out to the same black.
 
 // Draws the entity's planar projected shadow: the same keyframe byte streams
 // the model just drew, run through the same VU1 lerp, with the flattening
@@ -982,12 +972,9 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
                     triPos[i].cur = curBits;
 
-                    // The old frame's word, with its own lightnormalindex - which
-                    // nothing reads - replaced by this vertex's quantized shade.
-                    // That is the whole of the per-vertex work the attribute
-                    // stream used to exist for: the model's baked attributes go
-                    // to the DMA untouched (see LerpBatch::SetAttribSource) and
-                    // this byte carries what they cannot.
+                    // The old frame's word, its unread lightnormalindex replaced by this
+                    // vertex's quantized shade. That byte is the only per-vertex work left:
+                    // the model's baked attributes reach the DMA untouched (SetAttribSource).
                     const u32 shade = dots[curBits >> (DTRIVERTX_LNI * 8)];
                     triPos[i].old = (oldVerts[index] & 0x00FFFFFFu)
                                   | (shade << (DTRIVERTX_LNI * 8));

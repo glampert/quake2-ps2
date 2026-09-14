@@ -302,9 +302,9 @@ struct ModelLeaf
 //
 struct ModelInstance final
 {
-    // World geometry. mins/maxs/radius live here because only DrawBrushModel
-    // reads them; an alias model derives its bounds from its keyframes and a
-    // sprite is sized per-frame at draw time.
+    // World geometry. mins/maxs/radius live here because only DrawBrushModelEntity reads
+    // them; an alias model derives its bounds from its keyframes and a sprite is sized
+    // per-frame at draw time.
     struct BrushData
     {
         // True if from the inline models pool.

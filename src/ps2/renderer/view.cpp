@@ -2,15 +2,12 @@
  * File: view.cpp
  * Brief: View/3D frame rendering: the world geometry pass behind PS2_RenderFrame.
  *
- *  RenderFrame walks the world BSP for the refdef's camera: MarkLeaves stamps the
- *  nodes reachable from the current PVS cluster, RecursiveWorldNode descends the
- *  tree front-to-back culling against the view frustum and threads every visible
- *  opaque surface onto its texture's draw chain, and DrawTextureChains then
- *  gathers each chain's triangles into a scratch buffer and submits them through
- *  rs::DrawTriangles - one batch per texture. Translucent surfaces
- *  are routed aside and drawn back-to-front at the end of the frame by
- *  RenderAlphaSurfaces, and sky surfaces aside to render_sky.cpp, which draws
- *  the skybox behind them once the opaque world is down.
+ *  RenderFrame walks the world BSP for the refdef's camera: MarkLeaves stamps the nodes reachable
+ *  from the current PVS cluster, RecursiveWorldNode descends the tree front-to-back culling
+ *  against the view frustum and threads every visible opaque surface onto its texture's draw
+ *  chain, and DrawTextureChains gathers each chain through an rs::TriangleStream - one batch per
+ *  texture. Translucent surfaces are routed aside and drawn back-to-front at the end of the frame
+ *  by RenderAlphaSurfaces, and sky surfaces aside to sky.cpp.
  *
  *  Camera mapping: Quake is Z-up with AngleVectors giving forward/right/up; those
  *  feed math::LookAt directly (its right = cross(up, -forward) lands on Quake's
@@ -501,11 +498,9 @@ const mod::ModelLeaf * FindLeafNodeForPoint(const float * point, const mod::Mode
 
 // Returns the decompressed PVS row for 'cluster'.
 //
-// This used to decompress from a copy of the VISIBILITY lump kept in the world
-// hunk. The collision model has the identical lump in map_visibility[] and an
-// identical decoder, so the copy is gone (up to 376 KB of the hunk on jail5) and
-// this defers to CM_ClusterPVS - whose decoder is the better of the two, since it
-// clamps a zero-run to the row length instead of running off the end.
+// Defers to CM_ClusterPVS rather than keeping a copy of the VISIBILITY lump in the world hunk -
+// the collision model already holds it, and its decoder clamps a zero-run to the row length
+// instead of running off the end.
 //
 // The row lives in a shared buffer that the next call overwrites, so don't hold
 // on to it (MarkLeaves copies it into a temp before asking for the second one).
@@ -1024,8 +1019,7 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
     }
 }
 
-// Appends a polygon's triangles to the scratch buffer, clipping the ones that
-// cross the VU clip volume and flushing when full.
+// Appends a polygon's triangles to the stream, clipping the ones that cross the VU clip volume.
 // The gather for a surface SurfaceInsideClipVolume has already cleared: every
 // triangle is known to survive the VU's judgement whole, so there is nothing for
 // the clipper to decide and the vertices go straight into the batch.

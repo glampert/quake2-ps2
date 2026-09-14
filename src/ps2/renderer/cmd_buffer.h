@@ -5,11 +5,6 @@
  *        the GS is told to do this frame - DMA tags, VIF codes, GIF tags, the clear, the 2D
  *        overlay and every vertex - written straight into it by the gather loops.
  *
- *  Replaces the per-module gather statics and the per-batch kick. A batch opens an inline
- *  unpack, hands the gather a pointer at the write cursor, fills it and closes the tag, so
- *  vertex payload rides in the chain as CNT-tag data rather than being built in a static and
- *  referenced out of it by a REF tag.
- *
  *  Layout of one half:
  *
  *      Command buffer half (kHalfBytes)
@@ -22,11 +17,10 @@
  *      |-- DIRECT block  -- the 2D/HUD overlay
  *      `-- FLUSH + FINISH + END -- the terminator, appended by the one kick at rs::EndFrame
  *
- *  Where the memory comes from: both halves live inside the world loader's lump scratch
- *  (mod::WorldScratchBlock), which is claimed only while a .bsp is being parsed and is dead
- *  for the whole of gameplay. No rendering happens during a load and no load happens during a
- *  frame, so the region serves two owners that never overlap in time - and the renderer
- *  allocates nothing of its own. DrainBeforeWorldLoad is the interlock between the two.
+ *  Both halves live inside the world loader's lump scratch (mod::WorldScratchBlock), which is
+ *  claimed only while a .bsp is parsed and is dead for the whole of gameplay: no rendering
+ *  during a load, no load during a frame, so the region serves two owners that never overlap
+ *  and the renderer allocates nothing of its own. DrainBeforeWorldLoad is the interlock.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -38,24 +32,20 @@
 
 namespace ps2::cmdbuf {
 
-// Bytes in each of the two halves. Both live in the world loader's lump scratch, so this is
-// bounded by kWorldScratchCapacity / 2 - model_load.cpp static_asserts the pair against each
-// other, and raising this means raising that.
+// Bytes in each of the two halves, bounded by kWorldScratchCapacity / 2 (model_load.cpp
+// static_asserts the pair, so raising this means raising that).
 //
-// Measured over the two perf demos, a frame builds 420 KB of chain on average and 681 KB at
-// p95, so 512 KB holds most frames whole and the rest take one overflow rewind: about 1.5
-// kicks a frame against the 53 the per-draw path took. The numbers to steer by are
-// BytesLastFrame() - which counts what a rewind threw away, so it is the one that says whether
-// a frame *fits* - and EmergencyDrainsLastFrame(). Raising this to hold p95 whole would mean
-// raising kWorldScratchCapacity with it, and the halves already fill the loader's scratch.
+// A frame builds 420 KB of chain on average over the perf demos and 681 KB at p95, so this holds
+// most frames whole and the rest take one overflow rewind - about 1.5 kicks a frame. The numbers
+// to steer by are BytesLastFrame(), which counts what a rewind threw away and so says whether a
+// frame *fits*, and EmergencyDrainsLastFrame().
 constexpr u32 kHalfBytes  = 512u * 1024u;
 constexpr u32 kHalfQwords = kHalfBytes / 16u;
 
-// Worst case a Kick() appends past whatever the caller has already written: the trailing FLUSH
-// and the GS fence it carries (1 qword of tag and VIFcodes, 2 of DIRECT payload) plus the END
-// tag. Public because it is part of the capacity arithmetic - a caller reserving a sequence that
-// ends in a kick (every draw does) has to count it, or the terminator comes out of the next
-// caller's budget.
+// Worst case a Kick() appends past what the caller wrote: the trailing FLUSH and the GS fence it
+// carries (1 qword of tag and VIFcodes, 2 of DIRECT payload) plus the END tag. Public because a
+// caller reserving a sequence that ends in a kick has to count it, or the terminator comes out of
+// the next caller's budget.
 constexpr int kTerminatorQwords = 4;
 
 // Points the two halves at the loader scratch and opens the first one. Call once at renderer
@@ -107,12 +97,10 @@ constexpr int QwordCapacity()
 // been built since the last one and leaves the write cursor where it is, so a REF tag emitted at
 // the top of the frame still points at live data at the bottom of it.
 //
-// The overflow path is the work the renderer used to do for every single batch: terminate what is
-// built, kick it, wait for VU1 and the GS to consume it, and rewind. So it is always correct and
-// never worse than the old behaviour - but it drains the pipeline, and a true return means every
-// pointer into the chain and every piece of per-chain state the caller had set up (the frame
-// constants, the current batch's GIF tags) is gone and has to be re-emitted before anything else
-// is appended.
+// The overflow path terminates what is built, kicks it, waits for VU1 and the GS, and rewinds. A
+// true return therefore means every pointer into the chain and every piece of per-chain state the
+// caller set up (the frame constants, the current batch's GIF tags) is gone and must be re-emitted
+// before anything else is appended.
 //
 // Callers that must not be interrupted mid-structure should reserve their whole worst case up
 // front rather than reserving piecemeal - and a caller whose data has to outlive its own draw
@@ -125,23 +113,19 @@ bool Reserve(int qwords);
 
 // Storage inside the chain: payload a REF tag emitted later points at, not part of the tag
 // structure, so nothing reads it until something references it and every byte belongs to the
-// caller. This is what stopped the gather buffers being file-level statics - a batch claims
-// its worst case here, fills what it needs, gives the rest back, and the chunks its Flush
-// emits reference the span in place exactly as they used to reference the static.
+// caller. A gather claims its worst case here, fills what it needs and gives the rest back.
 //
-// **Alloc can never rewind, and that is the whole reason it is separate from Reserve.** A rewind
-// invalidates every outstanding pointer and everything already built, so it may only happen where
-// the caller knows nothing is live. Reserve is that point, and it covers the whole upcoming
-// sequence - the payload, the tags that will reference it, and the kick that sends them. That is
-// why a caller reserves more than it allocates (see CalcAllocCost and vu1.h's chain budget), and
-// why the two cannot be collapsed into one call: they answer different questions.
+// **Alloc can never rewind, and that is why it is separate from Reserve.** A rewind invalidates
+// every outstanding pointer, so it may only happen where the caller knows nothing is live -
+// Reserve is that point, and it covers the whole upcoming sequence: the payload, the tags that
+// will reference it, and the kick that sends them. Hence a caller reserving more than it
+// allocates (see CalcAllocCost and rs's chain budget).
 //
-// Allocating outside a reservation that covers it asserts, and overrunning the half Sys_Errors
-// rather than corrupting the other one.
+// Allocating outside a reservation that covers it asserts; overrunning the half Sys_Errors rather
+// than corrupting the other one.
 //
-// **Lifetime: a block is good until the half is rewound**, which is BeginFrame in the ordinary
-// case. Not until the next kick, and not until the draw that referenced it returns - which is the
-// rule that replaced "draws are synchronous" for anything living in here.
+// **Lifetime: a block is good until the half is rewound**, normally BeginFrame. Not until the next
+// kick, and not until the draw that referenced it returns.
 
 // Qwords one allocation costs on top of its payload: the tag that carries the DMAC over the
 // storage rather than through it. A source chain is a tag stream - the qword after a tag's
@@ -188,22 +172,20 @@ constexpr int CalcAllocCost(const int count)
     return detail::QwordsFor<T>(count) + kAllocOverheadQwords;
 }
 
-// Room for exactly 'count' objects of T, for a caller that knows the size before it writes
-// anything - the particle list, the per-draw constant blocks. There is nothing to give back,
-// so there is no Commit to forget, and Commit on one of these asserts.
+// Room for exactly 'count' objects, for a caller that knows the size before it writes anything.
+// Nothing to give back, so Commit on one of these asserts.
 //
-// Rounds up to whole qwords, so a type smaller than a qword (the MD2 keyframe pairs) may leave
-// a pad element at the end - transferred, never read.
+// Rounds up to whole qwords, so a type smaller than a qword may leave a pad element at the end -
+// transferred, never read.
 template<typename T>
 T * Alloc(const int count)
 {
     return detail::TypedAlloc<T>(count, /*committable=*/false);
 }
 
-// Room for up to 'count' objects, for a gather that only knows its real size when it finishes -
-// the triangle batches. **Must be followed by Commit**, which cuts the block back to what was
-// written and hands the rest of the chain back; until then the write cursor sits above the
-// whole worst case and nothing else may allocate.
+// Room for up to 'count' objects, for a gather that only knows its real size when it finishes.
+// **Must be followed by Commit**, which cuts the block back to what was written; until then the
+// write cursor sits above the whole worst case and nothing else may allocate.
 template<typename T>
 T * AllocMax(const int count)
 {
@@ -212,9 +194,9 @@ T * AllocMax(const int count)
 
 // Cuts the most recent AllocMax back to 'usedCount', in the units it was made in.
 //
-// 'base' must still be the top of the chain - nothing may have been appended since, because the
-// point of this is to move the write cursor back down to where the data actually ends - and it
-// must have come from AllocMax rather than Alloc. Both are asserted.
+// 'base' must still be the top of the chain - this moves the write cursor back down to where the
+// data ends, so nothing may have been appended since - and must have come from AllocMax. Both
+// are asserted.
 template<typename T>
 void Commit(T * const base, const int usedCount)
 {
@@ -226,19 +208,16 @@ void Commit(T * const base, const int usedCount)
 // Submission
 // --------------------------------------------------------------------------------------------
 
-// Submits everything built since the last Kick() as a chain of its own: terminates that segment
+// Submits everything built since the last Kick() as a chain of its own: terminates the segment
 // with a trailing FLUSH so a DMA wait covers the VU runs and their XGKICKs, arms the GS fence
-// behind it, writes the data cache back, and kicks it at VIF1. Does nothing when nothing new has
-// been built.
+// behind it, writes the data cache back and kicks it at VIF1. Does nothing when nothing is new.
 //
-// **Fire and forget.** Nothing here waits, which is what lets rs::EndFrame leave a frame drawing
-// while the EE builds the next one. What it does wait for is an *earlier* kick that nothing has
-// fenced yet - one chain at a time on the channel, and one frame at a time at the GS.
+// **Fire and forget**, which is what lets rs::EndFrame leave a frame drawing while the EE builds
+// the next. It does wait for an *earlier* kick nothing has fenced - one chain at a time on the
+// channel, one frame at a time at the GS.
 //
-// Segment-at-a-time rather than whole-buffer, because the write cursor never goes back: a half
-// holds one frame's worth of chain built front to back, and each kick sends the slice the last
-// one did not. The terminator is written into the chain at the cursor and the next segment starts
-// after it, which is what kTerminatorQwords costs.
+// Segment-at-a-time rather than whole-buffer because the write cursor never goes back: each kick
+// sends the slice the last one did not, with the terminator written at the cursor between them.
 void Kick();
 
 // Blocks until the chain the last Kick() sent has been drawn: the DMA transfer complete, the
@@ -246,33 +225,27 @@ void Kick();
 // rasterising all of it (the FINISH the terminator arms). Returns immediately when nothing is
 // outstanding.
 //
-// This is the frame fence. The GS raises a single CSR bit and so can only carry one of these at a
-// time, which is all one frame of latency needs: Kick waits any earlier chain before submitting,
-// and rc retires the previous frame before kicking the next, so the bit is armed and
-// consumed in strict alternation. (ps2gl's SIGNAL + INTC_GS handler can carry a frame id and so
-// express several at once. It would be needed for two frames of latency; it is not needed for
-// one, and it is not free - a semaphore and an interrupt where this is a load, plus an
-// undocumented IMR re-arm quirk to work around.)
+// The frame fence. The GS raises a single CSR bit and so carries only one at a time, which is all
+// one frame of latency needs: Kick waits any earlier chain before submitting and rs retires the
+// previous frame before kicking the next, so the bit is armed and consumed in strict alternation.
+// (Two frames of latency would need ps2gl's SIGNAL + INTC_GS handler, which can carry a frame id -
+// a semaphore and an interrupt where this is a load, plus an IMR re-arm quirk.)
 void WaitIdle();
 
-// True while a Kick has gone out that nothing has fenced yet - the GS is still drawing an earlier
-// frame. What it means for a caller is that anything about to overwrite what that frame reads -
-// VRAM a draw samples, a CLUT, a texture's pixels, the half it was built in - has to WaitIdle()
-// first.
+// True while a Kick has gone out that nothing has fenced - the GS is still drawing an earlier
+// frame, so anything about to overwrite what it reads (VRAM a draw samples, a CLUT, a texture's
+// pixels, the half it was built in) must WaitIdle() first.
 bool KickInFlight();
 
-// Kick + WaitIdle, for a caller that needs what the frame has built so far to have reached the
-// GS before it changes something those draws depend on - an upload into evicted VRAM, a
-// lightmap atlas rewrite, a CLUT refresh - and for the one kick at the end of the frame.
-// Returns false if there was nothing to drain.
-//
-// The wait covers the GS as well as the transfer - see WaitIdle - so on return the GS is idle and
-// every side effect the frame asked for has landed.
+// Kick + WaitIdle, for a caller that needs what is built so far to have reached the GS before it
+// changes something those draws depend on - an upload into evicted VRAM, a lightmap atlas
+// rewrite, a CLUT refresh. Returns false if there was nothing to drain. The wait covers the GS as
+// well as the transfer, so on return every side effect the frame asked for has landed.
 //
 // Does **not** rewind: the pipeline empties, but everything built stays where it is and every
-// pointer into it stays good. That is what lets a draw's vertex data outlive its own submission,
-// which the MD2 shadow's redraw of the model's stream needs. The chain is rewound at BeginFrame,
-// by Reserve's overflow path, and by DrainBeforeWorldLoad - nowhere else.
+// pointer into it stays good - which is what lets a draw's vertex data outlive its submission.
+// The chain is rewound at BeginFrame, by Reserve's overflow path and by DrainBeforeWorldLoad,
+// nowhere else.
 bool Drain();
 
 // The interlock that lets the halves live in the loader's lump scratch: waits for anything in

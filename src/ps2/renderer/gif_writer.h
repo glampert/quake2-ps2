@@ -18,19 +18,17 @@
 
 namespace ps2::gs {
 
-// A cursor into GIF packet memory somebody else owns - a DIRECT block inside the frame's
-// command buffer, or a packet built for a one-off DMA. Two pointers and a bound, so it is
-// made, used and assigned over rather than attached and detached.
+// A cursor into GIF packet memory somebody else owns - a DIRECT block inside the frame's command
+// buffer, or a packet built for a one-off DMA. Two pointers and a bound; made and used, never
+// attached and detached.
 //
-// Every emitter advances the cursor and halts if the emission ran past the bound. The check
-// has to be after the fact: the libdraw helpers report how much they wrote only by returning
-// the advanced cursor, so there is nothing to test up front.
+// Every emitter advances the cursor and halts if it ran past the bound. The check is after the
+// fact because the libdraw helpers report how much they wrote only by returning the new cursor.
 class GifWriter final
 {
 public:
-    // 'maxQwords' is what may be written at 'base'. There is no default state: a writer always
-    // refers to real memory, and re-pointing one means constructing another over the new block
-    // (m_maxQwords is const, so assignment is not available).
+    // 'maxQwords' is what may be written at 'base'. No default state - re-pointing a writer means
+    // constructing another over the new block.
     GifWriter(qword_t * const base, const int maxQwords)
         : m_base{ base }
         , m_ptr{ base }
@@ -153,10 +151,9 @@ public:
 
     // Ends the packet without drawing: a PACKED tag with NLOOP = 0 and EOP set.
     //
-    // Required at the end of every block. The GIF stays bound to the path feeding it until it
-    // sees EOP and most of the draw_* helpers emit their tags with EOP clear, so a block that
-    // simply stopped would leave its path open and the next XGKICK would wait on a packet
-    // nothing is going to finish.
+    // Required at the end of every block. The GIF stays bound to the path feeding it until it sees
+    // EOP, and most draw_* helpers emit their tags with EOP clear, so a block that simply stopped
+    // would leave its path open and the next XGKICK would wait forever.
     void EndGifPacket()
     {
         EnsureSpace(1);
@@ -166,9 +163,8 @@ public:
     }
 
 private:
-    // Takes the cursor a draw_* helper returned and, under asserts, halts if the emission went
-    // past capacity - so a caller whose upper bound was wrong gets a named error rather than
-    // silent corruption of whatever follows the block.
+    // Takes the cursor a draw_* helper returned and halts if the emission went past capacity, so a
+    // caller whose upper bound was wrong gets a named error rather than silent corruption.
     Q_ALWAYS_INLINE void Advance(qword_t * const newPtr)
     {
         m_ptr = newPtr;

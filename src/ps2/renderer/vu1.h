@@ -80,18 +80,14 @@ constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy lo
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
 constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
 
-// rs::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps, up
-// against the near end. ref_gl's glDepthRange(0, 0.3) over the same inverted
-// range this projection produces.
+// rs::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps at the near end.
+// ref_gl's glDepthRange(0, 0.3) over the inverted range this projection produces.
 constexpr float kDepthHackScale = 0.15f;
 
-// The NDC guard band the microprogram accepts: a triangle with any vertex at
-// |x/w| or |y/w| beyond this (or outside the exact [-1, +1] z range) is
-// rejected whole, not clipped - bounded by the reach of the GS 12.4 window
-// coordinates, so it cannot simply be raised. Callers submitting geometry
-// that can cross these planes (the world renderer) must pre-clip against
-// them on the EE; the visible screen only spans |ndc| = screenW/4096, so the
-// band still leaves several screens of margin fully to the VU.
+// The NDC guard band the microprogram accepts: a triangle with any vertex beyond it in |x/w| or
+// |y/w|, or outside the exact [-1, +1] z range, is rejected whole rather than clipped. Bounded by
+// the reach of the GS 12.4 window coordinates, so it cannot simply be raised - callers whose
+// geometry can cross these planes must pre-clip on the EE.
 constexpr float kGuardBandNdcLimit = 0.8f;
 
 // The clip judgement multiplies x/y by this before clipw tests them against |w|, so triangles
@@ -145,21 +141,18 @@ constexpr int kMaxVertsPerBatch = 96;
 constexpr int kBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 
-// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an
-// A+D qword because the native RGBAQ layout is the vertex's packed color u32
-// with Q in the word above - the VU raw-copies the color instead of spreading
-// one byte per word as the PACKED RGBAQ descriptor would want. Q rides in the
-// A+D data, so nothing relies on the ST-latched Q. XYZ2 last: it kicks the
-// vertex with whatever ST/RGBAQ hold.
+// Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an A+D qword so the VU
+// can raw-copy the packed colour instead of spreading one byte per word as the PACKED RGBAQ
+// descriptor wants; Q rides in the A+D data. XYZ2 last - it kicks the vertex with whatever
+// ST/RGBAQ hold.
 constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
                                (u64(GIF_REG_AD)   << 4) |
                                (u64(GIF_REG_XYZ2) << 8);
 
-// One triangle vertex, 2 qwords, matching the microprogram's input layout.
-// The packed color must sit in the first word of its qword: the microprogram
-// raw-copies it into a GS A+D RGBAQ qword with a single masked store, and
-// only word 0 is reachable that way (swizzling the raw bits through the FMAC
-// instead would flush denormal color patterns to zero).
+// One triangle vertex, 2 qwords, matching the microprogram's input layout. The packed colour must
+// sit in the first word of its qword: the microprogram raw-copies it with a single masked store
+// and only word 0 is reachable that way (going through the FMAC would flush denormal colour
+// patterns to zero).
 struct alignas(16) DrawVertex
 {
     float x, y, z, w; // model-space position; w must be 1.0f
@@ -171,17 +164,14 @@ static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword a
 
 // Copies one gathered vertex whole, in two of the R5900's 128-bit moves.
 //
-// A plain struct assignment would be correct, but gcc lowers it to four ld/sd
-// pairs - it never forms lq/sq of its own accord, and neither __int128 nor a
-// 16-byte-aligned aggregate persuades it to. That doubles the memory ops in the
-// innermost step of the world gather, which is hot enough to care.
+// A plain struct assignment is correct but gcc lowers it to four ld/sd pairs - it never forms
+// lq/sq on its own, and neither __int128 nor a 16-byte-aligned aggregate persuades it to. That
+// doubles the memory ops in the innermost step of the world gather.
 //
-// The integer lq/sq rather than the VU0 lqc2/sqc2 the math helpers use: this
-// moves a packed colour whose bit pattern is a float denormal (see the note
-// above), and the integer path provably never reaches an FMAC to flush it.
-//
-// Constrained rather than clobbering "memory", so a caller copying several
-// vertices in a row keeps its own state in registers across them.
+// Integer lq/sq rather than the VU0 lqc2/sqc2 the math helpers use: this moves a packed colour
+// whose bit pattern is a float denormal (see above), and the integer path never reaches an FMAC
+// to flush it. Constrained rather than clobbering "memory", so a caller copying several vertices
+// in a row keeps its own state in registers across them.
 Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 {
     asm volatile (
@@ -203,8 +193,8 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // chunk's slice of the 8-byte position stream is whole source qwords starting 16-byte aligned.
 constexpr int kMaxLerpVertsPerBatch = 78;
 
-// The regions sit at fixed offsets sized for the maximum chunk (short
-// chunks leave gaps), so the microprogram addresses them with immediates.
+// Fixed offsets sized for the maximum chunk (short chunks leave gaps), so the microprogram
+// addresses them with immediates.
 constexpr int kLerpBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kLerpFrontVAddr      = 1; // current frame scale * (1 - backlerp)
 constexpr int kLerpBackVAddr       = 2; // old frame scale * backlerp
@@ -219,51 +209,37 @@ static_assert(kLerpOutputAddr + kNumGifTagQwords + (3 * kMaxLerpVertsPerBatch) <
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
 
-// The two keyframes' quantized positions of one vertex, interleaved: the
-// current frame's dtrivertx_t bytes, then the old frame's, both copied
-// verbatim from the MD2 frame data (the VIF widens each byte into an integer
-// lane; the microprogram converts and lerps them).
+// The two keyframes' quantized positions of one vertex, interleaved: the current frame's
+// dtrivertx_t bytes then the old frame's, copied verbatim from the MD2 frame data (the VIF widens
+// each byte into an integer lane; the microprogram converts and lerps them).
 //
-// The 4th byte of each word is that frame's lightnormalindex. 'cur' keeps its
-// copy - the EE indexes the shade table with it - and 'old' does not: that byte
-// is where the vertex's **quantized shade term** rides instead, shade * 128 in
-// 0..255, which the microprogram reads out of the lerped .w lane.
+// The 4th byte of each word is that frame's lightnormalindex. 'cur' keeps its copy, which the EE
+// indexes the shade table with; 'old' does not - that byte carries the vertex's **quantized shade
+// term** instead, shade * 128 in 0..255, which the microprogram reads out of the lerped .w lane.
+// Putting it there is what lets the attribute stream be the model's own baked vertices untouched.
 //
-// That is the whole reason the attribute stream can be the model's own baked
-// vertices, untouched: the one per-vertex value the EE still has to compute goes
-// in a byte nothing was using, in a word it was storing anyway. shade runs
-// [0.70, 1.99] (see kMaxShadeDot), so *128 lands inside a byte exactly, and the
-// quantization step is 1/128 of a shade unit - against a 5-bit framebuffer
-// channel, eight times finer than anything that can be displayed.
+// shade runs [0.70, 1.99] (see kMaxShadeDot), so *128 lands inside a byte exactly, at a step of
+// 1/128 of a shade unit - eight times finer than a 5-bit framebuffer channel can show.
 struct LerpVertexBytes
 {
     u32 cur;
     u32 old;
 };
 
-// One VU run's worth of keyframe bytes, which is what a lerp chunk gathers.
-//
-// The attributes are not beside them any more: they are the model's own baked
-// vertices, referenced where they lie in the model hunk, so there is only one
-// stream left to gather.
+// One VU run's worth of keyframe bytes - the only stream a lerp chunk gathers, since the
+// attributes are referenced where they lie in the model hunk.
 struct alignas(16) LerpPosChunk
 {
     LerpVertexBytes pos[kMaxLerpVertsPerBatch];
 };
 static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole number of qwords");
 
-// Per-vertex attributes for a lerped draw - everything but the position and the
-// shade. One qword, matching the microprogram's input layout.
+// Per-vertex attributes for a lerped draw - everything but the position and the shade. One qword,
+// matching the microprogram's input layout.
 //
-// **Nothing writes one of these any more.** mod::AliasVertex has exactly this
-// shape, so a model's baked attributes are handed to the DMA where they lie and
-// the per-vertex attribute gather is gone - which is what this type is for now:
-// naming the layout the microprogram reads, not a buffer anybody fills.
-//
-// Lane 0 is whatever the source left there (the model's keyframe index, an
-// integer bit pattern) and the microprogram never reads it. It used to be the
-// shade; that moved into the position stream's spare byte, which is what freed
-// the rest of the qword to come straight from the model.
+// This names the layout the microprogram reads rather than a buffer anybody fills:
+// mod::AliasVertex has exactly this shape, so a model's baked attributes go to the DMA where they
+// lie. Lane 0 is whatever the source left there and the microprogram never reads it.
 struct alignas(16) LerpDrawAttrib
 {
     u32   unused;  // the source's own business; the microprogram does not read it

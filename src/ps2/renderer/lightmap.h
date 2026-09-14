@@ -16,17 +16,9 @@
  *  draw chain. The lightmap pass then walks one chain per atlas (AtlasTexture /
  *  AtlasChain) and clears them with ClearChains.
  *
- *  A luxel reaches the screen split in two, because the GS cannot deliver it whole:
- *  the blend unit computes (A - B) * C + D where C is a scalar alpha and never a
- *  second colour, so diffuse x coloured-lightmap is not expressible as one blend.
- *  So the atlases the hardware samples are Alpha8 and carry only the luxel's
- *  *intensity*, which the lightmap pass multiplies in per pixel; the chroma left
- *  over rides in a mirror in EE RAM, sampled per vertex whenever the luxels are
- *  baked (CacheSurfaceVertexColors) and cached on the vertex, for the diffuse
- *  pass to fold into the vertex colour the GS modulates the wall texture by.
- *  Intensity times chroma is the luxel again, so the two together reproduce it -
- *  at full resolution in the term that varies per pixel, and at vertex
- *  resolution in the one that barely varies at all.
+ *  A luxel is split in two: the atlases the hardware samples are Alpha8 and carry only its
+ *  *intensity*, while the chroma rides in an EE-RAM mirror the diffuse pass folds into its vertex
+ *  colour. The GS blend unit is why - see lightmap.cpp.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -55,8 +47,8 @@ constexpr int kLuxelSizeUnits = 16;
 // headroom costs nothing until a map actually reaches for it; running out is a
 // Sys_Error telling you to raise it.
 //
-// Six atlases is ~384 KB of GS VRAM out of a ~1.27 MB heap, which is the real
-// budget to watch - see the note on vram::Allocate failures in lightmap.cpp.
+// Six atlases is ~384 KB of GS VRAM out of a ~1.27 MB heap, which is the real budget to watch:
+// they are pinned for the level, so every one of them is heap the textures cannot have.
 constexpr int kMaxLightmapTextures = 12;
 
 // ------------------------------------------------------------------------------------------------

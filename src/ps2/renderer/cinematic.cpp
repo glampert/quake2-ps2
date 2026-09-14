@@ -187,10 +187,9 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
                     kFrameDim * sizeof(u16));
     }
 
-    // Draw stretched over the caller's rect (the engine passes the full
-    // screen). v stops at trows: rows past the source are not part of the
-    // picture - sampling to 256 is what caused the old renderer's black
-    // bottom band and its hacky quad offsets.
+    // Drawn stretched over the caller's rect (the engine passes the full screen). v stops at
+    // trows, because rows past the source are not part of the picture - sampling the full 256
+    // puts a black band along the bottom.
     s_frameTexture.MarkPixelsDirty();
 
     constexpr u8 kUiBrightness[3] = { 128, 128, 128 };

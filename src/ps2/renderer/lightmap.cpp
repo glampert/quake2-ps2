@@ -498,9 +498,7 @@ void LightmapManager::StoreLightmap(const mod::ModelSurface & surf)
 // later frame can tell whether an animated style has moved since.
 // The luxel chroma at one vertex's lightmap UVs, packed as a GS vertex colour.
 //
-// Deliberately the same point sample the per-frame path used to do - normalised
-// UVs scaled by the atlas size and truncated onto a texel - so the cached value
-// is bit-identical to what was being computed every frame.
+// A point sample: normalised UVs scaled by the atlas size and truncated onto a texel.
 //
 // Scaled by 128, not 255: 128 is the GS modulate identity, so this is exactly
 // what a fullbright batch's vertex colour has to be for the wall texel to come

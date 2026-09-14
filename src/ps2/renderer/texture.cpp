@@ -342,7 +342,7 @@ private:
     // Worst case for a full level plus UI (walls, skins, sprites, sky and
     // pics). ref_gl's MAX_GLTEXTURES was 1024, but that is a PC-era bound and
     // each idle slot still costs .bss here - the cap lives in texture.h now
-    // (render_view.cpp sizes its texture chain to it too).
+    // (view.cpp sizes its texture chain to it too).
     using TexturePool = SmallPool<Texture, kMaxTextures>;
 
     TexturePool m_texturePool;

@@ -9,12 +9,10 @@
  *  exactly those parts - at most six textured quads, usually one or two, and
  *  nothing at all indoors.
  *
- *  Projecting a polygon onto the cube is the fiddly half: a sky face large
- *  enough to span a cube edge belongs to two faces at once, so ClipSkyPolygon
- *  first cuts it along the six diagonal planes through the origin that separate
- *  the cube's faces, and only the pieces that come out the far side get
- *  projected. Skipping that step and binning each polygon by its centroid
- *  leaves a wedge of sky untextured wherever one straddles an edge.
+ *  Projecting a polygon onto the cube is the fiddly half: one large enough to span a cube edge
+ *  belongs to two faces at once, so ClipSkyPolygon first cuts it along the six diagonal planes
+ *  through the origin that separate the faces. Binning by centroid instead leaves a wedge of sky
+ *  untextured wherever a polygon straddles an edge.
  *
  *  The cube is drawn at a finite 2300 units, as ref_gl draws it, so the world's
  *  depth values reject the parts of it hidden behind geometry - the sky costs

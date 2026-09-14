@@ -7,7 +7,7 @@
  *  command buffer like any other VIF1 transfer, which is why this has to run after cmdbuf::Init.
  *
  *  What feeds them - the chunk emitters, the batch GIF tags, the chain budget - is in
- *  render_context.cpp. What they read is declared in vu1.h.
+ *  render_system.cpp. What they read is declared in vu1.h.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -40,8 +40,8 @@ static bool s_initialized = false;
 
 ProgramAddr ProgramAddress(const Program prog)
 {
-    // The one assert standing in for the old per-draw "vu1::Init not called!" checks: every chunk
-    // emitted for every draw path comes through here for its MSCAL entry point.
+    // Every chunk of every draw path comes through here for its MSCAL entry point, so this one
+    // assert covers them all.
     PS2_AssertMsg(s_initialized, "vu1::Init not called!");
     PS2_Assert(prog < Program::Count);
     return s_progAddr[static_cast<int>(prog)];

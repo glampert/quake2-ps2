@@ -106,7 +106,7 @@ struct Texture final
     TexFilter     magFilter;
     TexFilter     minFilter;
 
-    // Head of this texture's world-surface draw chain. render_view.cpp threads
+    // Head of this texture's world-surface draw chain. view.cpp threads
     // the frame's visible surfaces here while walking the BSP, then draws each
     // chain as one batch and resets it to null - it never outlives the frame.
     mutable const mod::ModelSurface * textureChain;
@@ -245,7 +245,7 @@ const Texture * Find(const char * name, ImageType type);
 // module's load loop, exactly as ref_gl bracketed its six GL_FindImage calls
 // with gl_picmip++/gl_picmip--. Note the cache keys on name and type only, so
 // a sky already resident from an earlier map keeps whichever size it loaded
-// at; render_sky.cpp reads the face's real width back rather than assuming.
+// at; sky.cpp reads the face's real width back rather than assuming.
 void SetSkyDownsample(bool enable);
 
 // Re-stamps an already-resolved texture as used in the current registration
@@ -255,7 +255,7 @@ void SetSkyDownsample(bool enable);
 void TouchTexture(const Texture & texture);
 
 // Capacity of the texture cache: world textures, model skins, HUD/menu pics.
-// Exported because render_view.cpp sizes its per-frame texture chain array to
+// Exported because view.cpp sizes its per-frame texture chain array to
 // the same bound - a chain can hold at most one entry per live texture.
 // Running out is a Sys_Error telling you to bump this.
 constexpr u32 kMaxTextures = 640;

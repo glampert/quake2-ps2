@@ -395,8 +395,8 @@ void Kick()
     // bit once it has drawn everything ahead of it. That is the fence WaitIdle waits on.
     //
     // FLUSH and DIRECT are the two VIFcodes riding the CNT tag's own qword (tte=1), so the opening
-    // is one qword and the payload starts on the next - the same shape RenderContext::OpenDirect
-    // builds, and what makes the manual qword count of 2 below come out right.
+    // is one qword and the payload starts on the next - the same shape rc's own DIRECT
+    // blocks have, and what makes the manual qword count of 2 below come out right.
     packet2_chain_open_cnt(pkt, 0, 0, 0);
     packet2_vif_flush(pkt, 0);
     packet2_vif_open_direct(pkt, 0);

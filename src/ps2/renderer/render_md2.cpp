@@ -698,7 +698,7 @@ void DrawAliasMD2Shadow(rc::LerpStream & lerp, const entity_t & entity,
 {
     const math::Mat4 mvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 
-    // The shadow's own draw state. 'mvp' outlives every flush below, which is what the context
+    // The shadow's own draw state. 'mvp' outlives every flush below, which is what the stream
     // holding it by pointer requires.
     lerp.SetTransform(mvp);
     lerp.SetTexture(skin);
@@ -1121,7 +1121,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         // itself in it rather than just its tail.
         if (vuLerp && emittedVerts > 0 && emittedVerts <= kLerpBatchMaxVerts)
         {
-            // Held in a local: the context keeps the transform by pointer until the redraw
+            // Held in a local: the stream keeps the transform by pointer until the redraw
             // below has used it.
             const math::Mat4 shadowMvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 

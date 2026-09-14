@@ -231,7 +231,7 @@ void FrameLogCapture()
     s.entities       = d.entities;
     s.dlights        = d.dlights;
 
-    const rc::DrawStats & r = rc::Ctx().GetStats();
+    const rc::DrawStats & r = rc::GetStats();
     s.tris        = r.trisDrawn;
     s.trisClipped = r.trisClipped;
     s.trisCulled  = r.trisCulled;

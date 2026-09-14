@@ -792,7 +792,7 @@ struct SurfaceDrawState
     rc::TriangleStream * stream = nullptr;
 
     // Clips and draws with this; the world's is the plain view-projection. Kept
-    // here as well as on the context because the passes below test it - only
+    // here as well as on the stream because the passes below test it - only
     // geometry drawn through the world's own transform can use s_clipVolume -
     // and because ApplyDrawState is what hands it over.
     const math::Mat4 * mvp = nullptr;
@@ -1510,7 +1510,7 @@ void RenderBlendedOverlay(const refdef_t & viewDef)
         return; // Fully transparent: nothing to tint.
     }
 
-    rc::Ctx().FillRect(0, 0, gs::Width(), gs::Height(),
+    rc::FillRect(0, 0, gs::Width(), gs::Height(),
                  BlendChannelToByte(viewDef.blend[0]),
                  BlendChannelToByte(viewDef.blend[1]),
                  BlendChannelToByte(viewDef.blend[2]),
@@ -1587,8 +1587,8 @@ void RenderAlphaSurfaces()
 
         if (entry.texture != batchTexture || entry.mvp != state.mvp || rgba != state.rgba)
         {
-            // Explicitly, because 'rgba' is gather policy rather than context state: a run that
-            // differs only in colour still has to break here, and the context setters below would
+            // Explicitly, because 'rgba' is gather policy rather than stream state: a run that
+            // differs only in colour still has to break here, and the stream setters below would
             // not know to. Free when the texture or transform changed too - they flush first.
             state.stream->Flush();
 
@@ -2489,8 +2489,7 @@ void RenderParticles(const refdef_t & viewDef)
 
     // One qword per particle, gathered straight into the command buffer and referenced in place
     // by the DMA.
-    rc::RenderContext & ctx = rc::Ctx();
-    vu1::ParticleVertex * const particles = ctx.BeginParticles(numParticles);
+    vu1::ParticleVertex * const particles = rc::BeginParticles(numParticles);
 
     for (int i = 0; i < numParticles; ++i)
     {
@@ -2506,7 +2505,7 @@ void RenderParticles(const refdef_t & viewDef)
         dst.z = p.origin[2];
     }
 
-    ctx.EndParticles(s_viewProjMatrix, texture, quadOffset);
+    rc::EndParticles(s_viewProjMatrix, texture, quadOffset);
 }
 
 // ------------------------------------------------------------------------------------------------

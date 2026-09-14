@@ -97,7 +97,7 @@ void DrawGlyph(int x, int y, int c, const u8 color[3])
     const int row = (c >> 4) * kGlyphSize;
     const int col = (c & 15) * kGlyphSize;
 
-    ps2::rc::Ctx().DrawTexturedRect(*s_texConchars, x, y, kGlyphSize, kGlyphSize,
+    ps2::rc::DrawTexturedRect(*s_texConchars, x, y, kGlyphSize, kGlyphSize,
                               col, row, col + kGlyphSize, row + kGlyphSize,
                               color);
 }
@@ -170,7 +170,7 @@ void DrawFpsCounter()
     }
 
     // A black background to give the text more contrast.
-    ps2::rc::Ctx().FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
+    ps2::rc::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
     DrawInternalString(viddef.width - 64, 4, text, color);
 }
 
@@ -234,7 +234,7 @@ void DrawProfileOverlay()
     const int panelY = 16; // Clears the 12px FPS box at y = 2.
 
     // A black background to give the text more contrast.
-    ps2::rc::Ctx().FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -291,7 +291,7 @@ void DrawMemUsageOverlay()
     const int panelY = viddef.height - panelHeight;
 
     // A black background to give the text more contrast.
-    ps2::rc::Ctx().FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -358,7 +358,7 @@ void DrawVramUsageOverlay()
     const int panelY = viddef.height - panelHeight;  // ...and the bottom
 
     // A black background to give the text more contrast.
-    ps2::rc::Ctx().FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -402,7 +402,7 @@ void DrawDrawStatsOverlay()
     }
 
     const ps2::view::DrawStats & stats = ps2::view::GetStats();
-    const ps2::rc::DrawStats & rcStats = ps2::rc::Ctx().GetStats();
+    const ps2::rc::DrawStats & rcStats = ps2::rc::GetStats();
     const ps2::lm::Stats & lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
@@ -451,7 +451,7 @@ void DrawDrawStatsOverlay()
     const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
 
     // A black background to give the text more contrast.
-    ps2::rc::Ctx().FillRect(0, 0, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rc::FillRect(0, 0, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = kPadding;
     int textY = kPadding;
@@ -641,7 +641,7 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::rc::Ctx().DrawTexturedRect(texture, x, y, w, h, 0, 0,
+    ps2::rc::DrawTexturedRect(texture, x, y, w, h, 0, 0,
                                     texture.width, texture.height, kUiBrightness);
 }
 
@@ -650,7 +650,7 @@ void PS2_DrawPic(int x, int y, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::rc::Ctx().DrawTexturedRect(texture, x, y, texture.width, texture.height,
+    ps2::rc::DrawTexturedRect(texture, x, y, texture.width, texture.height,
                                     0, 0, texture.width, texture.height, kUiBrightness);
 }
 
@@ -667,7 +667,7 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
     // Tiles the image over the given screen rectangle: texels are addressed in
     // screen space and wrap via the REPEAT mode set up in gs::Init().
     (void)name; // Quake only ever tiles "backtile" here.
-    ps2::rc::Ctx().DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
+    ps2::rc::DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
 }
 
 void PS2_DrawFill(int x, int y, int w, int h, int c)
@@ -678,13 +678,13 @@ void PS2_DrawFill(int x, int y, int w, int h, int c)
     const u8  r = static_cast<u8>(p & 0xFFu);
     const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
     const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
-    ps2::rc::Ctx().FillRect(x, y, w, h, r, g, b, 255);
+    ps2::rc::FillRect(x, y, w, h, r, g, b, 255);
 }
 
 void PS2_DrawFadeScreen()
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
-    ps2::rc::Ctx().FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
+    ps2::rc::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
 }
 
 // ------------------------------------------------------------------------------------------------

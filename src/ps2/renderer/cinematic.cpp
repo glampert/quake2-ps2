@@ -194,7 +194,7 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
     s_frameTexture.MarkPixelsDirty();
 
     constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
-    rc::Ctx().DrawTexturedRect(s_frameTexture, x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
+    rc::DrawTexturedRect(s_frameTexture, x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
 }
 
 } // namespace ps2::cin

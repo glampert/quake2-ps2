@@ -64,10 +64,8 @@ void Init()
     static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");
 
     // Built into the command buffer like every other VIF1 transfer, which is why vu1::Init has to
-    // run after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the Drain
-    // terminates, kicks and waits, so VU1 is ready once it returns.
-    rc::RenderContext & ctx = rc::Ctx();
-
+    // run after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the KickAndWait
+    // below terminates, kicks and waits, so VU1 is ready once it returns.
     int nextProgramIdx  = 0;
     u32 nextProgramAddr = 0;
 
@@ -77,13 +75,13 @@ void Init()
                       "Microprograms overflow VU1 micro memory!");
 
         s_progAddr[nextProgramIdx++] = ProgramAddr(nextProgramAddr);
-        ctx.AddMicroProgram(ProgramAddr(nextProgramAddr), program.code);
+        rc::AddMicroProgram(ProgramAddr(nextProgramAddr), program.code);
 
         nextProgramAddr += (program.instructionCount + 1u) & ~1u;
     }
 
-    ctx.AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    ctx.KickAndWait();
+    rc::AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
+    rc::KickAndWait();
 }
 
 } // namespace ps2::vu1

@@ -263,31 +263,9 @@ SYSTEM SPECIFIC
 ==============================================================
 */
 
-//
-// Large block stack allocation API
-//
-typedef struct
-{
-    byte * base_ptr;
-    int    max_size;
-    int    curr_size;
-    int    mem_tag;
-} mem_hunk_t;
-
-// Allocate/free a new hunk of memory (allocation is zero filled).
-void Hunk_New(mem_hunk_t * hunk, int max_size, int mem_tag);
-void Hunk_Free(mem_hunk_t * hunk);
-
-// Fetch a new slice from the hunk's end.
-byte * Hunk_BlockAlloc(mem_hunk_t * hunk, int block_size);
-
-// Get the offset to the end of the allocated region.
-int Hunk_GetTail(mem_hunk_t * hunk);
-
 // [PS2_QUAKE] 2015-10-30:
-// Original Hunk allocator API used by Quake2
-// relied on global data. We provide a cleaner
-// global-state-free replacement.
+// Original Hunk allocator API used by Quake 2 for world loading.
+// No longer used by the PS2 port.
 /*
 void * Hunk_Begin(int maxsize);
 void * Hunk_Alloc(int size);

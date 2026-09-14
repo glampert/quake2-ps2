@@ -125,11 +125,11 @@ void EmitVertex(vu1::DrawVertex & vert, const int corners[4], float u, float v)
 // Gathers a tess x tess grid of quads (two triangles each) covering the face into the stream.
 // Tess 1 is the plain 2-triangle face; 5+ exceeds vu1::kMaxVertsPerBatch and so exercises the
 // chunked submission path behind rc::TriangleStream::Flush.
-void EmitFace(rc::TriangleStream & tris, const int corners[4], const int tess)
+void EmitFace(rc::TriangleStream & trisStream, const int corners[4], const int tess)
 {
     ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
     {
-        vu1::DrawVertex * const tri = tris.PushTriangle();
+        vu1::DrawVertex * const tri = trisStream.PushTriangle();
         EmitVertex(tri[0], corners, ua, va);
         EmitVertex(tri[1], corners, ub, vb);
         EmitVertex(tri[2], corners, uc, vc);
@@ -162,11 +162,11 @@ void QuantizeVertex(vu1::LerpVertexBytes & dst, const int corners[4], const floa
 
 // The same grid through the MD2 keyframe path: only the quantized positions are gathered, and
 // the attributes come from s_faceAttribs.
-void EmitFaceLerped(rc::LerpStream & lerp, const int corners[4], const int tess)
+void EmitFaceLerped(rc::LerpStream & lerpStream, const int corners[4], const int tess)
 {
     ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
     {
-        vu1::LerpVertexBytes * const tri = lerp.PushTriangle();
+        vu1::LerpVertexBytes * const tri = lerpStream.PushTriangle();
         QuantizeVertex(tri[0], corners, ua, va);
         QuantizeVertex(tri[1], corners, ub, vb);
         QuantizeVertex(tri[2], corners, uc, vc);
@@ -313,35 +313,35 @@ void DrawRotatingCube()
     {
         BuildFaceAttribs(tess);
 
-        rc::LerpStream lerp{ kMaxFaceVerts };
+        auto lerpStream = rc::Begin<rc::LerpStream>(kMaxFaceVerts);
 
         for (int face = 0; face < 6; ++face)
         {
-            lerp.SetTransform(mvpLerp);
-            lerp.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
-            lerp.SetLerpParams(frontv, backv, FaceShadeLight(kFaces[face]));
-            lerp.SetAttribSource(s_faceAttribs);
+            lerpStream.SetTransform(mvpLerp);
+            lerpStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
+            lerpStream.SetLerpParams(frontv, backv, FaceShadeLight(kFaces[face]));
+            lerpStream.SetAttribSource(s_faceAttribs);
 
-            lerp.Begin(numVerts);
-            EmitFaceLerped(lerp, kFaces[face], tess);
+            lerpStream.BeginVerts(numVerts);
+            EmitFaceLerped(lerpStream, kFaces[face], tess);
         }
 
-        lerp.Flush();
+        rc::Submit(lerpStream);
     }
     else
     {
-        rc::TriangleStream tris{ kMaxFaceVerts };
+        auto trisStream = rc::Begin<rc::TriangleStream>(kMaxFaceVerts);
 
         for (int face = 0; face < 6; ++face)
         {
-            tris.SetTransform(mvp);
-            tris.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
+            trisStream.SetTransform(mvp);
+            trisStream.SetTexture(tex::DebugTexture(FaceVariant(face, tick, s_testEviction)));
 
-            tris.Begin(numVerts);
-            EmitFace(tris, kFaces[face], tess);
+            trisStream.BeginVerts(numVerts);
+            EmitFace(trisStream, kFaces[face], tess);
         }
 
-        tris.Flush();
+        rc::Submit(trisStream);
     }
 }
 

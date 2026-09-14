@@ -520,9 +520,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::vu1::Init();    // after cmdbuf::Init: the microprogram upload goes out on the chain
     ps2::view::Init();
 
-    s_gsLatency    = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
-    s_enableDither = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
-
+    s_gsLatency        = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
+    s_enableDither     = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
     s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
     s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
     s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
@@ -642,7 +641,7 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
     ps2::rc::DrawTexturedRect(texture, x, y, w, h, 0, 0,
-                                    texture.width, texture.height, kUiBrightness);
+                              texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawPic(int x, int y, const char * name)
@@ -651,7 +650,7 @@ void PS2_DrawPic(int x, int y, const char * name)
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
     ps2::rc::DrawTexturedRect(texture, x, y, texture.width, texture.height,
-                                    0, 0, texture.width, texture.height, kUiBrightness);
+                              0, 0, texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawChar(int x, int y, int c)
@@ -731,7 +730,7 @@ void PS2_BeginFrame(float cameraSeparation)
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
     // each 2D->3D boundary and in rc::EndFrame().
-    ps2::rc::BeginFrame(s_enableDither->value != 0.0f);
+    ps2::rc::BeginFrame(/*dither=*/s_enableDither->value != 0.0f);
 }
 
 void PS2_EndFrame()

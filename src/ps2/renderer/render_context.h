@@ -14,16 +14,16 @@
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/clip.h"
-#include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/vu1.h"
+#include "ps2/renderer/cmd_buffer.h"
 
 namespace ps2::tex { struct Texture; }
 
 namespace ps2::rc {
 
 // ------------------------------------------------------------------------------------------------
-// Draw state
+// Draw flags
 // ------------------------------------------------------------------------------------------------
 
 // Optional batch draw flags (OR-able). Blended batches combine with the
@@ -107,6 +107,10 @@ enum class FaceCull : u32
     Positive = 2,
 };
 
+// ------------------------------------------------------------------------------------------------
+// Debug draw stats trackers
+// ------------------------------------------------------------------------------------------------
+
 // What the renderer submitted this frame, as opposed to what the view decided to submit - that
 // half is view::DrawStats. Everything here is counted by the streams and the draw paths below, so
 // no caller adds to it. Cleared by BeginFrame.
@@ -120,24 +124,25 @@ struct DrawStats
 };
 
 namespace detail {
-// The recorder's state. In the header only so the accessors below can be inline; written by
-// render_context.cpp and by the streams' own counting.
-struct State
-{
-    DrawStats stats; // what this frame has submitted so far
-};
-extern State g_state;
+extern DrawStats g_drawStats;
 } // namespace detail
 
 // What this frame has submitted so far. Inline so the streams can bump it without a call.
 Q_ALWAYS_INLINE DrawStats & GetStats()
 {
-    return detail::g_state.stats;
+    return detail::g_drawStats;
 }
+
+// The most qwords one GIF block has held. Shown as "Gif2DPk" in the draw-stats overlay; what it
+// measures against is the command buffer half it has to fit inside (cmdbuf::kHalfBytes).
+int Gif2DPeakQwords();
 
 // ------------------------------------------------------------------------------------------------
 // Frame lifecycle
 // ------------------------------------------------------------------------------------------------
+
+// Background colour the frame clear fills with.
+void SetClearColor(u8 r, u8 g, u8 b);
 
 // Opens the frame: shows the previous one if it was left drawing, rewinds the command buffer
 // and writes the screen clear at the head of it. 2D and 3D may then be drawn in any order, and
@@ -154,8 +159,8 @@ void BeginFrame(bool dither);
 // otherwise stand at. Clear it and this waits for the GS and flips before returning.
 void EndFrame(bool deferPresent);
 
-// Background colour the frame clear fills with.
-void SetClearColor(u8 r, u8 g, u8 b);
+// Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
+void KickAndWait();
 
 // Makes the texture's pixels resident in GS VRAM, uploading them on a miss and evicting the
 // least-recently-bound textures when the heap is full. Already-resident textures only have their
@@ -166,16 +171,12 @@ void SetClearColor(u8 r, u8 g, u8 b);
 // GifWriter taken before this call must not be used after it.
 void EnsureTextureResident(const tex::Texture & texture);
 
-// The most qwords one GIF block has held. Shown as "Gif2DPk" in the draw-stats overlay; what it
-// measures against is the command buffer half it has to fit inside (cmdbuf::kHalfBytes).
-int Gif2DPeakQwords();
-
 // ------------------------------------------------------------------------------------------------
 // VU1 bring-up
-//
+// ------------------------------------------------------------------------------------------------
+
 // Built into the frame's chain like any other VIF1 transfer, so these run after cmdbuf::Init and
 // before any drawing. vu1::Init is the only caller.
-// ------------------------------------------------------------------------------------------------
 
 // References a microprogram into the chain as MPG transfers (chunked to the VIF's
 // 256-instruction limit).
@@ -185,12 +186,18 @@ void AddMicroProgram(vu1::ProgramAddr dest, vu1::VUCode code);
 // alternates between. Both in qwords.
 void AddDoubleBufferSettings(u32 baseQw, u32 offsetQw);
 
-// Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
-void KickAndWait();
+// ------------------------------------------------------------------------------------------------
+// Triangle Streams lifecycle
+// ------------------------------------------------------------------------------------------------
+
+template<typename T>
+T Begin(const int maxVerts);
+
+template<typename T>
+void Submit(T & stream);
 
 // ------------------------------------------------------------------------------------------------
-// 2D primitives. Each opens the 2D section on demand - callers just draw, no bracket - and the
-// section is closed automatically before the next 3D draw, so 2D always lands on top.
+// 2D primitives
 // ------------------------------------------------------------------------------------------------
 
 // Closes the open 2D section, so what follows draws under it. Called at every 2D->3D boundary and
@@ -208,24 +215,23 @@ void DrawTexturedRect(const tex::Texture & texture, int x, int y, int width, int
 
 // ------------------------------------------------------------------------------------------------
 // Particles
-//
-// Not a stream: the count is known before anything is written, so this claims exactly what it
-// needs and has nothing to hand back.
 // ------------------------------------------------------------------------------------------------
 
 // Room for 'count' particle billboards in the command buffer, to fill in place. Closes the 2D
-// section and reserves what the draw will append on top, as a stream's first Begin does.
-vu1::ParticleVertex * BeginParticles(int count);
+// section and reserves what the draw will append on top, as a stream's first BeginVerts does.
+template<>
+vu1::ParticleVertex * Begin<vu1::ParticleVertex *>(const int particleCount);
 
-// Submits them. Takes its draw state directly rather than carrying any: there is one caller, and a
+// Submits particles. Takes its draw state directly rather than carrying any: there is one caller, and a
 // stream's reason for holding state - a gather loop that would otherwise re-set it per triangle -
 // does not apply when the whole batch is written in one go.
-void EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
-                  const math::Vec3 & quadOffset, DrawFlags flags = DrawFlags::Blended);
+void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp, const tex::Texture & texture,
+            const math::Vec3 & quadOffset, DrawFlags flags = DrawFlags::Blended);
 
 // ------------------------------------------------------------------------------------------------
 // Chain budget
-//
+// ------------------------------------------------------------------------------------------------
+
 // What a draw costs the command buffer besides its vertex data, so a caller whose vertex data is
 // *itself* in the buffer can reserve the pair together.
 //
@@ -237,7 +243,6 @@ void EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 // Nothing outside this module reserves anything: the streams below reserve for themselves and
 // BeginParticles reserves for the particle draw. This is in the header only because the stream
 // constructors compute their claim from it.
-// ------------------------------------------------------------------------------------------------
 
 // Chain qwords one chunk of each draw appends. The world path: the header/GIF-tag inline unpack
 // (1 tag qword plus 8 of payload), the vertex REF unpack (1 - its VIFcodes ride in the tag's upper
@@ -301,16 +306,15 @@ constexpr int DrawParticlesChainCost(const int count)
 
 // ------------------------------------------------------------------------------------------------
 // Draws
-//
+// ------------------------------------------------------------------------------------------------
+
 // **None is synchronous.** Each appends to the frame's command buffer and returns; nothing is sent
 // until EndFrame kicks it. So the vertex data has to stay valid for the rest of the frame, not for
-// the duration of the call - which is why it is a span of the buffer itself (cmdbuf::Alloc) rather
-// than a gather static.
+// the duration of the call - which is why it is a span of the buffer itself (cmdbuf::Alloc).
 //
 // A caller must have reserved the matching *ChainCost on top of that span, so that nothing here
 // can rewind the buffer out from under it. A kick is harmless (it leaves the buffer where it is);
 // a rewind would leave the REF tags pointing at memory the next gather is about to write.
-// ------------------------------------------------------------------------------------------------
 
 // Draws a batch of triangles (3 verts each, triangle list) with the given transform and texture
 // (made resident on demand). Any whole-triangle count works: draws beyond vu1::kMaxVertsPerBatch
@@ -328,15 +332,12 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 // built, so they live in the command buffer like every other gather; attributes are the model's
 // own baked array in draw order, so they are referenced where they lie and never copied. Both must
 // stay valid until the frame's kick - the buffer does by construction, the model hunk because
-// nothing unloads a model mid-frame - and 'attribs' must be qword aligned, which mod::AliasVertex
-// is.
+// nothing unloads a model mid-frame - and 'attribs' must be qword aligned, which mod::AliasVertex is.
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
-                         const math::Vec4 & shadeLight,
-                         const vu1::LerpPosChunk * posChunks, const vu1::LerpDrawAttrib * attribs,
-                         int vertCount,
-                         FaceCull faceCull = FaceCull::None,
-                         DrawFlags flags = DrawFlags::None);
+                         const math::Vec4 & shadeLight, const vu1::LerpPosChunk * posChunks,
+                         const vu1::LerpDrawAttrib * attribs, int vertCount,
+                         FaceCull faceCull = FaceCull::None, DrawFlags flags = DrawFlags::None);
 
 // Draws camera-facing particle billboards as GS sprites, expanded entirely on VU1 - the caller
 // transforms nothing.
@@ -364,9 +365,10 @@ void SetDynamicLights(const vu1::DynamicLight * lights, int count);
 
 // ------------------------------------------------------------------------------------------------
 // Vertex streams
-//
+// ------------------------------------------------------------------------------------------------
+
 // A stream is a cursor into the command buffer, not storage it owns: it claims its worst case on
-// the first Begin of a flush cycle, fills what it needs, hands the rest back at Flush and is then
+// the first BeginVerts of a flush cycle, fills what it needs, hands the rest back at Flush and is then
 // referenced where it lies - so a gather 40 vertices long costs the frame 40 vertices, not its
 // whole capacity.
 //
@@ -382,12 +384,10 @@ void SetDynamicLights(const vu1::DynamicLight * lights, int count);
 // renderer, measured at +6.7% on the MD2 gather. That is also why the draw state lives on the
 // stream rather than in the module's own state: the flush had to be able to read it without the
 // stream registering itself anywhere.
-// ------------------------------------------------------------------------------------------------
 
 // Gathered triangles on their way to the world/lit microprogram.
 class TriangleStream final
 {
-public:
     // 'maxVerts' is what one flush cycle may claim: a whole number of triangles, and at least one
     // worst-case clipped triangle, since PushClippedTriangle fans a cut polygon in one go and
     // cannot split it across two cycles.
@@ -401,6 +401,7 @@ public:
                       "Stream capacity must hold one worst-case clipped triangle!");
     }
 
+public:
     ~TriangleStream()
     {
         // A stream that goes out of scope still holding a span has leaked its claim: the buffer's
@@ -470,7 +471,7 @@ public:
     // Also where the 2D section is closed and the command buffer reserved, because taking the
     // buffer *is* the 2D->3D boundary: a pending 2D section holds an open DMA tag, and an
     // allocation cannot land inside one.
-    Q_ALWAYS_INLINE void Begin(const int verts)
+    Q_ALWAYS_INLINE void BeginVerts(const int verts)
     {
         PS2_Assert(verts > 0 && verts <= m_maxVerts);
 
@@ -484,11 +485,11 @@ public:
         }
     }
 
-    // Three consecutive slots, for a caller filling a whole triangle at once. Begin must have
-    // covered them.
+    // Three consecutive slots, for a caller filling a whole triangle at once.
+    // BeginVerts must have covered them.
     Q_ALWAYS_INLINE vu1::DrawVertex * PushTriangle()
     {
-        PS2_AssertMsg((m_vertCount + 3) <= m_maxVerts, "TriangleStream overflow - Begin undercounted!");
+        PS2_AssertMsg((m_vertCount + 3) <= m_maxVerts, "TriangleStream overflow - BeginVerts undercounted!");
 
         vu1::DrawVertex * const tri = m_verts + m_vertCount;
         m_vertCount += 3;
@@ -498,13 +499,13 @@ public:
     // One slot. Same contract.
     Q_ALWAYS_INLINE vu1::DrawVertex & PushVertex()
     {
-        PS2_AssertMsg(m_vertCount < m_maxVerts, "TriangleStream overflow - Begin undercounted!");
+        PS2_AssertMsg(m_vertCount < m_maxVerts, "TriangleStream overflow - BeginVerts undercounted!");
         return m_verts[m_vertCount++];
     }
 
     // Clips one triangle against the volume the VU judges and appends the survivors, fanned. Calls
-    // Begin for the post-clip count itself, so a caller that only gathers through this never calls
-    // Begin at all.
+    // BeginVerts for the post-clip count itself, so a caller that only gathers through this never calls
+    // BeginVerts at all.
     //
     // The corners arrive with their position, UVs and colour payload set; their clip distances are
     // computed by the clipper. 'vertexColor' packs one surviving vertex's final GS colour:
@@ -515,7 +516,8 @@ public:
     {
         const clip::ClipVertex * verts = nullptr;
         bool wasClipped = false;
-        const int count = clip::ClipTriangle(corners, Transform(), clip::SharedScratch(),
+        const int count = clip::ClipTriangle(corners, Transform(),
+                                             clip::SharedScratch(),
                                              &verts, &wasClipped);
 
         if (count == 0)
@@ -531,7 +533,7 @@ public:
 
         // The survivors fan-triangulate.
         const int numTriangles = count - 2;
-        Begin(numTriangles * 3);
+        BeginVerts(numTriangles * 3);
 
         for (int v = 1; v < count - 1; ++v)
         {
@@ -540,6 +542,15 @@ public:
             EmitVertex(verts[v + 1], vertexColor(verts[v + 1]));
         }
     }
+
+    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
+
+private:
+    template<typename T>
+    friend T Begin(const int maxVerts);
+
+    template<typename T>
+    friend void Submit(T & stream);
 
     // Sends what has been gathered, under the stream's current draw state, and empties it. Does
     // nothing when it is empty, so flushing twice is free.
@@ -570,7 +581,7 @@ public:
         }
         else
         {
-            // Claimed and never filled - Begin takes the span before the first push, so a flush
+            // Claimed and never filled - BeginVerts takes the span before the first push, so a flush
             // can land in between. Commit nothing rather than drop it: the claim is the stream's
             // whole capacity, and letting go of the pointer would leave all of it in the buffer.
             cmdbuf::Commit(m_verts, 0);
@@ -579,9 +590,6 @@ public:
         m_verts = nullptr;
     }
 
-    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
-
-private:
     // Closes the 2D section, reserves and claims the span. Cold: once per flush cycle.
     void Claim()
     {
@@ -605,6 +613,7 @@ private:
         dst.q    = 1.0f;
     }
 
+private:
     vu1::DrawVertex * m_verts     = nullptr; // into the command buffer; null between flush cycles
     int               m_vertCount = 0;
 
@@ -616,6 +625,18 @@ private:
     const int m_claimQwords; // what one flush cycle reserves: the span plus the draw's tags
 };
 
+template<>
+Q_ALWAYS_INLINE TriangleStream Begin<TriangleStream>(const int maxVerts)
+{
+    return TriangleStream{ maxVerts };
+}
+
+template<>
+Q_ALWAYS_INLINE void Submit<TriangleStream>(TriangleStream & stream)
+{
+    stream.Flush();
+}
+
 // The keyframe-lerped equivalent, for MD2 alias models.
 //
 // It gathers *only* positions, in vu1::LerpPosChunk groups, one per VU run. The other half of what
@@ -624,9 +645,8 @@ private:
 // array, and each Flush hands the draw the slice matching the positions it just submitted.
 class LerpStream final
 {
-public:
     // 'maxVerts' is a whole number of triangles. The claim covers two draws' worth of tags, not
-    // one, because RedrawLastFlush emits a second set over the same data and must not be the thing
+    // one, because ResubmitLastFlush emits a second set over the same data and must not be the thing
     // that overflows.
     explicit LerpStream(const int maxVerts)
         : m_maxVerts{ maxVerts }
@@ -637,6 +657,7 @@ public:
         PS2_AssertMsg((maxVerts % 3) == 0, "Stream capacity must be a whole number of triangles!");
     }
 
+public:
     ~LerpStream()
     {
         PS2_AssertMsg(m_chunks == nullptr, "LerpStream destroyed without a Flush!");
@@ -688,8 +709,7 @@ public:
     //
     // No equality test: these change per entity, and comparing seven floats costs more than the
     // flush it would save on the rare repeat.
-    void SetLerpParams(const math::Vec3 & frontv, const math::Vec3 & backv,
-                       const math::Vec4 & shadeLight)
+    void SetLerpParams(const math::Vec3 & frontv, const math::Vec3 & backv, const math::Vec4 & shadeLight)
     {
         Flush();
         m_frontv     = frontv;
@@ -707,11 +727,13 @@ public:
         m_attribs = attribs;
     }
 
-    // --- Gathering -------------------------------------------------------------------------------
+    // --------------------------------------------------------------------------------------------
+    // Gathering
+    // --------------------------------------------------------------------------------------------
 
-    // As TriangleStream::Begin, for the flush cycle's capacity. The *group* boundary is
+    // As TriangleStream::BeginVerts, for the flush cycle's capacity. The *group* boundary is
     // PushTriangle's business - a group is one VU run, and a triangle may not straddle two.
-    Q_ALWAYS_INLINE void Begin(const int verts)
+    Q_ALWAYS_INLINE void BeginVerts(const int verts)
     {
         PS2_Assert(verts > 0 && verts <= m_maxVerts);
 
@@ -728,7 +750,7 @@ public:
     // triangle it is filling reads them at the same index, which is the whole point.
     Q_ALWAYS_INLINE vu1::LerpVertexBytes * PushTriangle()
     {
-        PS2_AssertMsg((m_vertCount + 3) <= m_maxVerts, "LerpStream overflow - Begin undercounted!");
+        PS2_AssertMsg((m_vertCount + 3) <= m_maxVerts, "LerpStream overflow - BeginVerts undercounted!");
 
         // One test covers both the first push of a cycle and a group boundary: m_chunkVerts starts
         // out saying the (non-existent) current group is full, so the claim and the advance are the
@@ -745,6 +767,17 @@ public:
         return pos;
     }
 
+    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
+
+private:
+    template<typename T>
+    friend T Begin(const int maxVerts);
+
+    template<typename T>
+    friend void Submit(T & stream);
+
+    friend void Resubmit(LerpStream & stream);
+
     // Sends the gathered groups under the stream's current draw state and empties it.
     void Flush()
     {
@@ -752,14 +785,14 @@ public:
         //
         // This is load-bearing, not an optimisation. The state setters flush, and the MD2 shadow
         // sets its own transform, flags and lerp params between the model's Flush and
-        // RedrawLastFlush - so without this, those setters would overwrite the record with the
+        // ResubmitLastFlush - so without this, those setters would overwrite the record with the
         // empty state and the shadow would draw nothing at all.
         if (m_vertCount == 0 && m_chunks == nullptr)
         {
             return;
         }
 
-        // Otherwise recorded even when there is nothing to send, so RedrawLastFlush after a flush
+        // Otherwise recorded even when there is nothing to send, so ResubmitLastFlush after a flush
         // that had nothing in it draws nothing rather than whatever came before.
         m_lastFlushed        = m_chunks;
         m_lastFlushedAttribs = m_attribs;
@@ -768,8 +801,7 @@ public:
         if (m_vertCount > 0)
         {
             PS2_AssertMsg(m_attribs != nullptr, "LerpStream::Flush with no attribute source!");
-            PS2_AssertMsg(m_mvp != nullptr && m_texture != nullptr,
-                          "LerpStream::Flush with no transform or texture set!");
+            PS2_AssertMsg(m_mvp != nullptr && m_texture != nullptr, "LerpStream::Flush with no transform or texture set!");
 
             // Whole groups: the tail of a partly filled last group is the only thing a flush cycle
             // wastes, and it is bounded by one group.
@@ -817,9 +849,9 @@ public:
     // Only valid while nothing has been pushed since that Flush, and only worth anything if the
     // geometry went out in a single cycle - a caller that filled the buffer mid-model left only
     // its tail behind.
-    void RedrawLastFlush()
+    void ResubmitLastFlush()
     {
-        PS2_AssertMsg(m_vertCount == 0, "RedrawLastFlush after pushing new vertices!");
+        PS2_AssertMsg(m_vertCount == 0, "ResubmitLastFlush after pushing new vertices!");
 
         if (m_lastFlushedCount > 0)
         {
@@ -836,9 +868,6 @@ public:
         }
     }
 
-    Q_ALWAYS_INLINE bool IsEmpty() const { return m_vertCount == 0; }
-
-private:
     // Claims the span on the first push of a cycle, and steps to the next group after that.
     void NextChunk()
     {
@@ -855,16 +884,17 @@ private:
         {
             ++m_chunk;
         }
-        m_pos        = m_chunk->pos;
+        m_pos = m_chunk->pos;
         m_chunkVerts = 0;
     }
 
+private:
     int m_vertCount = 0;
 
     // The model's baked attributes, at the vertex the next push will fill.
     const vu1::LerpDrawAttrib * m_attribs = nullptr;
 
-    // Vertices the last Flush submitted, and where both of its streams are; see RedrawLastFlush.
+    // Vertices the last Flush submitted, and where both of its streams are; see ResubmitLastFlush.
     int                         m_lastFlushedCount   = 0;
     vu1::LerpPosChunk *         m_lastFlushed        = nullptr;
     const vu1::LerpDrawAttrib * m_lastFlushedAttribs = nullptr;
@@ -891,5 +921,23 @@ private:
     const int m_maxChunks;
     const int m_claimQwords;
 };
+
+template<>
+Q_ALWAYS_INLINE LerpStream Begin<LerpStream>(const int maxVerts)
+{
+    return LerpStream{ maxVerts };
+}
+
+template<>
+Q_ALWAYS_INLINE void Submit<LerpStream>(LerpStream & stream)
+{
+    stream.Flush();
+}
+
+// For alias MD2 shadows.
+Q_ALWAYS_INLINE void Resubmit(LerpStream & stream)
+{
+    stream.ResubmitLastFlush();
+}
 
 } // namespace ps2::rc

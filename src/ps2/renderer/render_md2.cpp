@@ -615,14 +615,6 @@ Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
     return channel(c.x) | (channel(c.y) << 8) | (channel(c.z) << 16) | (channel(c.w) << 24);
 }
 
-// Clips one model triangle against the volume the VU judges and appends the
-// survivors to the gather buffer, flushing it when full. The vertex colour is
-// the shade the clipper interpolated, packed back down on the way out.
-Q_ALWAYS_INLINE void GatherClippedTriangle(rc::TriangleStream & tris, clip::ClipVertex (&corners)[3])
-{
-    tris.PushClippedTriangle(corners, PackClipColor);
-}
-
 // ------------------------------------------------------------------------------------------------
 // Projected shadow
 // ------------------------------------------------------------------------------------------------
@@ -689,7 +681,7 @@ constexpr math::Vec4 kShadowShadeLight = { 0.0f, 0.0f, 0.0f, 64.0f };
 // Rebuilds the model's position stream and draws it squashed. The slow path -
 // used only when the model did not go out in a single batch, so the stream the
 // main pass left behind is not the whole of it. See the call site.
-void DrawAliasMD2Shadow(rc::LerpStream & lerp, const entity_t & entity,
+void DrawAliasMD2Shadow(rc::LerpStream & lerpStream, const entity_t & entity,
                         const mod::ModelInstance::AliasData & mesh,
                         const daliasframe_t * frame, const daliasframe_t * oldFrame,
                         const LerpConsts & lc, const math::Mat4 & viewProj,
@@ -700,11 +692,11 @@ void DrawAliasMD2Shadow(rc::LerpStream & lerp, const entity_t & entity,
 
     // The shadow's own draw state. 'mvp' outlives every flush below, which is what the stream
     // holding it by pointer requires.
-    lerp.SetTransform(mvp);
-    lerp.SetTexture(skin);
-    lerp.SetDrawFlags(kShadowFlags);
-    lerp.SetFaceCull(faceCull);
-    lerp.SetLerpParams(lc.frontv, lc.backv, kShadowShadeLight);
+    lerpStream.SetTransform(mvp);
+    lerpStream.SetTexture(skin);
+    lerpStream.SetDrawFlags(kShadowFlags);
+    lerpStream.SetFaceCull(faceCull);
+    lerpStream.SetLerpParams(lc.frontv, lc.backv, kShadowShadeLight);
 
     // By value, not through the enclosing frame pointers: the loop stores through
     // the batch's streams, and under -fno-strict-aliasing a captured reference
@@ -716,14 +708,14 @@ void DrawAliasMD2Shadow(rc::LerpStream & lerp, const entity_t & entity,
 
     // Back to the top of the mesh: the main pass left the batch's attribute cursor
     // past the model it just drew, and this walk starts over from the beginning.
-    lerp.SetAttribSource(AttribsOf(mesh.vertexes));
+    lerpStream.SetAttribSource(AttribsOf(mesh.vertexes));
 
     for (int t = 0; t < numTris; ++t, src += 3)
     {
-        lerp.Begin(3);
+        lerpStream.BeginVerts(3);
 
         // __restrict for the reason the main gather loop gives.
-        vu1::LerpVertexBytes * const __restrict triPos = lerp.PushTriangle();
+        vu1::LerpVertexBytes * const __restrict triPos = lerpStream.PushTriangle();
 
         for (int i = 0; i < 3; ++i)
         {
@@ -739,7 +731,8 @@ void DrawAliasMD2Shadow(rc::LerpStream & lerp, const entity_t & entity,
             triPos[i].old = oldVerts[index];
         }
     }
-    lerp.Flush();
+
+    rc::Submit(lerpStream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -916,8 +909,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
     // Scoped to the whole entity rather than to the VU lerp branch that fills it:
     // the shadow pass below draws out of it, either by redrawing the span the
-    // model's own Flush left in the chain or by gathering a fresh one.
-    rc::LerpStream lerpStream{ kLerpBatchMaxVerts };
+    // model's own flush left in the chain or by gathering a fresh one.
+    auto lerpStream = rc::Begin<rc::LerpStream>(kLerpBatchMaxVerts);
 
     // The pose expansion and batch submission - everything from here to the
     // flush is per-triangle work, unlike Shade and Cull above.
@@ -954,7 +947,6 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             lerpStream.SetDrawFlags(batchFlags);
             lerpStream.SetFaceCull(faceCull);
             lerpStream.SetLerpParams(lc.frontv, lc.backv, vertexShadeLight);
-
             lerpStream.SetAttribSource(AttribsOf(mesh.vertexes));
 
             const mod::AliasVertex * src = mesh.vertexes;
@@ -962,7 +954,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
             for (int t = 0; t < numTris; ++t, src += 3)
             {
-                lerpStream.Begin(3);
+                lerpStream.BeginVerts(3);
 
                 // __restrict, and it earns its keep: the cursor lives in the
                 // batch, the batch is a local whose address escapes, and every
@@ -1004,7 +996,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                 }
                 emittedVerts += 3;
             }
-            lerpStream.Flush();
+
+            rc::Submit(lerpStream);
         }
         else
         {
@@ -1019,11 +1012,11 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
             // Scoped to the EE lerp path, which is the only one that gathers
             // DrawVertex; the VU path fills lerpBatch's chunk groups instead.
-            rc::TriangleStream tris{ kBatchMaxVerts };
+            auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
 
-            tris.SetTransform(mvp);
-            tris.SetTexture(skin);
-            tris.SetDrawFlags(flags);
+            trisStream.SetTransform(mvp);
+            trisStream.SetTexture(skin);
+            trisStream.SetDrawFlags(flags);
 
             const math::Vec3 * const lerpedPositions =
                 LerpVertsEE(frame->verts, oldFrame->verts, mesh.numXyz, lc, powersuit);
@@ -1066,16 +1059,16 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                         corners[i].color = UnpackClipColor(colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
                     }
 
-                    GatherClippedTriangle(tris, corners);
+                    trisStream.PushClippedTriangle(corners, PackClipColor);
                 }
             }
             else
             {
                 for (int t = 0; t < numTris; ++t, src += 3)
                 {
-                    tris.Begin(3);
+                    trisStream.BeginVerts(3);
 
-                    vu1::DrawVertex * const dst = tris.PushTriangle();
+                    vu1::DrawVertex * const dst = trisStream.PushTriangle();
                     for (int i = 0; i < 3; ++i)
                     {
                         // All three read up front; see the note in the VU path.
@@ -1097,9 +1090,9 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                     emittedVerts += 3;
                 }
             }
-            tris.Flush();
-        }
 
+            rc::Submit(trisStream);
+        }
     }
 
     // The projected blob shadow. Skipped for the view weapon,
@@ -1121,8 +1114,8 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         // itself in it rather than just its tail.
         if (vuLerp && emittedVerts > 0 && emittedVerts <= kLerpBatchMaxVerts)
         {
-            // Held in a local: the stream keeps the transform by pointer until the redraw
-            // below has used it.
+            // Held in a local: the stream keeps the transform by pointer until
+            // the resubmit below has used it.
             const math::Mat4 shadowMvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 
             lerpStream.SetTransform(shadowMvp);
@@ -1131,7 +1124,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             lerpStream.SetFaceCull(faceCull);
             lerpStream.SetLerpParams(lc.frontv, lc.backv, kShadowShadeLight);
 
-            lerpStream.RedrawLastFlush();
+            rc::Resubmit(lerpStream);
         }
         else
         {

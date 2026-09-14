@@ -335,9 +335,9 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 //
 // The sky is flat-shaded: every vertex takes the same colour, whatever the
 // clipper left behind.
-Q_ALWAYS_INLINE void GatherSkyTriangle(rc::TriangleStream & tris, clip::ClipVertex (&corners)[3])
+Q_ALWAYS_INLINE void PushSkyTriangle(rc::TriangleStream & trisStream, clip::ClipVertex (&corners)[3])
 {
-    tris.PushClippedTriangle(corners, [](const clip::ClipVertex &) { return kSkyColor; });
+    trisStream.PushClippedTriangle(corners, [](const clip::ClipVertex &) { return kSkyColor; });
 }
 
 // One corner of a cube face: face-local ST in [-1, 1] to a world-space vertex
@@ -532,9 +532,10 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
 
     // Claims its vertices from the command buffer as it goes, and is flushed inside
     // the loop, so the pass owns it rather than the file.
-    rc::TriangleStream tris{ kBatchMaxVerts };
-    tris.SetTransform(viewProj);
-    tris.SetDrawFlags(kSkyDrawFlags);
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
+
+    trisStream.SetTransform(viewProj);
+    trisStream.SetDrawFlags(kSkyDrawFlags);
 
     for (int i = 0; i < kNumSkyFaces; ++i)
     {
@@ -566,14 +567,14 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
         // own, and the sky has nothing to cull against.
         clip::ClipVertex tri0[3] = { quad[0], quad[1], quad[2] };
         clip::ClipVertex tri1[3] = { quad[0], quad[2], quad[3] };
-        tris.SetTexture(face);
+        trisStream.SetTexture(face);
 
-        GatherSkyTriangle(tris, tri0);
-        GatherSkyTriangle(tris, tri1);
+        PushSkyTriangle(trisStream, tri0);
+        PushSkyTriangle(trisStream, tri1);
 
         // One batch per face: each binds its own texture, so they could never
         // have shared one anyway.
-        tris.Flush();
+        rc::Submit(trisStream);
         ++view::GetStats().skyFaces;
     }
 }

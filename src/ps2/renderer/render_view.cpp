@@ -1083,7 +1083,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
             continue; // Degenerate leftover from the triangulation.
         }
 
-        state.stream->Begin(3);
+        state.stream->BeginVerts(3);
 
         vu1::DrawVertex * const dst = state.stream->PushTriangle();
         if (patchLightmapUVs)
@@ -1251,7 +1251,7 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
         {
             for (int t = 0; t < numTriangles; ++t)
             {
-                state.stream->Begin(3);
+                state.stream->BeginVerts(3);
 
                 vu1::DrawVertex * const dst = state.stream->PushTriangle();
                 vu1::CopyDrawVertex(dst[0], s_polyVertexCache[0]);
@@ -1287,12 +1287,12 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
 // and the back-face test takes the world camera. Shared by the diffuse and
 // lightmap passes, which must agree on all of it or their triangles would not
 // land on the same pixels.
-Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState(rc::TriangleStream & tris)
+Q_ALWAYS_INLINE SurfaceDrawState WorldSurfaceDrawState(rc::TriangleStream & trisStream)
 {
     return SurfaceDrawState {
-        .stream = &tris,
-        .mvp   = &s_viewProjMatrix,
-        .rgba  = kFullBright,
+        .stream = &trisStream,
+        .mvp    = &s_viewProjMatrix,
+        .rgba   = kFullBright,
     };
 }
 
@@ -1354,8 +1354,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
         texture->textureChain = nullptr; // Reset for the next frame.
     }
 
-    state.stream->Flush();
-
+    rc::Submit(*state.stream);
     s_chainTextureCount = 0;
 }
 
@@ -1435,7 +1434,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
         }
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
     lm::ClearChains();
 }
 
@@ -1563,11 +1562,11 @@ void RenderAlphaSurfaces()
         return;
     }
 
-    rc::TriangleStream tris{ kBatchMaxVerts };
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = nullptr, // Per entry, below; no entry ever carries null, so the first always switches.
-        .flags = rc::DrawFlags::Blended,
+        .stream = &trisStream,
+        .mvp    = nullptr, // Per entry, below; no entry ever carries null, so the first always switches.
+        .flags  = rc::DrawFlags::Blended,
         .vertexAlpha = false
     };
 
@@ -1590,7 +1589,7 @@ void RenderAlphaSurfaces()
             // Explicitly, because 'rgba' is gather policy rather than stream state: a run that
             // differs only in colour still has to break here, and the stream setters below would
             // not know to. Free when the texture or transform changed too - they flush first.
-            state.stream->Flush();
+            rc::Submit(*state.stream);
 
             batchTexture = entry.texture;
             state.mvp    = entry.mvp;
@@ -1618,7 +1617,7 @@ void RenderAlphaSurfaces()
         }
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 
     s_alphaSurfaceCount      = 0;
     s_alphaEntityMatrixCount = 0;
@@ -1685,12 +1684,12 @@ void RenderDLights(const refdef_t & viewDef)
     // Untextured, but a batch still binds one.
     const tex::Texture & texture = tex::DebugTexture();
 
-    rc::TriangleStream tris{ kBatchMaxVerts };
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = &s_viewProjMatrix, // Billboards are built in world space.
-        .rgba  = 0, // Per light; filled in below.
-        .flags = rc::DrawFlags::Additive | rc::DrawFlags::Untextured,
+        .stream = &trisStream,
+        .mvp    = &s_viewProjMatrix, // Billboards are built in world space.
+        .rgba   = 0, // Per light; filled in below.
+        .flags  = rc::DrawFlags::Additive | rc::DrawFlags::Untextured,
         .vertexAlpha = true // The centre-to-rim fade rides in st.z.
     };
 
@@ -1738,7 +1737,7 @@ void RenderDLights(const refdef_t & viewDef)
         ++s_drawStats.dlights;
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 }
 
 void MarkDLights(const dlight_t * light, const int bit, const mod::ModelInstance & world, const mod::ModelNode * node)
@@ -1840,8 +1839,8 @@ void RenderWorldModel(const refdef_t & viewDef)
     }
 
     // One batch for both world passes below; each flushes before the next starts.
-    rc::TriangleStream tris{ kBatchMaxVerts };
-    const SurfaceDrawState state = WorldSurfaceDrawState(tris);
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
+    const SurfaceDrawState state = WorldSurfaceDrawState(trisStream);
 
     // Diffuse first, then the lightmap over it - ref_gl's DrawTextureChains()
     // followed by R_BlendLightmaps(). Both passes draw the same triangles with
@@ -2086,13 +2085,12 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
     // ref_gl draws translucent brush models at a flat quarter alpha rather
     // than the entity's own (glColor4f(1,1,1,0.25) in R_DrawBrushModel).
     const bool translucent = (entity.flags & RF_TRANSLUCENT) != 0;
-    rc::TriangleStream tris{ kBatchMaxVerts };
-
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = &mvp,
-        .rgba  = translucent ? vu1::PackColorRGBA(128, 128, 128, 0x80 / 4) : kFullBright,
-        .flags = translucent ? rc::DrawFlags::Blended : rc::DrawFlags::None,
+        .stream = &trisStream,
+        .mvp    = &mvp,
+        .rgba   = translucent ? vu1::PackColorRGBA(128, 128, 128, 0x80 / 4) : kFullBright,
+        .flags  = translucent ? rc::DrawFlags::Blended : rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2171,7 +2169,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         }
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 
     // Light the surfaces just drawn, in this entity's own space. The chains are
     // per-atlas and shared with the world pass, but that one has already drawn
@@ -2229,12 +2227,12 @@ void DrawSpriteEntity(const entity_t & entity)
     float alpha = (entity.flags & RF_TRANSLUCENT) ? entity.alpha : 1.0f;
     alpha = (alpha < 0.0f) ? 0.0f : ((alpha > 1.0f) ? 1.0f : alpha);
 
-    rc::TriangleStream tris{ kBatchMaxVerts };
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     const SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = &s_viewProjMatrix, // The quad is built in world space already.
-        .rgba  = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f)),
-        .flags = (alpha < 1.0f) ? rc::DrawFlags::Blended : rc::DrawFlags::None,
+        .stream = &trisStream,
+        .mvp    = &s_viewProjMatrix, // The quad is built in world space already.
+        .rgba   = vu1::PackColorRGBA(128, 128, 128, static_cast<u32>(alpha * 128.0f)),
+        .flags  = (alpha < 1.0f) ? rc::DrawFlags::Blended : rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2276,7 +2274,7 @@ void DrawSpriteEntity(const entity_t & entity)
     triangle[2] = quad[3];
     GatherTriangle(triangle, state);
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2310,12 +2308,12 @@ void DrawBeamEntity(const entity_t & entity)
 
     const float alpha = (entity.alpha > 0.0f && entity.alpha <= 1.0f) ? entity.alpha : 1.0f;
 
-    rc::TriangleStream tris{ kBatchMaxVerts };
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     const SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = &s_viewProjMatrix, // Built in world space.
-        .rgba  = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
-        .flags = rc::DrawFlags::Blended | rc::DrawFlags::Untextured,
+        .stream = &trisStream,
+        .mvp    = &s_viewProjMatrix, // Built in world space.
+        .rgba   = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
+        .flags  = rc::DrawFlags::Blended | rc::DrawFlags::Untextured,
         .vertexAlpha = false
     };
 
@@ -2366,7 +2364,7 @@ void DrawBeamEntity(const entity_t & entity)
         GatherTriangle(triangle, state);
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2397,12 +2395,12 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
     // directly here, without the pitch flip the alias path wraps it in.
     const math::Mat4 mvp = MakeEntityMatrix(entity, /*flipPitchAngle=*/false) * s_viewProjMatrix;
 
-    rc::TriangleStream tris{ kBatchMaxVerts };
+    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
     const SurfaceDrawState state = {
-        .stream = &tris,
-        .mvp   = &mvp,
-        .rgba  = vu1::PackColorRGBA(channel(color[0]), channel(color[1]), channel(color[2]), 0x80),
-        .flags = rc::DrawFlags::None,
+        .stream = &trisStream,
+        .mvp    = &mvp,
+        .rgba   = vu1::PackColorRGBA(channel(color[0]), channel(color[1]), channel(color[2]), 0x80),
+        .flags  = rc::DrawFlags::None,
         .vertexAlpha = false
     };
 
@@ -2446,7 +2444,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
         }
     }
 
-    state.stream->Flush();
+    rc::Submit(*state.stream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2489,7 +2487,7 @@ void RenderParticles(const refdef_t & viewDef)
 
     // One qword per particle, gathered straight into the command buffer and referenced in place
     // by the DMA.
-    vu1::ParticleVertex * const particles = rc::BeginParticles(numParticles);
+    auto * __restrict particles = rc::Begin<vu1::ParticleVertex *>(numParticles);
 
     for (int i = 0; i < numParticles; ++i)
     {
@@ -2505,7 +2503,7 @@ void RenderParticles(const refdef_t & viewDef)
         dst.z = p.origin[2];
     }
 
-    rc::EndParticles(s_viewProjMatrix, texture, quadOffset);
+    rc::Submit(particles, s_viewProjMatrix, texture, quadOffset);
 }
 
 // ------------------------------------------------------------------------------------------------

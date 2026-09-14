@@ -48,6 +48,56 @@ namespace ps2::rc {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
+// Render Context state/constants
+// ------------------------------------------------------------------------------------------------
+
+// Room every GIF block keeps back for its own tail: the EOP terminator CloseGifBlock always
+// writes.
+constexpr int kBlockTailQwords = 1;
+
+// What a GIF block must be able to take before it may be split, which is what the command buffer
+// is asked to reserve when one opens.
+//
+// The clear knows its whole size up front. The 2D overlay does not - an empty HUD is a handful of
+// qwords and a full console is thousands - so it takes whatever is left of the half and GifData
+// splits the block when that runs out. For it this is only the floor one more primitive needs.
+constexpr int kClearBlockQwords = gs::kClearQwords;
+constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
+
+// What opening a DIRECT block costs on top of its payload: the CNT tag, whose own qword also
+// carries the two VIFcodes below. Part of the chain budget arithmetic.
+constexpr int kDirectOverheadQwords = 1;
+
+// True only between Begin/EndFrame.
+static bool s_frameStarted = false;
+
+// The context this frame draws into, swapped by EndFrame. Every batch's registers and prim tag
+// name it.
+static gs::DrawContext s_drawCtx = gs::DrawContext::Ctx1;
+
+// Whether a 2D section is accumulating. Distinct from a block being open: the clear opens a block
+// of its own, and a 2D section can outlive a block across a split.
+static bool s_in2D = false;
+
+// The GIF block currently open - the clear at the top of the frame, or the 2D overlay - as a
+// cursor into the command buffer's own memory. Engaged only between OpenGifBlock and
+// CloseGifBlock, which is also what says whether a block is open.
+static std::optional<gs::GifWriter> s_gifBlock;
+
+// High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
+// rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
+static int s_gifBlockPeakQwords = 0;
+
+// The framebuffer the chain in flight is drawing into - what DISPFB is pointed at once it has
+// been fenced. Not the same as s_drawCtx once a frame is left drawing while the next one is
+// built: that is the whole of what "one frame of latency" means here. Empty until the first
+// frame has been kicked, which is the one frame with nothing finished to show.
+static std::optional<gs::DrawContext> s_inFlightCtx;
+
+// Background colour for the frame clear. Distinctive dark blue, so an unwritten pixel is obvious;
+static u8 s_clearColor[3] = { 0x20, 0x20, 0x38 };
+
+// ------------------------------------------------------------------------------------------------
 // The recorder
 //
 // Appending to the frame's VIF1 source chain: DMA tags, VIFcodes and the DIRECT blocks that carry
@@ -107,8 +157,7 @@ void AddUnpackDataFmt(const u32 vuAddr, const void * data, const u32 srcQwords,
 // References 'data' in place (REF tag) and unpacks it to VU data memory at 'vuAddr' (qword
 // address; relative to the current double buffer when 'useTop'). The data must be 16-byte aligned
 // and stay valid until the frame's kick. At most 256 qwords per unpack.
-Q_ALWAYS_INLINE void AddUnpackData(const u32 vuAddr, const void * data, const u32 qwords,
-                                   const bool useTop)
+Q_ALWAYS_INLINE void AddUnpackData(const u32 vuAddr, const void * data, const u32 qwords, const bool useTop)
 {
     AddUnpackDataFmt(vuAddr, data, qwords, qwords, P2_UNPACK_V4_32, useTop);
 }
@@ -154,10 +203,6 @@ Q_ALWAYS_INLINE void AddU32(const u32 value)
 {
     packet2_add_u32(Packet(), value);
 }
-
-// What opening a DIRECT block costs on top of its payload: the CNT tag, whose own qword also
-// carries the two VIFcodes below. Part of the chain budget arithmetic.
-constexpr int kDirectOverheadQwords = 1;
 
 // Opens a DIRECT transfer: everything written until CloseDirect goes to the GIF verbatim as GIF
 // tags and register data - the frame clear and the 2D overlay.
@@ -220,49 +265,6 @@ void SetDirectCursor(qword_t * const cursor)
 // ------------------------------------------------------------------------------------------------
 // GIF sections
 // ------------------------------------------------------------------------------------------------
-
-// Room every GIF block keeps back for its own tail: the EOP terminator CloseGifBlock always
-// writes.
-constexpr int kBlockTailQwords = 1;
-
-// What a GIF block must be able to take before it may be split, which is what the command buffer
-// is asked to reserve when one opens.
-//
-// The clear knows its whole size up front. The 2D overlay does not - an empty HUD is a handful of
-// qwords and a full console is thousands - so it takes whatever is left of the half and GifData
-// splits the block when that runs out. For it this is only the floor one more primitive needs.
-constexpr int kClearBlockQwords = gs::kClearQwords;
-constexpr int k2DBlockMinQwords = 64 + kBlockTailQwords;
-
-// True only between Begin/EndFrame.
-static bool s_frameStarted = false;
-
-// The context this frame draws into, swapped by EndFrame. Every batch's registers and prim tag
-// name it.
-static gs::DrawContext s_drawCtx = gs::DrawContext::Ctx1;
-
-// Whether a 2D section is accumulating. Distinct from a block being open: the clear opens a block
-// of its own, and a 2D section can outlive a block across a split.
-static bool s_in2D = false;
-
-// The GIF block currently open - the clear at the top of the frame, or the 2D overlay - as a
-// cursor into the command buffer's own memory. Engaged only between OpenGifBlock and
-// CloseGifBlock, which is also what says whether a block is open.
-static std::optional<gs::GifWriter> s_gifBlock;
-
-// High-water of what one GIF block held, banked by CloseGifBlock since the writer itself is
-// rebuilt per block. Shown as "Gif2DPk" in the draw-stats overlay.
-static int s_gifBlockPeakQwords = 0;
-
-// The framebuffer the chain in flight is drawing into - what DISPFB is pointed at once it has
-// been fenced. Not the same as s_drawCtx once a frame is left drawing while the next one is
-// built: that is the whole of what "one frame of latency" means here. Empty until the first
-// frame has been kicked, which is the one frame with nothing finished to show.
-static std::optional<gs::DrawContext> s_inFlightCtx;
-
-// Background colour for the frame clear. Distinctive dark blue, so an unwritten pixel is obvious;
-// ref.cpp sets black for release builds.
-static u8 s_clearColor[3] = { 0x20, 0x20, 0x38 };
 
 // Opens a DIRECT block and points a GIF writer at its payload.
 //
@@ -397,8 +399,10 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
 
     if (addr == vram::Address::Invalid)
     {
+#if PS2_QUAKE_DEBUG
         Com_DPrintf("VRAM: heap full mid-frame for '%s' (%d KB), fencing the GS to unpin.\n",
                     texture.name, sizeWords * 4 / 1024);
+#endif // PS2_QUAKE_DEBUG
 
         FenceGs();
         gs::Invalidate2DBinding(); // the 2D dedupe must not survive an eviction
@@ -457,10 +461,10 @@ void PresentFrameInFlight()
 
 } // namespace
 
-detail::State detail::g_state;
+DrawStats detail::g_drawStats = {};
 
 // ------------------------------------------------------------------------------------------------
-// GIF sections
+// 2D primitives
 // ------------------------------------------------------------------------------------------------
 
 void FlushPending2D()
@@ -483,21 +487,15 @@ void FlushPending2D()
     // this frame is what keeps that rare.
 }
 
-// ------------------------------------------------------------------------------------------------
-// 2D primitives
-// ------------------------------------------------------------------------------------------------
-
 void FillRect(const int x, const int y, const int width, const int height,
-                             const u8 r, const u8 g, const u8 b, const u8 a)
+              const u8 r, const u8 g, const u8 b, const u8 a)
 {
     Ensure2D();
     gs::EmitFillRect(GifData(gs::kFillRectQwords), s_drawCtx, x, y, width, height, r, g, b, a);
 }
 
-void DrawTexturedRect(const tex::Texture & texture, const int x, const int y,
-                                     const int width, const int height,
-                                     const int u0, const int v0, const int u1, const int v1,
-                                     const u8 brightness[3])
+void DrawTexturedRect(const tex::Texture & texture, const int x, const int y, const int width, const int height,
+                      const int u0, const int v0, const int u1, const int v1, const u8 brightness[3])
 {
     Ensure2D();
 
@@ -660,6 +658,11 @@ void EndFrame(const bool deferPresent)
     s_drawCtx = gs::NextDrawContext(s_drawCtx); // draw into the other buffer next frame
 }
 
+void KickAndWait()
+{
+    cmdbuf::Drain();
+}
+
 int Gif2DPeakQwords()
 {
     // Folds in the block still open, so a mid-frame reader (the overlay is drawn during the 2D
@@ -692,8 +695,7 @@ inline gs::BlendMode BlendModeFor(DrawFlags flags)
     const int blendModes = static_cast<int>(HasDrawFlag(flags, DrawFlags::Blended))
                          + static_cast<int>(HasDrawFlag(flags, DrawFlags::Additive))
                          + static_cast<int>(HasDrawFlag(flags, DrawFlags::Modulate));
-    PS2_AssertMsg(blendModes <= 1,
-                  "Pick one blend mode - Blended, Additive and Modulate are exclusive!");
+    PS2_AssertMsg(blendModes <= 1, "Pick one blend mode - Blended, Additive and Modulate are exclusive!");
 
     if (HasDrawFlag(flags, DrawFlags::Additive))
     {
@@ -777,12 +779,13 @@ void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
     // inside the PRIM field, where PRIM_TRIANGLE (3) already has that bit
     // set. Nothing warned and the primitive still drew, just never blended.
     const u64 prim = GIF_SET_PRIM(PRIM_TRIANGLE, 1, tme, 0, abe, 0, 0, gs::Index(drawCtx), 0);
+
     // The programs that *compute* their color emit PACKED RGBAQ; the ones that
     // receive it already packed emit an A+D write. The register list has to
     // follow whichever this batch will run, so the caller says which.
     const bool packedRgba = packedRgbaOut || HasDrawFlag(flags, DrawFlags::DynamicLights);
     AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
-                 packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList);
+             packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList);
 }
 
 // Builds the draw's transform and light blocks into the buffer and unpacks them to the
@@ -869,7 +872,7 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
     AddStartProgram(vu1::ProgramAddress(HasDrawFlag(flags, DrawFlags::DynamicLights)
-                                            ? vu1::Program::Lit : vu1::Program::Textured));
+                                        ? vu1::Program::Lit : vu1::Program::Textured));
 }
 
 // The lerped equivalent: header (count + the two lerp scale vectors) and GIF
@@ -927,9 +930,9 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     // whole qwords (every word the DMA carries must be unpack payload).
     const int srcVerts = vertCount + (vertCount & 1);
     AddUnpackDataFmt(vu1::kLerpPositionsAddr, posChunk.pos,
-                         static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
-                         static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
-                         P2_UNPACK_V4_8, true);
+                     static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
+                     static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
+                     P2_UNPACK_V4_8, true);
 
     // Referenced in the model hunk rather than in the buffer: this is the stream the
     // EE no longer gathers at all. One REF tag either way - the DMAC does not care
@@ -1022,9 +1025,9 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
 void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
                          const math::Vec3 & frontv, const math::Vec3 & backv,
-                         const math::Vec4 & shadeLight,
-                         const vu1::LerpPosChunk * posChunks, const vu1::LerpDrawAttrib * attribs,
-                         int vertCount, FaceCull faceCull, DrawFlags flags)
+                         const math::Vec4 & shadeLight, const vu1::LerpPosChunk * posChunks,
+                         const vu1::LerpDrawAttrib * attribs, int vertCount,
+                         FaceCull faceCull, DrawFlags flags)
 {
     PS2_AssertMsg(vertCount > 0 && (vertCount % 3) == 0, "DrawLerpedTriangles wants whole triangles!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(posChunks) & 15u) == 0, "Position chunks must be 16-byte aligned!");
@@ -1145,31 +1148,33 @@ void SetDynamicLights(const vu1::DynamicLight * lights, const int count)
 // ------------------------------------------------------------------------------------------------
 
 namespace {
-// The span BeginParticles claimed, until EndParticles submits it.
+// The span Begin claimed, until Submit submits it.
 static vu1::ParticleVertex * s_particles     = nullptr;
 static int                   s_particleCount = 0;
 } // namespace
 
-vu1::ParticleVertex * BeginParticles(const int count)
+template<>
+vu1::ParticleVertex * Begin<vu1::ParticleVertex *>(const int particleCount)
 {
-    PS2_AssertMsg(count > 0, "BeginParticles with nothing to draw!");
+    PS2_AssertMsg(particleCount > 0, "BeginParticles with nothing to draw!");
     PS2_AssertMsg(s_particles == nullptr, "BeginParticles without an EndParticles!");
 
     // Taking the buffer is the 2D->3D boundary: a pending 2D section holds an open DMA tag and an
     // allocation cannot land inside one. The reservation covers the chunks the draw appends on top
     // as well, because those must not drain the buffer out from under the span they reference.
     FlushPending2D();
-    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(count) + DrawParticlesChainCost(count));
+    cmdbuf::Reserve(cmdbuf::CalcAllocCost<vu1::ParticleVertex>(particleCount) + DrawParticlesChainCost(particleCount));
 
-    s_particles     = cmdbuf::Alloc<vu1::ParticleVertex>(count);
-    s_particleCount = count;
+    s_particles     = cmdbuf::Alloc<vu1::ParticleVertex>(particleCount);
+    s_particleCount = particleCount;
     return s_particles;
 }
 
-void EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
-                  const math::Vec3 & quadOffset, const DrawFlags flags)
+void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp, const tex::Texture & texture,
+            const math::Vec3 & quadOffset, const DrawFlags flags)
 {
-    PS2_AssertMsg(s_particles != nullptr, "EndParticles without a BeginParticles!");
+    PS2_AssertMsg(s_particles != nullptr, "SubmitParticles without a BeginParticles!");
+    PS2_AssertMsg(particles == s_particles, "Pointer passed to particles Submit not the same as the one returned by Begin!");
 
     DrawStats & stats = GetStats();
     ++stats.drawBatches;
@@ -1179,6 +1184,8 @@ void EndParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     s_particles     = nullptr;
     s_particleCount = 0;
+
+    particles = nullptr;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1193,11 +1200,6 @@ void AddMicroProgram(const vu1::ProgramAddr dest, const vu1::VUCode code)
 void AddDoubleBufferSettings(const u32 baseQw, const u32 offsetQw)
 {
     packet2_utils_vu_add_double_buffer(Packet(), static_cast<u16>(baseQw), static_cast<u16>(offsetQw));
-}
-
-void KickAndWait()
-{
-    cmdbuf::Drain();
 }
 
 } // namespace ps2::rc

@@ -19,7 +19,7 @@
  *  The cube is drawn at a finite 2300 units, as ref_gl draws it, so the world's
  *  depth values reject the parts of it hidden behind geometry - the sky costs
  *  fill only where it is actually visible. It writes no depth of its own
- *  (rc::DrawFlags::NoDepthWrite), which is where this departs from ref_gl:
+ *  (rs::DrawFlags::NoDepthWrite), which is where this departs from ref_gl:
  *  there the sky occluded anything drawn later past 2300 units, which on the
  *  larger outdoor maps eats distant entities and rail trails.
  *
@@ -32,7 +32,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/clip.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/math/vec_mat.h"
 
@@ -148,11 +148,11 @@ static vec3_t s_skyClipVerts[kSkyClipStages][2][kMaxSkyClipVerts];
 // in place by DMA). Six faces of two triangles, each of which can leave the clipper
 // as a 9-gon, so 7 triangles: 42 verts per face is the true ceiling.
 constexpr int kBatchMaxVerts = 3 * 64;
-// One stream per pass; see rc::TriangleStream.
+// One stream per pass; see rs::TriangleStream.
 
 // The sky draws at a finite distance so the world can occlude it, and must not
 // occlude anything drawn after it in return - hence the masked depth writes.
-constexpr rc::DrawFlags kSkyDrawFlags = rc::DrawFlags::NoDepthWrite;
+constexpr rs::DrawFlags kSkyDrawFlags = rs::DrawFlags::NoDepthWrite;
 
 // ------------------------------------------------------------------------------------------------
 // Bounds accumulation (ref_gl's DrawSkyPolygon / ClipSkyPolygon)
@@ -335,7 +335,7 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 //
 // The sky is flat-shaded: every vertex takes the same colour, whatever the
 // clipper left behind.
-Q_ALWAYS_INLINE void PushSkyTriangle(rc::TriangleStream & trisStream, clip::ClipVertex (&corners)[3])
+Q_ALWAYS_INLINE void PushSkyTriangle(rs::TriangleStream & trisStream, clip::ClipVertex (&corners)[3])
 {
     trisStream.PushClippedTriangle(corners, [](const clip::ClipVertex &) { return kSkyColor; });
 }
@@ -532,7 +532,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
 
     // Claims its vertices from the command buffer as it goes, and is flushed inside
     // the loop, so the pass owns it rather than the file.
-    auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
+    auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
 
     trisStream.SetTransform(viewProj);
     trisStream.SetDrawFlags(kSkyDrawFlags);
@@ -563,7 +563,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
             MakeSkyVertex(s_skyMaxs[0][i], s_skyMins[1][i], i, face, viewDef.vieworg, rotateDegrees)
         };
 
-        // Winding is free here: rc::DrawTriangles has no back-face test of its
+        // Winding is free here: rs::DrawTriangles has no back-face test of its
         // own, and the sky has nothing to cull against.
         clip::ClipVertex tri0[3] = { quad[0], quad[1], quad[2] };
         clip::ClipVertex tri1[3] = { quad[0], quad[2], quad[3] };
@@ -574,7 +574,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
 
         // One batch per face: each binds its own texture, so they could never
         // have shared one anyway.
-        rc::Submit(trisStream);
+        rs::Submit(trisStream);
         ++view::GetStats().skyFaces;
     }
 }

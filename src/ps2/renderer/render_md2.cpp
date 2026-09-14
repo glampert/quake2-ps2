@@ -32,7 +32,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/clip.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/render_profile.h"
@@ -162,12 +162,12 @@ Q_ALWAYS_INLINE const u32 * KeyframeVertWords(const daliasframe_t * const frame)
 
 // Triangle gather buffers, flushed when full (referenced in place by DMA out of
 // the frame chain). The two paths gather into their own: the EE lerp path into
-// the DrawVertex stream (rc::TriangleStream, which also carries the clipper), the VU lerp
+// the DrawVertex stream (rs::TriangleStream, which also carries the clipper), the VU lerp
 // path into the keyframe/attribute chunk groups of the lerp batch. Only one of
 // them is ever active for a given model at a time, and both are locals of the
 // entity draw.
 constexpr int kBatchMaxVerts = 3 * 512;
-// One rc::TriangleStream per EE-lerp pass, at kBatchMaxVerts.
+// One rs::TriangleStream per EE-lerp pass, at kBatchMaxVerts.
 
 // The VU path's capacity decides whether a model's shadow costs anything: a
 // model that fits in one batch leaves its whole position stream behind for the
@@ -175,7 +175,7 @@ constexpr int kBatchMaxVerts = 3 * 512;
 // call site). 768 triangles covers 115 of the 119 stock models - everything but
 // the four bosses, which appear once each in a playthrough and fallback to a full shadow pass.
 constexpr int kLerpBatchMaxVerts = 3 * 768;
-// One rc::LerpStream per entity, at kLerpBatchMaxVerts.
+// One rs::LerpStream per entity, at kLerpBatchMaxVerts.
 
 // ------------------------------------------------------------------------------------------------
 // Entity transform and frustum cull
@@ -669,7 +669,7 @@ math::Mat4 ShadowMatrix(const entity_t & entity, const LerpConsts & lc,
 }
 
 // The flags a shadow batch draws with: flat, blended, and never textured.
-constexpr rc::DrawFlags kShadowFlags = rc::DrawFlags::Blended | rc::DrawFlags::Untextured;
+constexpr rs::DrawFlags kShadowFlags = rs::DrawFlags::Blended | rs::DrawFlags::Untextured;
 
 // A shadow's light: no colour at all, so whatever shade term the vertex carries
 // multiplies out to black, at the half alpha in .w. That is what lets both shadow
@@ -681,12 +681,12 @@ constexpr math::Vec4 kShadowShadeLight = { 0.0f, 0.0f, 0.0f, 64.0f };
 // Rebuilds the model's position stream and draws it squashed. The slow path -
 // used only when the model did not go out in a single batch, so the stream the
 // main pass left behind is not the whole of it. See the call site.
-void DrawAliasMD2Shadow(rc::LerpStream & lerpStream, const entity_t & entity,
+void DrawAliasMD2Shadow(rs::LerpStream & lerpStream, const entity_t & entity,
                         const mod::ModelInstance::AliasData & mesh,
                         const daliasframe_t * frame, const daliasframe_t * oldFrame,
                         const LerpConsts & lc, const math::Mat4 & viewProj,
                         const tex::Texture & skin, const vec3_t lightSpot,
-                        const rc::FaceCull faceCull)
+                        const rs::FaceCull faceCull)
 {
     const math::Mat4 mvp = ShadowMatrix(entity, lc, viewProj, lightSpot);
 
@@ -732,7 +732,7 @@ void DrawAliasMD2Shadow(rc::LerpStream & lerpStream, const entity_t & entity,
         }
     }
 
-    rc::Submit(lerpStream);
+    rs::Submit(lerpStream);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -865,7 +865,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // only some overdraw, since the gun is opaque and the z-buffer sorts it.
     const bool clipOnEE = (entity.flags & RF_WEAPONMODEL) && (s_clipWeapon->value != 0.0f);
     const bool vuLerp   = (s_vuLerp->value != 0.0f) && !(entity.flags & kShellFlags) && !clipOnEE;
-    const auto faceCull = static_cast<rc::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
+    const auto faceCull = static_cast<rs::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
 
     // The VU path shades on the VU: it takes the entity's light as a batch
     // constant and each vertex's raw shade dot, so there is no table to build.
@@ -888,12 +888,12 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // z here instead would defeat that judgement for the one entity that most
     // needs it - see the DrawFlags::DepthHack notes in vu1.h.
     auto batchFlags = (entity.flags & RF_TRANSLUCENT)
-                    ? rc::DrawFlags::Blended
-                    : rc::DrawFlags::None;
+                    ? rs::DrawFlags::Blended
+                    : rs::DrawFlags::None;
 
     if (entity.flags & RF_DEPTHHACK)
     {
-        batchFlags = batchFlags | rc::DrawFlags::DepthHack;
+        batchFlags = batchFlags | rs::DrawFlags::DepthHack;
     }
 
     // Expand the glcmds over the pose. Note MD2 triangles are not near-plane
@@ -910,7 +910,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     // Scoped to the whole entity rather than to the VU lerp branch that fills it:
     // the shadow pass below draws out of it, either by redrawing the span the
     // model's own flush left in the chain or by gathering a fresh one.
-    auto lerpStream = rc::Begin<rc::LerpStream>(kLerpBatchMaxVerts);
+    auto lerpStream = rs::Begin<rs::LerpStream>(kLerpBatchMaxVerts);
 
     // The pose expansion and batch submission - everything from here to the
     // flush is per-triangle work, unlike Shade and Cull above.
@@ -997,7 +997,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                 emittedVerts += 3;
             }
 
-            rc::Submit(lerpStream);
+            rs::Submit(lerpStream);
         }
         else
         {
@@ -1007,12 +1007,12 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             // depth range survives (Blended is idempotent if it was already set).
             const bool powersuit = (entity.flags & kShellFlags) != 0;
             const auto flags = powersuit
-                             ? (batchFlags | rc::DrawFlags::Blended | rc::DrawFlags::Untextured)
+                             ? (batchFlags | rs::DrawFlags::Blended | rs::DrawFlags::Untextured)
                              : batchFlags;
 
             // Scoped to the EE lerp path, which is the only one that gathers
             // DrawVertex; the VU path fills lerpBatch's chunk groups instead.
-            auto trisStream = rc::Begin<rc::TriangleStream>(kBatchMaxVerts);
+            auto trisStream = rs::Begin<rs::TriangleStream>(kBatchMaxVerts);
 
             trisStream.SetTransform(mvp);
             trisStream.SetTexture(skin);
@@ -1091,7 +1091,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
                 }
             }
 
-            rc::Submit(trisStream);
+            rs::Submit(trisStream);
         }
     }
 
@@ -1124,7 +1124,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             lerpStream.SetFaceCull(faceCull);
             lerpStream.SetLerpParams(lc.frontv, lc.backv, kShadowShadeLight);
 
-            rc::Resubmit(lerpStream);
+            rs::Resubmit(lerpStream);
         }
         else
         {

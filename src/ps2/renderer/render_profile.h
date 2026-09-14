@@ -63,7 +63,7 @@ PS2_PROFILE_DECLARE_EVENT(Sound);
 namespace ps2::debug {
 
 // Records the frame that just completed. Call from PS2_BeginFrame right after
-// ProfileNewFrame(), and before rc::BeginFrame() resets the per-frame counters
+// ProfileNewFrame(), and before rs::BeginFrame() resets the per-frame counters
 // this reads.
 void FrameLogCapture();
 

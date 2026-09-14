@@ -1,12 +1,10 @@
 #pragma once
 /* ================================================================================================
- * File: render_context.h
- * Brief: The renderer's command recorder: the frame lifecycle, the 2D primitives, the VU1 draws
+ * File: render_system.h
+ * Brief: Render System (rs) glue module.
+ *        The renderer's command recorder: the frame lifecycle, the 2D primitives, the VU1 draws
  *        and the vertex streams that gather for them. Everything a frame tells the GS to do is
  *        recorded into ps2::cmdbuf's chain here and sent in one kick at EndFrame.
- *
- *        A module, not an object: there is one recorder per frame and its state lives in
- *        detail::State, so the stream code below can reach it inline.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -20,7 +18,7 @@
 
 namespace ps2::tex { struct Texture; }
 
-namespace ps2::rc {
+namespace ps2::rs {
 
 // ------------------------------------------------------------------------------------------------
 // Draw flags
@@ -940,4 +938,4 @@ Q_ALWAYS_INLINE void Resubmit(LerpStream & stream)
     stream.ResubmitLastFlush();
 }
 
-} // namespace ps2::rc
+} // namespace ps2::rs

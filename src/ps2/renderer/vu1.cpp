@@ -15,7 +15,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 
 #include <dma.h>
 
@@ -75,13 +75,13 @@ void Init()
                       "Microprograms overflow VU1 micro memory!");
 
         s_progAddr[nextProgramIdx++] = ProgramAddr(nextProgramAddr);
-        rc::AddMicroProgram(ProgramAddr(nextProgramAddr), program.code);
+        rs::AddMicroProgram(ProgramAddr(nextProgramAddr), program.code);
 
         nextProgramAddr += (program.instructionCount + 1u) & ~1u;
     }
 
-    rc::AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
-    rc::KickAndWait();
+    rs::AddDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
+    rs::KickAndWait();
 }
 
 } // namespace ps2::vu1

@@ -14,7 +14,7 @@ namespace ps2::view {
 void Init();
 
 // What the view decided to submit this frame - what it walked, culled and chained. What the
-// renderer then did with it is rc::DrawStats; the two were one struct until the submission half
+// renderer then did with it is rs::DrawStats; the two were one struct until the submission half
 // became the streams' business to count.
 //
 // Zeroed at the top of each RenderFrame; read by the ps2_show_drawstats overlay and the frame log.
@@ -80,7 +80,7 @@ void CalcPointLightColor(const refdef_t & viewDef, const vec3_t point,
 void BeginRegistration();
 
 // Draws the 3D scene described by 'viewDef': the world's visible BSP geometry
-// (PVS + frustum culled), submitted per texture through rc::DrawTriangles.
+// (PVS + frustum culled), submitted per texture through rs::DrawTriangles.
 // Call between gs::Begin/EndFrame.
 void RenderFrame(const refdef_t & viewDef);
 

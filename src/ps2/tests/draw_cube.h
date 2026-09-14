@@ -2,7 +2,7 @@
 /* ================================================================================================
  * File: draw_cube.h
  * Brief: Debug scene for the VU1 3D bring-up: a spinning cube with per-vertex colors and
- *        the checkerboard debug texture, drawn straight through rc::DrawTriangles.
+ *        the checkerboard debug texture, drawn straight through rs::DrawTriangles.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

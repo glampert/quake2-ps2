@@ -1,6 +1,6 @@
 /* ================================================================================================
  * File: render_context.cpp
- * Brief: The renderer's command recorder and the frame it records. See render_context.h.
+ * Brief: The renderer's command recorder and the frame it records. See render_system.h.
  *
  *  Frame structure: BeginFrame opens the command buffer and writes the colour+depth clear at the
  *  head of it. 2D and 3D then draw in any order, both recording into that same buffer. 2D
@@ -30,7 +30,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/render_profile.h"
 #include "ps2/renderer/texture.h"
@@ -44,11 +44,11 @@
 #include <packet2_utils.h>
 #include <packet2_vif.h>
 
-namespace ps2::rc {
+namespace ps2::rs {
 namespace {
 
 // ------------------------------------------------------------------------------------------------
-// Render Context state/constants
+// Render System state/constants
 // ------------------------------------------------------------------------------------------------
 
 // Room every GIF block keeps back for its own tail: the EOP terminator CloseGifBlock always
@@ -1202,4 +1202,4 @@ void AddDoubleBufferSettings(const u32 baseQw, const u32 offsetQw)
     packet2_utils_vu_add_double_buffer(Packet(), static_cast<u16>(baseQw), static_cast<u16>(offsetQw));
 }
 
-} // namespace ps2::rc
+} // namespace ps2::rs

@@ -4,7 +4,7 @@
  * Brief: Graphics Synthesizer front-end: video mode, the two framebuffers and the z-buffer, the
  *        CLUTs, texture uploads over the GIF channel, and the GIF register values and primitives
  *        the renderer emits. Emission goes through the caller's GifWriter - the command buffer
- *        and the frame belong to ps2::rc.
+ *        and the frame belong to ps2::rs.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -194,7 +194,7 @@ void PresentFramebuffer(DrawContext ctx);
 
 // DMAs the texture's pixels into the VRAM it has already been assigned, synchronously over the
 // GIF channel, and clears its dirty flag. The caller owns residency: VRAM must be allocated and
-// any hazard over it resolved (see rc::EnsureTextureResident, which is what calls this).
+// any hazard over it resolved (see rs::EnsureTextureResident, which is what calls this).
 void UploadTexture(const tex::Texture & texture);
 
 // Returns the texture's VRAM to the heap (no-op when not resident). For dynamic textures whose

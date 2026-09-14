@@ -3,7 +3,7 @@
  * File: vu1.h
  * Brief: The VU1 microprograms: their upload and entry points, the VU1 data memory layout they
  *        read, and the vertex formats and constants they consume. The draw paths that feed them
- *        belong to ps2::rc.
+ *        belong to ps2::rs.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -80,7 +80,7 @@ constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy lo
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.
 constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
 
-// rc::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps, up
+// rs::DrawFlags::DepthHack: the fraction of the z-buffer a hacked batch keeps, up
 // against the near end. ref_gl's glDepthRange(0, 0.3) over the same inverted
 // range this projection produces.
 constexpr float kDepthHackScale = 0.15f;

@@ -15,7 +15,7 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/lightmap.h"
@@ -51,7 +51,7 @@ static const cvar_t * s_showVramStats    = nullptr;
 static const cvar_t * s_showDrawStats    = nullptr;
 static const cvar_t * s_showProfileStats = nullptr;
 
-// How the frame is steered, sampled every frame and handed to rc::Begin/EndFrame so both can be
+// How the frame is steered, sampled every frame and handed to rs::Begin/EndFrame so both can be
 // flipped live and judged on hardware.
 //
 // ps2_gs_latency leaves the frame drawing at EndFrame and shows it at the next one, at the cost of
@@ -97,7 +97,7 @@ void DrawGlyph(int x, int y, int c, const u8 color[3])
     const int row = (c >> 4) * kGlyphSize;
     const int col = (c & 15) * kGlyphSize;
 
-    ps2::rc::DrawTexturedRect(*s_texConchars, x, y, kGlyphSize, kGlyphSize,
+    ps2::rs::DrawTexturedRect(*s_texConchars, x, y, kGlyphSize, kGlyphSize,
                               col, row, col + kGlyphSize, row + kGlyphSize,
                               color);
 }
@@ -170,7 +170,7 @@ void DrawFpsCounter()
     }
 
     // A black background to give the text more contrast.
-    ps2::rc::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
+    ps2::rs::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
     DrawInternalString(viddef.width - 64, 4, text, color);
 }
 
@@ -234,7 +234,7 @@ void DrawProfileOverlay()
     const int panelY = 16; // Clears the 12px FPS box at y = 2.
 
     // A black background to give the text more contrast.
-    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -291,7 +291,7 @@ void DrawMemUsageOverlay()
     const int panelY = viddef.height - panelHeight;
 
     // A black background to give the text more contrast.
-    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -337,7 +337,7 @@ void DrawMemUsageOverlay()
 // GS VRAM texture-heap overlay in the lower-left corner: how much of the heap is
 // committed, the number of resident textures, the texture uploads done so far
 // this frame (streaming pressure - high or spiking means the heap is thrashing)
-// and the GS drains a full heap forced this frame (see rc::EnsureTextureResident;
+// and the GS drains a full heap forced this frame (see rs::EnsureTextureResident;
 // anything but zero means the frame's working set does not fit).
 void DrawVramUsageOverlay()
 {
@@ -358,7 +358,7 @@ void DrawVramUsageOverlay()
     const int panelY = viddef.height - panelHeight;  // ...and the bottom
 
     // A black background to give the text more contrast.
-    ps2::rc::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = panelX + kPadding;
     int textY = panelY + kPadding;
@@ -402,7 +402,7 @@ void DrawDrawStatsOverlay()
     }
 
     const ps2::view::DrawStats & stats = ps2::view::GetStats();
-    const ps2::rc::DrawStats & rcStats = ps2::rc::GetStats();
+    const ps2::rs::DrawStats & rcStats = ps2::rs::GetStats();
     const ps2::lm::Stats & lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
@@ -431,7 +431,7 @@ void DrawDrawStatsOverlay()
         // overlay in practice, since the clear is a fixed ~30. It is a slice of
         // ChainCap below rather than a budget of its own, so what it says is how
         // much of a chain half a full console wants on top of the world.
-        { "Gif2DPk", ps2::rc::Gif2DPeakQwords() },
+        { "Gif2DPk", ps2::rs::Gif2DPeakQwords() },
         // The frame DMA chain: high-water in KB against its capacity, how many
         // times it was kicked last frame, and how many of those kicks were the
         // overflow emergency rather than the end of the frame. One kick and zero
@@ -451,7 +451,7 @@ void DrawDrawStatsOverlay()
     const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
 
     // A black background to give the text more contrast.
-    ps2::rc::FillRect(0, 0, kPanelWidth, panelHeight, 0, 0, 0, 255);
+    ps2::rs::FillRect(0, 0, kPanelWidth, panelHeight, 0, 0, 0, 255);
 
     const int textX = kPadding;
     int textY = kPadding;
@@ -541,7 +541,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
 #if !PS2_QUAKE_DEBUG
     // Default clear color to black in release builds.
-    ps2::rc::SetClearColor(0, 0, 0);
+    ps2::rs::SetClearColor(0, 0, 0);
 #endif // PS2_QUAKE_DEBUG
 
     Com_DPrintf("PS2 refresh initialised: %dx%d\n", viddef.width, viddef.height);
@@ -640,7 +640,7 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::rc::DrawTexturedRect(texture, x, y, w, h, 0, 0,
+    ps2::rs::DrawTexturedRect(texture, x, y, w, h, 0, 0,
                               texture.width, texture.height, kUiBrightness);
 }
 
@@ -649,7 +649,7 @@ void PS2_DrawPic(int x, int y, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    ps2::rc::DrawTexturedRect(texture, x, y, texture.width, texture.height,
+    ps2::rs::DrawTexturedRect(texture, x, y, texture.width, texture.height,
                               0, 0, texture.width, texture.height, kUiBrightness);
 }
 
@@ -666,7 +666,7 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
     // Tiles the image over the given screen rectangle: texels are addressed in
     // screen space and wrap via the REPEAT mode set up in gs::Init().
     (void)name; // Quake only ever tiles "backtile" here.
-    ps2::rc::DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
+    ps2::rs::DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
 }
 
 void PS2_DrawFill(int x, int y, int w, int h, int c)
@@ -677,13 +677,13 @@ void PS2_DrawFill(int x, int y, int w, int h, int c)
     const u8  r = static_cast<u8>(p & 0xFFu);
     const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
     const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
-    ps2::rc::FillRect(x, y, w, h, r, g, b, 255);
+    ps2::rs::FillRect(x, y, w, h, r, g, b, 255);
 }
 
 void PS2_DrawFadeScreen()
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
-    ps2::rc::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
+    ps2::rs::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -713,7 +713,7 @@ void PS2_BeginFrame(float cameraSeparation)
     (void)cameraSeparation;
 
     // Close the frame the profile probes have been charging into, before any of
-    // this frame's work is measured, and before rc::BeginFrame below opens the
+    // this frame's work is measured, and before rs::BeginFrame below opens the
     // vsync probe. This has to happen here rather than at the end of
     // PS2_EndFrame: the Frame scope around Qcommon_Frame closes after it, and
     // would otherwise be charged to the frame after the one it measured,
@@ -723,14 +723,14 @@ void PS2_BeginFrame(float cameraSeparation)
     ps2::debug::ProfileNewFrame();
 
     // Snapshot that finished frame for the CSV log. Must sit between the
-    // rollover above and rc::BeginFrame below, which is where the draw-stat and
+    // rollover above and rs::BeginFrame below, which is where the draw-stat and
     // submitted-byte counters it reads get cleared.
     ps2::debug::FrameLogCapture();
 
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
-    // each 2D->3D boundary and in rc::EndFrame().
-    ps2::rc::BeginFrame(/*dither=*/s_enableDither->value != 0.0f);
+    // each 2D->3D boundary and in rs::EndFrame().
+    ps2::rs::BeginFrame(/*dither=*/s_enableDither->value != 0.0f);
 }
 
 void PS2_EndFrame()
@@ -744,7 +744,7 @@ void PS2_EndFrame()
     // VU1 bring-up scene (cvar "ps2_testcube 1"): a 3D draw, so it flushes the
     // 2D overlay accumulated above and lands on top - staying visible over the
     // fullscreen console Quake forces while disconnected (its batch programs
-    // its own z-test). rc::EndFrame() then sends any remaining 2D and flips.
+    // its own z-test). rs::EndFrame() then sends any remaining 2D and flips.
     ps2::test::DrawRotatingCube();
 
     // Memory smoke test (cvar "ps2_testmaps 1"): loads every stock map in unit
@@ -767,7 +767,7 @@ void PS2_EndFrame()
     // zero in a release-style configuration.
     DrawDebugOverlays();
 
-    ps2::rc::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
 }
 
 void PS2_RenderFrame(refdef_t * viewDef)

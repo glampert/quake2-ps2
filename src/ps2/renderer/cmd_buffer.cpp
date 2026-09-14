@@ -54,7 +54,7 @@ static int s_reserveEnd = 0;
 // DMAC: reading CHCR goes over the bus and interrupts the transfer in progress, which is the
 // reason both reference implementations (ps2gl, ps2stuff) double-buffer instead of chasing it.
 //
-// It now outlives the frame that set it: under rc::EndFrame's deferred path a frame is kicked
+// It now outlives the frame that set it: under rs::EndFrame's deferred path a frame is kicked
 // and left to draw while the EE builds the next one, so this is the flag that says "the GS is
 // still working on an earlier frame" to everything that has to care - see WaitIdle.
 static bool s_kickInFlight = false;
@@ -202,7 +202,7 @@ void BeginFrame()
     PS2_AssertMsg(static_cast<int>(packet2_get_qw_count(Current())) == s_kickedQwords,
                   "cmdbuf::BeginFrame with work in the half nothing ever kicked!");
 
-    // A no-op in practice, and deliberately not relied on to be: rc::BeginFrame fences the
+    // A no-op in practice, and deliberately not relied on to be: rs::BeginFrame fences the
     // previous frame before it gets here, because the framebuffer flip has to happen before
     // anything of this frame reaches the GS. This is the backstop for that - the half about to
     // be rewound must not be one the DMAC is still walking.
@@ -295,7 +295,7 @@ void * detail::AllocQwords(const int qwords, const bool committable)
     // An allocation fronts itself with a NEXT tag, which has to be part of the tag stream
     // rather than of somebody else's payload - so nothing may have a tag open here. In practice
     // that means a pending 2D batch: rc's FlushPending2D closes it, and the rule is that whoever
-    // claims the buffer calls it first (see rc::TriangleStream), not that the draw eventually will.
+    // claims the buffer calls it first (see rs::TriangleStream), not that the draw eventually will.
     PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
                   "cmdbuf::Alloc inside an open tag - close the pending 2D batch before claiming the chain!");
 

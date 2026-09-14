@@ -11,7 +11,7 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/math/vec_mat.h"
 
 namespace ps2::test {
@@ -53,12 +53,12 @@ constexpr int kMaxTess = 8;
 constexpr int kMaxFaceVerts = kMaxTess * kMaxTess * 6;
 
 // Per-vertex attributes for the ps2_testcube_vulerp path, standing in for the baked vertex array
-// an MD2 hands rc::LerpStream: every face tessellates the same grid, so all six draws point at
+// an MD2 hands rs::LerpStream: every face tessellates the same grid, so all six draws point at
 // this one copy and the stream gathers nothing but positions, exactly as it does for a model.
 //
 // Static rather than gathered into the command buffer for the same reason a model's vertices are:
 // the chain only ever references it. Rebuilt at the top of each cube, which is safe because
-// rc::BeginFrame fences the previous frame before anything of this one is built.
+// rs::BeginFrame fences the previous frame before anything of this one is built.
 static vu1::LerpDrawAttrib s_faceAttribs[kMaxFaceVerts];
 
 // Walks the tess x tess grid of quads covering a face and hands 'emitTriangle' the (u, v) of
@@ -124,8 +124,8 @@ void EmitVertex(vu1::DrawVertex & vert, const int corners[4], float u, float v)
 
 // Gathers a tess x tess grid of quads (two triangles each) covering the face into the stream.
 // Tess 1 is the plain 2-triangle face; 5+ exceeds vu1::kMaxVertsPerBatch and so exercises the
-// chunked submission path behind rc::TriangleStream::Flush.
-void EmitFace(rc::TriangleStream & trisStream, const int corners[4], const int tess)
+// chunked submission path behind rs::TriangleStream::Flush.
+void EmitFace(rs::TriangleStream & trisStream, const int corners[4], const int tess)
 {
     ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
     {
@@ -162,7 +162,7 @@ void QuantizeVertex(vu1::LerpVertexBytes & dst, const int corners[4], const floa
 
 // The same grid through the MD2 keyframe path: only the quantized positions are gathered, and
 // the attributes come from s_faceAttribs.
-void EmitFaceLerped(rc::LerpStream & lerpStream, const int corners[4], const int tess)
+void EmitFaceLerped(rs::LerpStream & lerpStream, const int corners[4], const int tess)
 {
     ForEachFaceTriangle(tess, [&](float ua, float va, float ub, float vb, float uc, float vc)
     {
@@ -313,7 +313,7 @@ void DrawRotatingCube()
     {
         BuildFaceAttribs(tess);
 
-        auto lerpStream = rc::Begin<rc::LerpStream>(kMaxFaceVerts);
+        auto lerpStream = rs::Begin<rs::LerpStream>(kMaxFaceVerts);
 
         for (int face = 0; face < 6; ++face)
         {
@@ -326,11 +326,11 @@ void DrawRotatingCube()
             EmitFaceLerped(lerpStream, kFaces[face], tess);
         }
 
-        rc::Submit(lerpStream);
+        rs::Submit(lerpStream);
     }
     else
     {
-        auto trisStream = rc::Begin<rc::TriangleStream>(kMaxFaceVerts);
+        auto trisStream = rs::Begin<rs::TriangleStream>(kMaxFaceVerts);
 
         for (int face = 0; face < 6; ++face)
         {
@@ -341,7 +341,7 @@ void DrawRotatingCube()
             EmitFace(trisStream, kFaces[face], tess);
         }
 
-        rc::Submit(trisStream);
+        rs::Submit(trisStream);
     }
 }
 

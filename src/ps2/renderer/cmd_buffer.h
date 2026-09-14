@@ -20,7 +20,7 @@
  *      |-- MSCAL         -- run the microprogram                /
  *      |-- ... ~130 more chunks ...
  *      |-- DIRECT block  -- the 2D/HUD overlay
- *      `-- FLUSH + FINISH + END -- the terminator, appended by the one kick at rc::EndFrame
+ *      `-- FLUSH + FINISH + END -- the terminator, appended by the one kick at rs::EndFrame
  *
  *  Where the memory comes from: both halves live inside the world loader's lump scratch
  *  (mod::WorldScratchBlock), which is claimed only while a .bsp is being parsed and is dead
@@ -66,7 +66,7 @@ void Init();
 void BeginFrame();
 
 // Rolls the high-water marks and latches the per-frame counters the overlay reads. Does not
-// kick: terminating and submitting the frame's chain is the caller's call (see rc::EndFrame).
+// kick: terminating and submitting the frame's chain is the caller's call (see rs::EndFrame).
 void EndFrame();
 
 namespace detail {
@@ -231,7 +231,7 @@ void Commit(T * const base, const int usedCount)
 // behind it, writes the data cache back, and kicks it at VIF1. Does nothing when nothing new has
 // been built.
 //
-// **Fire and forget.** Nothing here waits, which is what lets rc::EndFrame leave a frame drawing
+// **Fire and forget.** Nothing here waits, which is what lets rs::EndFrame leave a frame drawing
 // while the EE builds the next one. What it does wait for is an *earlier* kick that nothing has
 // fenced yet - one chain at a time on the channel, and one frame at a time at the GS.
 //

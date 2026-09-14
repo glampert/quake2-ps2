@@ -4,7 +4,7 @@
  * Brief: GS VRAM texture heap: tracks which textures are resident in the VRAM left
  *        over after the framebuffers and z-buffer, handing out space on demand and
  *        evicting the least-recently-bound textures when full. Pure bookkeeping -
- *        the DMA uploads and GS synchronisation stay with rc::EnsureTextureResident.
+ *        the DMA uploads and GS synchronisation stay with rs::EnsureTextureResident.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -24,7 +24,7 @@ enum struct Address : int
 void Init(int heapBaseWords);
 
 // Advances the LRU clock and resets the per-frame counters (see GetStats).
-// Call once per frame, from rc::BeginFrame().
+// Call once per frame, from rs::BeginFrame().
 void BeginFrame();
 
 // VRAM words the texture occupies: the whole GS page grid it covers. libgraph's
@@ -46,7 +46,7 @@ int HeapTotalWords();
 // Failure is not fatal and not the end of the road: the caller fences the GS -
 // sending the frame's chain so far and waiting for it, which is what the this-frame
 // protection guards against - then calls UnpinAll and retries, then Defragment and
-// retries. See rc::EnsureTextureResident.
+// retries. See rs::EnsureTextureResident.
 Address TryAllocate(const tex::Texture & texture, int sizeWords);
 
 // Drops the this-frame eviction protection from every resident texture, making

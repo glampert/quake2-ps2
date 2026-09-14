@@ -7,7 +7,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/render_profile.h"
-#include "ps2/renderer/render_context.h"
+#include "ps2/renderer/render_system.h"
 #include "ps2/renderer/render_view.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/lightmap.h"
@@ -219,7 +219,7 @@ void FrameLogCapture()
     }
 
     // All of these still hold the finished frame's values here: the view counters are cleared at
-    // the top of view::RenderFrame, the submission counters by rc::BeginFrame and the lightmap
+    // the top of view::RenderFrame, the submission counters by rs::BeginFrame and the lightmap
     // ones by lm::BeginFrame, none of which has run yet for the new frame.
     const view::DrawStats & d = view::GetStats();
     s.nodes          = d.nodesWalked;
@@ -231,7 +231,7 @@ void FrameLogCapture()
     s.entities       = d.entities;
     s.dlights        = d.dlights;
 
-    const rc::DrawStats & r = rc::GetStats();
+    const rs::DrawStats & r = rs::GetStats();
     s.tris        = r.trisDrawn;
     s.trisClipped = r.trisClipped;
     s.trisCulled  = r.trisCulled;

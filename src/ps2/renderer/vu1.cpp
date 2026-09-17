@@ -28,7 +28,7 @@ PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LitTriangles);
 
 namespace {
 
-// VU1 micro memory, in the 64-bit instruction units MPG destinations count in (4 KB / 8 bytes).
+// VU1 micro memory, in the 64-bit instruction units MPG destinations count in (16 KB / 8 bytes).
 constexpr u32 kMicroMemInstructions = 2048;
 
 // Micro memory entry point of each program, indexed by Program. Set by Init().

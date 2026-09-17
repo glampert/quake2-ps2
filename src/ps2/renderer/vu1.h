@@ -242,7 +242,7 @@ static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole nu
 // lie. Lane 0 is whatever the source left there and the microprogram never reads it.
 struct alignas(16) LerpDrawAttrib
 {
-    u32   unused;  // the source's own business; the microprogram does not read it
+    u32 index;     // the source's own business; the microprogram does not read it
     float s, t, q; // texture coords; q must be 1.0f
 };
 static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qword");

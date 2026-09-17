@@ -1182,6 +1182,9 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
                             const tex::Texture & texture,
                             const SurfaceDrawState & state)
 {
+    PS2_PROFILE_SCOPED_EVENT(prof_evt::TurbSurfs);
+    ++s_drawStats.surfacesTurb;
+
     // SURF_FLOWING drifts the surface along S by a whole 64-texel tile every
     // two seconds. (ref_gl truncates with an int cast; the time is never
     // negative, so this is the same fractional part.)

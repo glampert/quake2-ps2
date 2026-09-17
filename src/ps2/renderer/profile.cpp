@@ -40,10 +40,11 @@ PS2_PROFILE_DEFINE_EVENT(EntShadow,  " Shadow",     kScreenOverlay, 18);
 PS2_PROFILE_DEFINE_EVENT(EntBrush,   " Brush",      kScreenOverlay, 19);
 PS2_PROFILE_DEFINE_EVENT(Particles,  "Particles",   kScreenOverlay, 20);
 PS2_PROFILE_DEFINE_EVENT(AlphaSurfs, "AlphaSurfs",  kScreenOverlay, 21);
-PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",         kScreenOverlay, 22);
-PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",          kScreenOverlay, 23);
-PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",     kScreenOverlay, 24);
-PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",       kScreenOverlay, 25);
+PS2_PROFILE_DEFINE_EVENT(TurbSurfs,  " TurbSurfs",  kScreenOverlay, 22);
+PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",         kScreenOverlay, 23);
+PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",          kScreenOverlay, 24);
+PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",     kScreenOverlay, 25);
+PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",       kScreenOverlay, 26);
 
 } // namespace ps2::prof_evt
 
@@ -62,7 +63,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 26;
+constexpr int kNumEvents = 27;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -71,8 +72,8 @@ struct FrameSample
     u32 frameIndex;
     u32 cycles[kNumEvents];
 
-    // view::DrawStats
-    int nodes, surfs, surfsAlpha, skyFaces, surfsUnclipped;
+    // view::DrawStats/rs::DrawStats
+    int nodes, surfs, surfsAlpha, surfsTurb, surfsUnclipped, skyFaces;
     int tris, trisClipped, trisCulled, boxesCulled;
     int batches, entities, particles, dlights;
 
@@ -131,8 +132,8 @@ void WriteBatch()
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,Sky,Ui,Overlay,Sound,"
-                    "nodes,surfs,surfsAlpha,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,"
+                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,"
+                    "nodes,surfs,surfsAlpha,surfsTurb,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
@@ -161,8 +162,8 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
-                          s.nodes, s.surfs, s.surfsAlpha, s.surfsUnclipped, s.skyFaces,
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.surfsUnclipped, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled, s.boxesCulled,
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
@@ -210,8 +211,8 @@ void FrameLogCapture()
         &prof_evt::MarkLeaves,  &prof_evt::BspWalk,    &prof_evt::LmChain,   &prof_evt::TexChains,
         &prof_evt::LmChains,    &prof_evt::Entities,   &prof_evt::EntCull,   &prof_evt::EntShade,
         &prof_evt::EntColorLUT, &prof_evt::EntGeom,    &prof_evt::EntShadow, &prof_evt::EntBrush,
-        &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::Sky,       &prof_evt::Ui,
-        &prof_evt::Overlay,     &prof_evt::Sound,
+        &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
+        &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {
@@ -225,6 +226,7 @@ void FrameLogCapture()
     s.nodes          = d.nodesWalked;
     s.surfs          = d.surfaces;
     s.surfsAlpha     = d.surfacesAlpha;
+    s.surfsTurb      = d.surfacesTurb;
     s.surfsUnclipped = d.surfsUnclipped;
     s.skyFaces       = d.skyFaces;
     s.boxesCulled    = d.boxesCulled;

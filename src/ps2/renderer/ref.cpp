@@ -409,6 +409,7 @@ void DrawDrawStatsOverlay()
         { "Nodes",   stats.nodesWalked    },
         { "Surfs",   stats.surfaces       },
         { "Alpha",   stats.surfacesAlpha  },
+        { "Turb",    stats.surfacesTurb   },
         { "NoClip",  stats.surfsUnclipped },
         { "Sky",     stats.skyFaces       },
         { "Tris",    rcStats.trisDrawn    },

@@ -42,6 +42,8 @@ enum class DrawFlags : u32
     DepthHack     = 1 << 4, // Squeeze depth into the near slice of the z-buffer (RF_DEPTHHACK).
     NoDepthWrite  = 1 << 5, // Mask depth writes alone, without a blend equation or the ABE bit.
     DynamicLights = 1 << 6, // Run the lit microprogram; colour comes from SetDynamicLights.
+    Warped        = 1 << 7, // Run the warp microprogram: UVs arrive in raw texels and animate on VU1.
+    WarpFlowing   = 1 << 8, // With Warped: also drift the surface along S (SURF_FLOWING).
 };
 
 constexpr DrawFlags operator|(DrawFlags a, DrawFlags b)
@@ -134,11 +136,17 @@ void EnsureTextureResident(const tex::Texture & texture);
 // before any drawing. vu1::Init is the only caller.
 // References a microprogram into the chain as MPG transfers (chunked to the VIF's
 // 256-instruction limit).
-void AddMicroProgram(vu1::ProgramAddr dest, vu1::VUCode code);
+void AddVUMicroProgram(vu1::ProgramAddr dest, vu1::VUCode code);
 
 // Programs the VIF1 BASE/OFFSET registers that split VU data memory into the two halves XTOP
 // alternates between. Both in qwords.
-void AddDoubleBufferSettings(u32 baseQw, u32 offsetQw);
+void AddVUDoubleBufferSettings(u32 baseQw, u32 offsetQw);
+
+// Unpacks a block of constants to an absolute VU data address, for blocks that are the same for
+// the life of the process and so never need re-sending with a draw. 'data' is referenced, not
+// copied, so it must outlive the kick - a static or a literal in .rodata, as the microprogram
+// code above is. 16-byte aligned, size in qwords.
+void AddVUDataUpload(u32 vuAddrQw, const void * data, u32 qwords);
 
 // ------------------------------------------------------------------------------------------------
 // Triangle Streams lifecycle
@@ -285,6 +293,14 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 // Colours are pre-scaled to the GS 0-255 range and pre-divided by the radius squared here, which
 // reduces the microprogram's attenuation to one multiply-add with no divide or square root.
 void SetDynamicLights(const vu1::DynamicLight * lights, int count);
+
+// The frame's turbulent surface animation, shared by every batch drawn with DrawFlags::Warped
+// until the next call. 'phaseTurns' is the elapsed time as a fraction of a full sine period,
+// wrapped into [0, 1) by the caller so it stays precise however long the session has run;
+// 'scrollTexels' is SURF_FLOWING's whole-tile drift, applied only to batches that also carry
+// DrawFlags::WarpFlowing. The rest of what the warp needs is per texture, and the chunk emitter
+// takes it from the batch's own texture.
+void SetWarpAnimation(float phaseTurns, float scrollTexels);
 
 // ------------------------------------------------------------------------------------------------
 // Vertex streams

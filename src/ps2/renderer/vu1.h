@@ -47,6 +47,7 @@ enum class Program
     Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
     Particles, // camera-facing billboards expanded to GS sprites
     Lit,       // world geometry, with the vertex colour computed from the frame's dynamic lights
+    Warped,    // turbulent surfaces: the textured path with ref_gl's warp animation on the VU
 
     Count      // Number of VU1 programs - not valid for ProgramAddress.
 };
@@ -64,6 +65,7 @@ void Init();
 //      0-7       the frame constants below
 //      8-999     the two XTOP double buffers (VIF1 BASE=8, OFFSET=496)
 //      1000-1011 the dynamic light block
+//      1012-1013 the turbulent surface constants
 // ------------------------------------------------------------------------------------------------
 
 // Frame constants at fixed low VU addresses (below kDoubleBufferBase).
@@ -97,7 +99,9 @@ constexpr float kGuardBandNdcLimit = 0.8f;
 // planes, z scale 1) are dropped whole via the ADC bit.
 constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
 
-// Values FrameConstants::clipScale and ::colorClamp are always set to.
+// Values FrameConstants::clipScale and ::colorClamp are always set to. clipScale's .w is the
+// exception: no program reads it as part of the clip judgement, so the turbulent animation phase
+// rides there instead and BeginDrawChain fills it per frame (see rs::SetWarpAnimation).
 constexpr math::Vec4 kClipScale  = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
 constexpr math::Vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
 
@@ -110,6 +114,10 @@ struct alignas(16) FrameConstants
     math::Mat4 mvp;
     math::Vec4 gsScale;
     math::Vec4 gsOffset;
+
+    // .xyz is the guard band scale (kClipScale); .w is the frame's turbulent animation phase,
+    // in turns, which only warped_triangles.vcl reads. A spare lane rather than a ninth qword
+    // because this block cannot grow without moving the double buffers.
     math::Vec4 clipScale;
 
     // The ceiling a computed vertex color is clamped to before ftoi0 packs it
@@ -183,6 +191,63 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
         : "r" (&src), "r" (&dst), "m" (src)
         : "$8", "$9");
 }
+
+// ------------------------------------------------------------------------------------------------
+// Turbulent (warped) surfaces, must match warped_triangles.vcl
+// ------------------------------------------------------------------------------------------------
+
+// The warp program takes the *same* batch layout as the textured one - same header, same GIF tag
+// block, same kMaxVertsPerBatch - so it shares the chunk emitter and the chain budget. It differs
+// only in what it reads: the header's three spare lanes carry this batch's texture size and scroll
+// (AddBatchChunk fills them), FrameConstants::clipScale.w the frame's phase, and the block below
+// the shape of the sine itself.
+
+// ref_gl's r_turbsin amplitude (gl_warp.c, values in warpsin.h): 8*sin(i*2pi/256), halved once at
+// startup by R_Init, so the effective amplitude is 4 texels. Folded into the polynomial terms
+// below rather than multiplied on separately.
+constexpr float kTurbSinAmplitude = 4.0f;
+
+// ref_gl divides a vertex's texel coordinate by 8 before taking its sine. The microprogram carries
+// phase in turns rather than radians - the range reduction wants a fraction anyway - so the 2pi
+// goes in here, where it costs nothing, instead of in the VU.
+constexpr float kTurbTurnsPerTexel = 0.125f / (2.0f * math::kPI);
+
+// The bias that makes the microprogram's ftoi0 a floor *and* a round-to-nearest in one step: it
+// truncates toward zero, so the phase is lifted clear of zero first and the half lands the
+// rounding. Correct while |phase| stays under 1024 turns, which texel coordinates would have to
+// pass ~51k to break (the frame's own phase is pre-wrapped into [0, 1) by rs::SetWarpAnimation).
+constexpr float kTurbPhaseBias = 1024.5f;
+
+// Odd Taylor terms of sin(2pi*t) with the amplitude folded in, for |t| <= 0.25 turns - the range
+// the microprogram's triangle fold leaves. Degree 7 is good to ~0.002 texels against a true sine,
+// where the 256-entry table this replaces was only good to 0.098.
+//
+// t is in turns, so every power of the radian argument carries its own power of 2pi.
+constexpr float kTurbTau = 2.0f * math::kPI;
+constexpr float kTurbPoly1 =  kTurbSinAmplitude * kTurbTau;
+constexpr float kTurbPoly3 = -kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTau) / 6.0f;
+constexpr float kTurbPoly5 =  kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau) / 120.0f;
+constexpr float kTurbPoly7 = -kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau) / 5040.0f;
+
+// VU data address of the warp constant block. Above the double buffers (which end at 1000) and the
+// light block (1000-1011), in the last qwords of VU1 data memory, so it costs no vertex capacity.
+constexpr int kWarpConstBlockAddr = 1012;
+
+// The warp constants as the microprogram reads them. Uploaded once by Init and never rewritten -
+// everything here is a compile-time constant; what varies per frame or per batch travels in
+// FrameConstants::clipScale.w and the batch header.
+struct alignas(16) WarpConstants
+{
+    math::Vec4 fold; // (phase bias, 0.5, turns per texel, unused)
+    math::Vec4 poly; // the four odd sine terms, amplitude folded in
+};
+static_assert(sizeof(WarpConstants) == 2 * 16, "Must match the VU memory layout");
+static_assert(kWarpConstBlockAddr + 2 <= 1024, "Warp constants overrun VU1 data memory");
+
+constexpr WarpConstants kWarpConstants = {
+    { kTurbPhaseBias, 0.5f, kTurbTurnsPerTexel, 0.0f },
+    { kTurbPoly1, kTurbPoly3, kTurbPoly5, kTurbPoly7 }
+};
 
 // ------------------------------------------------------------------------------------------------
 // Keyframe-lerped triangles (MD2 alias models), must match lerped_triangles.vcl

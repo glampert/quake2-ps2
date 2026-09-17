@@ -448,6 +448,17 @@ void SetupFrame(const refdef_t & viewDef)
     s_frameTime        = viewDef.time;
     s_textureAnimFrame = static_cast<int>(viewDef.time * 2.0f);
 
+    // Turbulent surfaces animate on the VU (warped_triangles.vcl), so the frame's two animation
+    // terms go over once here rather than being folded into every vertex.
+    //
+    // The phase travels in turns and pre-wrapped, which keeps it precise however long the session
+    // has run - ref_gl hands its table a raw, ever-growing 'time' and leans on the integer mask to
+    // bring it back. SURF_FLOWING's drift is a whole 64-texel tile every two seconds; the batches
+    // that take it are the ones flagged rs::DrawFlags::WarpFlowing.
+    const float warpTurns = s_frameTime * (1.0f / (2.0f * math::kPI));
+    const float halfTime  = s_frameTime * 0.5f;
+    rs::SetWarpAnimation(warpTurns - std::floor(warpTurns), -64.0f * (halfTime - std::floor(halfTime)));
+
     // Camera basis vectors from the view angles.
     math::AngleVectors(viewDef.viewangles, s_forwardVec, s_rightVec, s_upVec);
 
@@ -951,11 +962,10 @@ Q_ALWAYS_INLINE void ApplyDrawState(const SurfaceDrawState & state, const tex::T
 }
 
 // Every vertex the polygon being gathered can emit, already in the form the
-// batch wants. Filled by EmitPolyTrianglesUnclipped and by the warp path, which
-// never overlap: a polygon is finished before the next one starts. File level
-// rather than a local because 128 entries is 4 KB of stack, and gathers never
-// interleave - the same single-caller-at-a-time discipline clip::Scratch relies
-// on. mod::kTriangulationMaxVerts bounds both fillers (kMaxWarpPolyVerts is 66).
+// batch wants. Filled by EmitPolyTrianglesUnclipped, and bounded by
+// mod::kTriangulationMaxVerts as it is. File level rather than a local because
+// 128 entries is 4 KB of stack, and gathers never interleave - the same
+// single-caller-at-a-time discipline clip::Scratch relies on.
 static vu1::DrawVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
 
 // Fills s_polyVertexCache with the polygon's vertices as the batch wants them.
@@ -1141,120 +1151,71 @@ void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & s
 // Turbulent (warped) surfaces: water, lava, slime
 // ------------------------------------------------------------------------------------------------
 
-// ref_gl's r_turbsin lookup (gl_warp.c, values in warpsin.h): 8*sin(i*2pi/256),
-// halved once at startup by R_Init, so the effective amplitude is 4 texels.
-// Built at init rather than copied in - it is a pure function of the index,
-// and this is more accurate than the 6-significant-digit literals ref_gl ships.
-constexpr int kTurbSinSize = 256;
-constexpr float kTurbSinAmplitude = 4.0f;
-static float s_turbSin[kTurbSinSize];
-
-// Phase to table index: the table spans exactly one period (ref_gl's TURBSCALE).
-constexpr float kTurbScale = static_cast<float>(kTurbSinSize) / (2.0f * math::kPI);
-
 // A subdivided warp polygon is a fan: a centre vertex, the ring, then a
 // duplicate of the first to close it. SubdividePolygon splits at 64-unit
 // boundaries, so a leaf never exceeds that many ring vertices.
 constexpr int kMaxWarpPolyVerts = 64 + 2;
 
-Q_ALWAYS_INLINE float TurbSin(const float phase)
-{
-    // Truncation toward zero and a two's complement mask, exactly as ref_gl
-    // indexes the table - negative phases included.
-    const int index = static_cast<int>(phase * kTurbScale) & (kTurbSinSize - 1);
-    return s_turbSin[index];
-}
-
-// Gathers a turbulent surface with ref_gl's warp animation (EmitWaterPolys):
-// every vertex's texture coordinates are pushed around by a sine of the
-// *other* axis plus time, which is what makes the surface ripple while the
-// geometry stays put.
+// Gathers a turbulent surface. The warp animation itself - ref_gl's
+// EmitWaterPolys, where every vertex's texture coordinates are pushed around by
+// a sine of the *other* axis plus time, which is what makes the surface ripple
+// while the geometry stays put - happens on the VU, in warped_triangles.vcl.
+// What is left here is the fan walk.
 //
 // These polygons are shaped differently from ordinary ones, so this cannot go
 // through GatherPolyTriangles: the loader's SubdivideSurface leaves each as a
 // fan with no triangle list at all (reading poly.triangles would dereference
 // null), and with texture coordinates still in raw texel units. Both follow
 // ref_gl, whose GL_SubdivideSurface builds fans for glBegin(GL_TRIANGLE_FAN)
-// and leaves the texel-to-image division to EmitWaterPolys.
+// and leaves the texel-to-image division to EmitWaterPolys - which is now the
+// microprogram's last step rather than this function's.
 //
-// TODO: Consider moving the polygon warping work to the VU1.
-void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
-                            const tex::Texture & texture,
-                            const SurfaceDrawState & state)
+// Raw texel units are exactly what the warp wants: the sine takes the texel
+// coordinate, not the normalized one. So nothing here has to touch a vertex at
+// all, and both paths below hand over the loader's own memory - see
+// rs::DrawFlags::Warped for the batch state that goes with it.
+void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawState & state)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::TurbSurfs);
     ++s_drawStats.surfacesTurb;
 
-    // SURF_FLOWING drifts the surface along S by a whole 64-texel tile every
-    // two seconds. (ref_gl truncates with an int cast; the time is never
-    // negative, so this is the same fractional part.)
-    float scroll = 0.0f;
-    if (surf.texInfo->flags & SURF_FLOWING)
-    {
-        const float halfTime = s_frameTime * 0.5f;
-        scroll = -64.0f * (halfTime - std::floor(halfTime));
-    }
-
-    // ref_gl divides by a hardcoded 64 at this point. Every warp texture in
-    // pak0 is 64x64, so these agree on the real data, and this one stays
-    // right if some mod ships another size. The size on disk, like the BSP's
-    // own texture coordinates: a stretched wall still tiles at its original
-    // size (see tex::Texture::srcWidth).
-    const float invWidth  = 1.0f / static_cast<float>(texture.srcWidth);
-    const float invHeight = 1.0f / static_cast<float>(texture.srcHeight);
-
-    // Hoisted for the same reason BuildPolyVertexCache hoists its state: the
-    // build below stores through a vu1::DrawVertex, and under
-    // -fno-strict-aliasing the compiler would otherwise reload both per vertex.
-    const u32   rgba = state.rgba;
-    const float time = s_frameTime;
-
     for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
     {
-        const int numVerts = poly->numVerts;
-        if (numVerts < 3) // Need at least one triangle.
-        {
-            continue;
-        }
-        PS2_AssertMsg(numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
-
-        // Built once per vertex: the fan below reads each of them twice. The
-        // whole emitted vertex rather than just the warped coordinates, so the
-        // unclipped path can copy it straight into the batch.
-        for (int i = 0; i < numVerts; ++i)
-        {
-            const mod::PolyVertex & src = poly->vertexes[i];
-            const float os = src.s;
-            const float ot = src.t;
-
-            vu1::DrawVertex & dst = s_polyVertexCache[i];
-            dst.x    = src.position.x;
-            dst.y    = src.position.y;
-            dst.z    = src.position.z;
-            dst.w    = 1.0f;
-            dst.rgba = rgba;
-            dst.s    = (os + TurbSin((ot * 0.125f) + time) + scroll) * invWidth;
-            dst.t    = (ot + TurbSin((os * 0.125f) + time)) * invHeight;
-            dst.q    = 1.0f;
-        }
+        PS2_AssertMsg(poly->numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
 
         // Same fan either way - vertex 0, then each adjacent pair round the ring.
-        const int numTriangles = numVerts - 2;
+        const int numTriangles = poly->numVerts - 2;
 
         if (state.skipClipping)
         {
+            // The loader's vertices, straight into the batch. The warp program
+            // reads neither .w nor .q - it scales the MVP's translation row by a
+            // hardwired 1.0 and synthesises Q from the divide - so the lightmap
+            // coordinates PolyVertex parks in those two lanes ride along unread,
+            // and the colour the bake left is already the one this pass draws.
+            const vu1::DrawVertex * const src = AsDrawVertices(poly->vertexes);
+
             for (int t = 0; t < numTriangles; ++t)
             {
                 state.stream->BeginVerts(3);
 
                 vu1::DrawVertex * const dst = state.stream->PushTriangle();
-                vu1::CopyDrawVertex(dst[0], s_polyVertexCache[0]);
-                vu1::CopyDrawVertex(dst[1], s_polyVertexCache[t + 1]);
-                vu1::CopyDrawVertex(dst[2], s_polyVertexCache[t + 2]);
+                vu1::CopyDrawVertex(dst[0], src[0]);
+                vu1::CopyDrawVertex(dst[1], src[t + 1]);
+                vu1::CopyDrawVertex(dst[2], src[t + 2]);
             }
             continue;
         }
 
+        // Clipped, for a surface that straddles the volume the VU judges - which
+        // water routinely does, since the camera is often inside it and the VU
+        // drops a triangle crossing the near plane whole rather than cutting it.
+        //
+        // The clipper carries the raw texel coordinates untouched and the VU
+        // warps whatever survives. That is not merely equivalent to warping
+        // first: the coordinates are linear in clip space, so a cut interpolates
+        // them exactly, and the ripple is then evaluated at the vertex that is
+        // really there instead of being lerped after the fact.
         for (int t = 0; t < numTriangles; ++t)
         {
             const int fan[3] = { 0, t + 1, t + 2 };
@@ -1262,8 +1223,8 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf,
             ClipVertex corners[3];
             for (int c = 0; c < 3; ++c)
             {
-                const vu1::DrawVertex & src = s_polyVertexCache[fan[c]];
-                corners[c].pos = { src.x, src.y, src.z, 1.0f };
+                const mod::PolyVertex & src = poly->vertexes[fan[c]];
+                corners[c].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
                 corners[c].st  = { src.s, src.t, 0.0f, 0.0f };
             }
 
@@ -1578,16 +1539,31 @@ void RenderAlphaSurfaces()
         const int texFlags = entry.surf->texInfo->flags;
         const u32 rgba     = AlphaSurfaceColor(texFlags);
 
-        if (entry.texture != batchTexture || entry.mvp != state.mvp || rgba != state.rgba)
+        // A turbulent surface runs a different microprogram, which wants its UVs in raw texels
+        // rather than normalized - so these two cannot share a batch with the flat translucent
+        // surfaces this pass interleaves them with, nor with each other across the flowing flag.
+        rs::DrawFlags flags = rs::DrawFlags::Blended;
+        if (texFlags & SURF_WARP)
+        {
+            flags = flags | rs::DrawFlags::Warped;
+            if (texFlags & SURF_FLOWING)
+            {
+                flags = flags | rs::DrawFlags::WarpFlowing;
+            }
+        }
+
+        if (entry.texture != batchTexture || entry.mvp != state.mvp
+            || rgba != state.rgba || flags != state.flags)
         {
             // Explicitly, because 'rgba' is gather policy rather than stream state: a run that
             // differs only in colour still has to break here, and the stream setters below would
-            // not know to. Free when the texture or transform changed too - they flush first.
+            // not know to. Free when the texture, transform or flags changed too - they flush first.
             rs::Submit(*state.stream);
 
             batchTexture = entry.texture;
             state.mvp    = entry.mvp;
             state.rgba   = rgba;
+            state.flags  = flags;
             ApplyDrawState(state, *batchTexture);
         }
 
@@ -1600,8 +1576,8 @@ void RenderAlphaSurfaces()
 
         if (texFlags & SURF_WARP)
         {
-            // Turbulent: its own fan walk, its own animated coordinates.
-            DrawAnimatedWaterPolys(*entry.surf, *entry.texture, state);
+            // Turbulent: its own fan walk; the coordinates animate on the VU.
+            DrawAnimatedWaterPolys(*entry.surf, state);
             continue;
         }
 
@@ -2597,13 +2573,6 @@ void Init()
 
     // Already registered by the client; this just resolves the same object.
     s_lightLevel = Cvar_Get("r_lightlevel", "0", 0);
-
-    // ref_gl's r_turbsin, at full precision (see kTurbSinAmplitude).
-    constexpr float kRadiansPerStep = (2.0f * math::kPI) / static_cast<float>(kTurbSinSize);
-    for (int i = 0; i < kTurbSinSize; ++i)
-    {
-        s_turbSin[i] = kTurbSinAmplitude * math::Sinf(static_cast<float>(i) * kRadiansPerStep);
-    }
 
     sky::Init();
     md2::Init();

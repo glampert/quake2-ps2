@@ -639,6 +639,12 @@ namespace {
 // and every draw's opening copies it into the buffer - see BeginDrawChain.
 static vu1::LightConstants s_lightConstants;
 
+// The frame's turbulent surface animation (rs::SetWarpAnimation). The phase goes up with the
+// frame constants every draw chain; the scroll is applied per batch, by the chunk emitter, since
+// only surfaces flagged SURF_FLOWING take it.
+static float s_warpPhaseTurns   = 0.0f;
+static float s_warpScrollTexels = 0.0f;
+
 // Which blend equation the batch's ALPHA register gets. The three flags pick alternatives rather
 // than combine, which this asserts.
 //
@@ -764,8 +770,11 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
     constants->gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
                               depthOffset, 0.0f };
-    constants->clipScale  = vu1::kClipScale;
-    constants->colorClamp = vu1::kColorClamp;
+    // .xyz is the constant guard band scale; .w is the turbulent animation phase, which only
+    // the warp program reads. See the note on vu1::kClipScale.
+    constants->clipScale   = vu1::kClipScale;
+    constants->clipScale.w = s_warpPhaseTurns;
+    constants->colorClamp  = vu1::kColorClamp;
 
     AddUnpackData(vu1::kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
 
@@ -800,11 +809,28 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     PS2_Assert(vertCount > 0 && vertCount <= vu1::kMaxVertsPerBatch && (vertCount % 3) == 0);
     EnsureSpace(kChunkChainQwords);
 
+    const bool lit = HasDrawFlag(flags, DrawFlags::DynamicLights);
+
+    // The warp program shares this layout exactly, and only reads the three header lanes the
+    // others leave zeroed: the texel-to-image divide, taken from the texture's size on disk for
+    // the same reason ref_gl's hardcoded 64 works (see DrawAnimatedWaterPolys), and the frame's
+    // SURF_FLOWING drift for the batches that take it.
+    const bool warped = HasDrawFlag(flags, DrawFlags::Warped);
+
     OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
     {
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
+        if (warped)
+        {
+            AddFloat(1.0f / static_cast<float>(texture.srcWidth));
+            AddFloat(1.0f / static_cast<float>(texture.srcHeight));
+            AddFloat(HasDrawFlag(flags, DrawFlags::WarpFlowing) ? s_warpScrollTexels : 0.0f);
+        }
+        else
+        {
+            AddU32(0);
+            AddU32(0);
+            AddU32(0);
+        }
         AddU32(static_cast<u32>(vertCount));
 
         AddBatchGifTags(texture, drawCtx, vertCount, flags);
@@ -813,8 +839,9 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    AddStartProgram(vu1::ProgramAddress(HasDrawFlag(flags, DrawFlags::DynamicLights)
-                                        ? vu1::Program::Lit : vu1::Program::Textured));
+    AddStartProgram(vu1::ProgramAddress(warped ? vu1::Program::Warped
+                                      : lit    ? vu1::Program::Lit
+                                      : vu1::Program::Textured));
 }
 
 // The lerped equivalent: header (count + the two lerp scale vectors) and GIF tags inline, then the
@@ -1063,6 +1090,12 @@ void SetDynamicLights(const vu1::DynamicLight * lights, const int count)
     s_lightConstants.posZ = { pz[0], pz[1], pz[2], pz[3] };
 }
 
+void SetWarpAnimation(const float phaseTurns, const float scrollTexels)
+{
+    s_warpPhaseTurns   = phaseTurns;
+    s_warpScrollTexels = scrollTexels;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Particles
 // ------------------------------------------------------------------------------------------------
@@ -1112,14 +1145,21 @@ void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp
 // VU1 bring-up
 // ------------------------------------------------------------------------------------------------
 
-void AddMicroProgram(const vu1::ProgramAddr dest, const vu1::VUCode code)
+void AddVUMicroProgram(const vu1::ProgramAddr dest, const vu1::VUCode code)
 {
     packet2_vif_add_micro_program(Packet(), static_cast<u32>(dest), code.start, code.end);
 }
 
-void AddDoubleBufferSettings(const u32 baseQw, const u32 offsetQw)
+void AddVUDoubleBufferSettings(const u32 baseQw, const u32 offsetQw)
 {
     packet2_utils_vu_add_double_buffer(Packet(), static_cast<u16>(baseQw), static_cast<u16>(offsetQw));
+}
+
+void AddVUDataUpload(const u32 vuAddrQw, const void * const data, const u32 qwords)
+{
+    // useTop false: an absolute VU address, not one of the double-buffer halves. Safe without a
+    // FLUSH because the only caller is vu1::Init, where nothing is running yet.
+    AddUnpackData(vuAddrQw, data, qwords, false);
 }
 
 } // namespace ps2::rs

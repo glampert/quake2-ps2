@@ -94,49 +94,28 @@ constexpr int kNotLightmapped = -1;
 // model's glcmds (see LoadAliasMD2Model). Three of these per triangle, in
 // triangle order, so a draw path walks them linearly with no strip/fan state.
 //
-// Deliberately the same 16 bytes as vu1::LerpDrawAttrib, with the keyframe index
-// where that struct keeps its packed color: the draw loop copies the whole qword
-// into the batch's attribute slot and then overwrites lane 0 with the shaded
-// color, so the index costs nothing to store and nothing to strip back out.
+// It *is* the microprogram's attribute qword, not a copy of its shape: the
+// keyframe index lives where the draw later wants the shaded colour, so the
+// loader's array goes to the DMA where it lies and the draw loop overwrites
+// lane 0 in place rather than gathering a second buffer.
 //
-struct alignas(16) AliasVertex
-{
-    u32 index;  // into the keyframe vertex array; becomes rgba at draw time
-    float s, t; // normalized skin coords, exactly as the glcmds held them
-    float q;    // always 1.0f
-};
-
-static_assert(sizeof(AliasVertex) == 16, "AliasVertex must match vu1::LerpDrawAttrib!");
+using AliasVertex = vu1::LerpDrawAttrib;
 
 //
-// Vertex format used by ModelPoly - laid out as a vu1::DrawVertex so the world
-// passes copy it into a batch rather than building one out of it.
+// Vertex format used by ModelPoly, and likewise the batch's own: a world
+// polygon is handed to the DMA exactly as the loader baked it.
 //
 // The two sets of texture coordinates are what makes that a tight fit. A world
 // vertex needs position (12), diffuse ST (8), colour (4) and lightmap ST (8) -
-// exactly 32 bytes, exactly what DrawVertex is. The lightmap pair goes in the two
-// lanes DrawVertex holds constants in: the microprograms synthesise both (the MVP
-// row is scaled by vf00's hardwired 1.0, and Q comes from the reciprocal, not from
-// the vertex), so nothing reads them off the wire.
+// exactly 32 bytes, exactly what a DrawVertex is. The lightmap pair occupies the
+// two lanes no microprogram reads; see vu1::DrawVertex for why they are spare.
 //
-struct alignas(16) PolyVertex
-{
-    // Model position - the same three floats DrawVertex opens with. Where that
-    // struct keeps w, this keeps half of the lightmap coordinate pair.
-    Vec3  position;
-    float lightmap_s;
-
-    // Baked at load: the luxel chroma this vertex sits on for a lit surface, the
-    // surface's flat blend colour for a translucent or turbulent one, and the
-    // modulate identity for everything else. Only changes when the surface's
-    // luxels are rebaked, which for static lighting is never.
-    u32 rgba;
-
-    // Diffuse texture coordinates, and - where DrawVertex keeps q - the other half
-    // of the lightmap pair.
-    float s, t;
-    float lightmap_t;
-};
+// PolyVertex::rgba is baked at load: the luxel chroma this vertex sits on for a
+// lit surface, the surface's flat blend colour for a translucent or turbulent
+// one, and the modulate identity for everything else. It only changes when the
+// surface's luxels are rebaked, which for static lighting is never.
+//
+using PolyVertex = vu1::DrawVertex;
 
 // See comment below on ModelSurface about why we need this.
 static_assert(sizeof(PolyVertex) == 32, "Update SZ_POLY_VERTEX in src/tools/bspinfo.cpp!");

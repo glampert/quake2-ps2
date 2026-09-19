@@ -966,37 +966,15 @@ Q_ALWAYS_INLINE void ApplyDrawState(const SurfaceDrawState & state, const tex::T
 // mod::kTriangulationMaxVerts as it is. File level rather than a local because
 // 128 entries is 4 KB of stack, and gathers never interleave - the same
 // single-caller-at-a-time discipline clip::Scratch relies on.
-static vu1::DrawVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
+static mod::PolyVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
 
 // Fills s_polyVertexCache with the polygon's vertices as the batch wants them.
 //
 // Every read of the draw state is hoisted into a local first. They look loop
-// invariant, but the build stores through a vu1::DrawVertex while the state
+// invariant, but the build stores through a mod::PolyVertex while the state
 // arrives by reference, and the renderer builds with -fno-strict-aliasing - so
 // left in place the compiler must assume each store could have changed them and
 // reload all four every single time round.
-// The polygon's vertices as the batch wants them.
-//
-// mod::PolyVertex is deliberately laid out as a vu1::DrawVertex (see model.h), so
-// a pass that wants them exactly as the loader baked them hands the batch the
-// model's own memory instead of rebuilding it. This is the only place that leans
-// on that, and these asserts are what keep it true.
-Q_ALWAYS_INLINE const vu1::DrawVertex * AsDrawVertices(const mod::PolyVertex * const verts)
-{
-    static_assert(sizeof(mod::PolyVertex) == sizeof(vu1::DrawVertex),
-                  "PolyVertex must be a DrawVertex!");
-    static_assert(alignof(mod::PolyVertex) == alignof(vu1::DrawVertex),
-                  "PolyVertex must be a DrawVertex!");
-    static_assert(offsetof(mod::PolyVertex, rgba) == offsetof(vu1::DrawVertex, rgba),
-                  "PolyVertex must be a DrawVertex!");
-    static_assert(offsetof(mod::PolyVertex, s) == offsetof(vu1::DrawVertex, s),
-                  "PolyVertex must be a DrawVertex!");
-    static_assert(offsetof(mod::PolyVertex, t) == offsetof(vu1::DrawVertex, t),
-                  "PolyVertex must be a DrawVertex!");
-
-    return static_cast<const vu1::DrawVertex *>(static_cast<const void *>(verts));
-}
-
 Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     const mod::PolyVertex * const verts = poly.vertexes;
@@ -1014,18 +992,15 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
     for (int v = 0; v < numVerts; ++v)
     {
         const mod::PolyVertex & src = verts[v];
-        vu1::DrawVertex & dst = s_polyVertexCache[v];
+        mod::PolyVertex & dst = s_polyVertexCache[v];
 
-        dst.x    = src.position.x;
-        dst.y    = src.position.y;
-        dst.z    = src.position.z;
-        dst.w    = 1.0f;
+        dst.position = src.position;
         // The chroma comes off the vertex rather than out of the atlas: it was
         // sampled once when the luxels were baked. See PolyVertex::rgba.
         dst.rgba = tinted ? ApplyCachedLightmapColor(baseRgba, src.rgba) : flatRgba;
         dst.s    = lightmapUVs ? src.lightmap_s : src.s;
         dst.t    = lightmapUVs ? src.lightmap_t : src.t;
-        dst.q    = 1.0f;
+        // The lightmap lanes are left as they fall: nothing downstream reads them.
     }
 }
 
@@ -1055,10 +1030,10 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
     // Where the batch's vertices come from. Cheapest first: the loader's own,
     // handed over untouched; or a rebuilt cache, for the debug views whose colour
     // the bake does not match.
-    const vu1::DrawVertex * src;
+    const mod::PolyVertex * src;
     if (state.bakedVertices)
     {
-        src = AsDrawVertices(poly.vertexes);
+        src = poly.vertexes;
     }
     else
     {
@@ -1086,7 +1061,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
 
         state.stream->BeginVerts(3);
 
-        vu1::DrawVertex * const dst = state.stream->PushTriangle();
+        mod::PolyVertex * const dst = state.stream->PushTriangle();
         if (patchLightmapUVs)
         {
             for (int i = 0; i < 3; ++i)
@@ -1193,13 +1168,13 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawSta
             // hardwired 1.0 and synthesises Q from the divide - so the lightmap
             // coordinates PolyVertex parks in those two lanes ride along unread,
             // and the colour the bake left is already the one this pass draws.
-            const vu1::DrawVertex * const src = AsDrawVertices(poly->vertexes);
+            const mod::PolyVertex * const src = poly->vertexes;
 
             for (int t = 0; t < numTriangles; ++t)
             {
                 state.stream->BeginVerts(3);
 
-                vu1::DrawVertex * const dst = state.stream->PushTriangle();
+                mod::PolyVertex * const dst = state.stream->PushTriangle();
                 vu1::CopyDrawVertex(dst[0], src[0]);
                 vu1::CopyDrawVertex(dst[1], src[t + 1]);
                 vu1::CopyDrawVertex(dst[2], src[t + 2]);

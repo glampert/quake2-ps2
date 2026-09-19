@@ -11,6 +11,7 @@
 #include "ps2/common.h"
 #include "ps2/math/vec_mat.h"
 
+#include <cstddef> // offsetof
 #include <tamtypes.h>
 #include <gif_tags.h>
 
@@ -161,14 +162,34 @@ constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
 // sit in the first word of its qword: the microprogram raw-copies it with a single masked store
 // and only word 0 is reachable that way (going through the FMAC would flush denormal colour
 // patterns to zero).
+//
+// Two of the eight lanes are free, and the world renderer's second UV set is what they carry -
+// which is why this is also mod::PolyVertex (see model.h), and why a world polygon goes to the
+// DMA as the loader baked it rather than being rebuilt a vertex at a time.
+//
+// They are free because no microprogram reads either one: the position's translation row is
+// scaled by vf00's hardwired 1.0 rather than by the vertex, and Q reaches the GS from the
+// reciprocal the perspective divide already computed - through the A+D RGBAQ write for the
+// programs that raw-copy a packed colour, and through an explicit store into the ST qword for
+// the ones that compute their colour. So a producer with no lightmap coordinates to park here
+// simply leaves both alone.
 struct alignas(16) DrawVertex
 {
-    float x, y, z, w; // model-space position; w must be 1.0f
-    u32   rgba;       // packed color, use PackColorRGBA()
-    float s, t, q;    // texture coords; q must be 1.0f
+    math::Vec3 position;   // model space
+    float      lightmap_s; // free lane; the world's lightmap S
+    u32        rgba;       // packed color, use PackColorRGBA()
+    float      s, t;       // diffuse texture coords
+    float      lightmap_t; // free lane; the world's lightmap T
 };
 static_assert(sizeof(DrawVertex)  == 32, "DrawVertex must be exactly 2 qwords");
 static_assert(alignof(DrawVertex) == 16, "CopyDrawVertex's lq/sq require qword alignment");
+
+// The microprograms address these by word rather than by name - the colour is raw-copied out of
+// word 4 with sq.x and the coords are read as lanes .y/.z of the same qword - so moving a field
+// silently mis-renders instead of failing to build. Hence pinning them here.
+static_assert(offsetof(DrawVertex, rgba) == 16, "The microprograms raw-copy rgba out of word 4");
+static_assert(offsetof(DrawVertex, s)    == 20, "s must be word 5; the microprograms read it there");
+static_assert(offsetof(DrawVertex, t)    == 24, "t must be word 6; the microprograms read it there");
 
 // Copies one gathered vertex whole, in two of the R5900's 128-bit moves.
 //
@@ -302,9 +323,9 @@ static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole nu
 // Per-vertex attributes for a lerped draw - everything but the position and the shade. One qword,
 // matching the microprogram's input layout.
 //
-// This names the layout the microprogram reads rather than a buffer anybody fills:
-// mod::AliasVertex has exactly this shape, so a model's baked attributes go to the DMA where they
-// lie. Lane 0 is whatever the source left there and the microprogram never reads it.
+// This is mod::AliasVertex (see model.h): the loader bakes a model's attributes in exactly this
+// shape, so they go to the DMA where they lie rather than being gathered first. Lane 0 is
+// whatever the source left there and the microprogram never reads it.
 struct alignas(16) LerpDrawAttrib
 {
     u32 index;     // the source's own business; the microprogram does not read it

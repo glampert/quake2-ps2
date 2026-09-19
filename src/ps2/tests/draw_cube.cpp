@@ -105,10 +105,9 @@ void EmitVertex(vu1::DrawVertex & vert, const int corners[4], float u, float v)
     const float w2 = u * v;
     const float w3 = (1.0f - u) * v;
 
-    vert.x = c0.x * w0 + c1.x * w1 + c2.x * w2 + c3.x * w3;
-    vert.y = c0.y * w0 + c1.y * w1 + c2.y * w2 + c3.y * w3;
-    vert.z = c0.z * w0 + c1.z * w1 + c2.z * w2 + c3.z * w3;
-    vert.w = 1.0f;
+    vert.position.x = c0.x * w0 + c1.x * w1 + c2.x * w2 + c3.x * w3;
+    vert.position.y = c0.y * w0 + c1.y * w1 + c2.y * w2 + c3.y * w3;
+    vert.position.z = c0.z * w0 + c1.z * w1 + c2.z * w2 + c3.z * w3;
 
     const u32 r = static_cast<u32>(c0.r * w0 + c1.r * w1 + c2.r * w2 + c3.r * w3);
     const u32 g = static_cast<u32>(c0.g * w0 + c1.g * w1 + c2.g * w2 + c3.g * w3);
@@ -119,7 +118,6 @@ void EmitVertex(vu1::DrawVertex & vert, const int corners[4], float u, float v)
               : vu1::PackColorRGBA(r, g, b, 0x80); // 0x80 = alpha 1.0 on the GS
     vert.s = u;
     vert.t = v;
-    vert.q = 1.0f;
 }
 
 // Gathers a tess x tess grid of quads (two triangles each) covering the face into the stream.
@@ -146,9 +144,9 @@ void QuantizeVertex(vu1::LerpVertexBytes & dst, const int corners[4], const floa
     vu1::DrawVertex vert;
     EmitVertex(vert, corners, u, v);
 
-    const u32 bx = static_cast<u32>((vert.x + kCubeHalfSize) * kQuant + 0.5f);
-    const u32 by = static_cast<u32>((vert.y + kCubeHalfSize) * kQuant + 0.5f);
-    const u32 bz = static_cast<u32>((vert.z + kCubeHalfSize) * kQuant + 0.5f);
+    const u32 bx = static_cast<u32>((vert.position.x + kCubeHalfSize) * kQuant + 0.5f);
+    const u32 by = static_cast<u32>((vert.position.y + kCubeHalfSize) * kQuant + 0.5f);
+    const u32 bz = static_cast<u32>((vert.position.z + kCubeHalfSize) * kQuant + 0.5f);
 
     const u32 packed = bx | (by << 8) | (bz << 16); // 4th byte free for the shade
 

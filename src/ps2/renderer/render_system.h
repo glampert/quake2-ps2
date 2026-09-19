@@ -531,14 +531,13 @@ private:
     Q_ALWAYS_INLINE void EmitVertex(const clip::ClipVertex & v, const u32 rgba)
     {
         vu1::DrawVertex & dst = m_verts[m_vertCount++];
-        dst.x    = v.pos.x;
-        dst.y    = v.pos.y;
-        dst.z    = v.pos.z;
-        dst.w    = 1.0f;
-        dst.rgba = rgba;
-        dst.s    = v.st.x;
-        dst.t    = v.st.y;
-        dst.q    = 1.0f;
+        dst.position = { v.pos.x, v.pos.y, v.pos.z };
+        dst.rgba     = rgba;
+        dst.s        = v.st.x;
+        dst.t        = v.st.y;
+        // The two lightmap lanes go unwritten: no microprogram reads them, and a clipped
+        // vertex has no second UV set to put there - the pass that wants one feeds it
+        // through 'st' instead (see SurfaceDrawState::lightmapUVs).
     }
 
 private:

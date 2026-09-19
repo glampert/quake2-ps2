@@ -109,16 +109,6 @@ Q_ALWAYS_INLINE const u8 * GetShadeDotBytesForEntity(const entity_t & entity)
 // Converted mesh accessors
 // ------------------------------------------------------------------------------------------------
 
-// The model's baked per-vertex attributes, which are a vu1::LerpDrawAttrib in
-// everything but the name - mod::AliasVertex is laid out to be exactly one (see
-// the static_assert on it). Only ever handed to the DMA, never read back through
-// this type; through void* because -Wcast-align will not take the direct cast,
-// and both types are qword aligned by declaration.
-Q_ALWAYS_INLINE const vu1::LerpDrawAttrib * AttribsOf(const mod::AliasVertex * const verts)
-{
-    return static_cast<const vu1::LerpDrawAttrib *>(static_cast<const void *>(verts));
-}
-
 Q_ALWAYS_INLINE const mod::ModelInstance::AliasData & GetAliasMesh(const mod::ModelInstance & model)
 {
     PS2_Assert(model.type == mod::ModelType::AliasMD2 && model.hunkBase != nullptr);
@@ -696,7 +686,7 @@ void DrawAliasMD2Shadow(rs::LerpStream & lerpStream, const entity_t & entity,
 
     // Back to the top of the mesh: the main pass left the batch's attribute cursor
     // past the model it just drew, and this walk starts over from the beginning.
-    lerpStream.SetAttribSource(AttribsOf(mesh.vertexes));
+    lerpStream.SetAttribSource(mesh.vertexes);
 
     for (int t = 0; t < numTris; ++t, src += 3)
     {
@@ -935,7 +925,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             lerpStream.SetDrawFlags(batchFlags);
             lerpStream.SetFaceCull(faceCull);
             lerpStream.SetLerpParams(lc.frontv, lc.backv, vertexShadeLight);
-            lerpStream.SetAttribSource(AttribsOf(mesh.vertexes));
+            lerpStream.SetAttribSource(mesh.vertexes);
 
             const mod::AliasVertex * src = mesh.vertexes;
             const int numTris = mesh.numTris;
@@ -1063,14 +1053,10 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
 
                         const math::Vec3 & pos = lerpedPositions[index];
 
-                        dst[i].x    = pos.x;
-                        dst[i].y    = pos.y;
-                        dst[i].z    = pos.z;
-                        dst[i].w    = 1.0f;
-                        dst[i].rgba = colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)];
-                        dst[i].s    = texS * scaleS;
-                        dst[i].t    = texT * scaleT;
-                        dst[i].q    = 1.0f;
+                        dst[i].position = pos;
+                        dst[i].rgba     = colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)];
+                        dst[i].s        = texS * scaleS;
+                        dst[i].t        = texT * scaleT;
                     }
                     emittedVerts += 3;
                 }

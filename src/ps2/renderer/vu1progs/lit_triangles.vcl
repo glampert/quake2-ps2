@@ -65,6 +65,8 @@
 ; stay ahead of RGBAQ in the register list.
 ;--------------------------------------------------------------------
 
+#include "vu_common.i"
+
 ; Batch offsets, relative to XTOP:
 #define kBatchHeader 0
 #define kGifTags     1
@@ -200,17 +202,7 @@
 ; light block and the per-vertex lighting inside DoVertex.
 #vuprog VU1Prog_LitTriangles
 
-    ; VCL requires zeroed clip flags before any CLIP instruction:
-    fcset 0x000000
-
-    ; Frame constants from the fixed low addresses:
-    lq fMVP0,      0(vi00)
-    lq fMVP1,      1(vi00)
-    lq fMVP2,      2(vi00)
-    lq fMVP3,      3(vi00)
-    lq fGSScale,   4(vi00)
-    lq fGSOffset,  5(vi00)
-    lq fClipScale, 6(vi00)
+    LoadFrameConstants{ }
 
     ; The light block, uploaded once per draw chain and shared by every
     ; batch in it.
@@ -236,23 +228,7 @@
     iadd   iKick, iInPtr, iNumVerts
     iadd   iKick, iKick,  iNumVerts
 
-    ; The GIF tags were prepared by the EE; copy them to the packet head:
-    iaddiu iTagPtr, iBase, kGifTags
-    iaddiu iOutPtr, iKick, 0
-    lqi fTag0, (iTagPtr++)
-    lqi fTag1, (iTagPtr++)
-    lqi fTag2, (iTagPtr++)
-    lqi fTag3, (iTagPtr++)
-    lqi fTag4, (iTagPtr++)
-    lqi fTag5, (iTagPtr++)
-    lqi fTag6, (iTagPtr++)
-    sqi fTag0, (iOutPtr++)
-    sqi fTag1, (iOutPtr++)
-    sqi fTag2, (iOutPtr++)
-    sqi fTag3, (iOutPtr++)
-    sqi fTag4, (iOutPtr++)
-    sqi fTag5, (iOutPtr++)
-    sqi fTag6, (iOutPtr++)
+    CopyGifTags{ }
 
     ; One triangle per iteration:
     lTriangleLoop:
@@ -261,12 +237,7 @@
         DoVertex{ 2, 3, 3, 4, 5 }
         DoVertex{ 4, 5, 6, 7, 8 }
 
-        ; Whole-triangle guard band reject, as the textured program.
-        fcand  vi01, 0x3FFFF
-        iaddiu iADC, vi01, 0x7FFF
-        isw.w  iADC, 2(iOutPtr)
-        isw.w  iADC, 5(iOutPtr)
-        isw.w  iADC, 8(iOutPtr)
+        WholeTriangleReject{ }
 
         iaddiu iInPtr,    iInPtr,     6
         iaddiu iOutPtr,   iOutPtr,    9

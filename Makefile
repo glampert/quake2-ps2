@@ -189,6 +189,11 @@ VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
 VCL_FILES = textured_triangles.vcl lerped_triangles.vcl particles.vcl lit_triangles.vcl warped_triangles.vcl
 VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
+# Shared macro/constant includes. vclpp has no -I, so the recipe runs it from
+# VCL_PATH and the programs include these by bare name; they are prerequisites
+# here because the pattern rule below would not otherwise see them change.
+VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
+
 # Standalone command line tools under src/tools, built with the HOST C++ compiler
 # (not the EE toolchain) since they run on the development machine. Being host
 # binaries they are config-independent, so they live outside build/<config>/.
@@ -342,9 +347,9 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # VU1 microprograms.
 # TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
-$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl
+$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS)
 	@mkdir -p $(dir $@)
-	vclpp $< $(basename $@).pp.vcl -j
+	cd $(VCL_PATH) && vclpp $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
 	dvp-as $(basename $@).vsm -o $@
 

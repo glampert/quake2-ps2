@@ -57,10 +57,10 @@
 ;         which the EE indexes the shade table with and this program
 ;         never reads; the old frame's is the quantized shade term
 ;         the EE wrote over it, and is where the colour comes from
-;   +167  attributes: 1 qword per vertex: (unused, s, t, q), handed
+;   +155  attributes: 1 qword per vertex: (unused, s, t, q), handed
 ;         to the DMA straight out of the model hunk - .x is the
 ;         model's own keyframe index, never a float
-;   +245  the GS packet built here: 7 tags + 3 qwords per vertex
+;   +227  the GS packet built here: 7 tags + 3 qwords per vertex
 ;
 ; The position qwords hold integer bit patterns until itof0
 ; converts them - they must only ever be touched by raw loads and
@@ -79,8 +79,8 @@
 #define kShadeLight  3
 #define kGifTags     4
 #define kPositions   11
-#define kAttributes  167
-#define kOutput      245
+#define kAttributes  155
+#define kOutput      227
 
 ; Transforms one vertex: two position qwords at offCur/offOld from
 ; iPosPtr (integer byte lanes of the two keyframes) and one attribute

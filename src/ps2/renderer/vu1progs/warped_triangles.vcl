@@ -14,7 +14,7 @@
 ;   5      GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6      clip-judgement scale in .xyz, animation phase in .w
 ;   8+     XTOP double buffers (VIF1 BASE/OFFSET)
-;   1012-3 the warp constants below, uploaded once by vu1::Init
+;   1022-3 the warp constants below, uploaded once by vu1::Init
 ;
 ; Batch layout at XTOP - the same as the textured program's, so the
 ; chunk emitter, the chain budget and kMaxVertsPerBatch are shared:
@@ -44,7 +44,7 @@
 #define kVertexData  8
 
 ; Absolute VU data address of the warp constant block (see vu1.h):
-#define kWarpConsts  1012
+#define kWarpConsts  1022
 
 ; How the texture coordinates are warped. This is written out inline in
 ; DoVertex below rather than being a #macro of its own: vclpp expands
@@ -227,7 +227,7 @@
 ;       vec4 gsScale   = vuMem[4];
 ;       vec4 gsOffset  = vuMem[5];
 ;       vec4 clipScale = vuMem[6];      // .w = animation phase, in turns
-;       vec4 fold      = vuMem[1012];   // (phaseBias, 0.5, turnsPerTexel, -)
+;       vec4 fold      = vuMem[1022];   // (phaseBias, 0.5, turnsPerTexel, -)
 ;       vec4 poly      = vuMem[1013];   // (a1, a3, a5, a7)
 ;
 ;       qword* batch    = &vuMem[XTOP];

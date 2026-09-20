@@ -64,17 +64,34 @@ void Init();
 // VU1 data memory layout (1024 qwords; addresses in qwords)
 //
 //      0-7       the frame constants below
-//      8-999     the two XTOP double buffers (VIF1 BASE=8, OFFSET=496)
-//      1000-1011 the dynamic light block
-//      1012-1013 the turbulent surface constants
+//      8-973     the two XTOP double buffers (VIF1 BASE=8, OFFSET=483)
+//      974-1009  the clipper's ping-pong scratch
+//      1010-1021 the dynamic light block
+//      1022-1023 the turbulent surface constants
+//
+// The regions tile the address space exactly - see the static_asserts below. Anything new has to
+// take its qwords from one of them, and the only one with any to give is the double buffer, at
+// the cost of the per-batch vertex ceilings further down.
 // ------------------------------------------------------------------------------------------------
 
 // Frame constants at fixed low VU addresses (below kDoubleBufferBase).
 constexpr int kFrameConstantsAddr = 0;
 
-// VIF1 double-buffer registers: two 496-qword buffers above the constants.
+// VIF1 double-buffer registers: two 483-qword buffers above the constants.
 constexpr int kDoubleBufferBase   = 8;
-constexpr int kDoubleBufferOffset = 496;
+constexpr int kDoubleBufferOffset = 483;
+
+// The clipper's Sutherland-Hodgman ping-pong, above the double buffers rather than inside them:
+// only one microprogram runs at a time, so one shared region costs half what a copy in each
+// buffer half would. Two buffers of the 9 corners a clipped triangle can leave, 2 qwords each -
+// clip space position in one, s/t and the raw packed colour word in the other.
+constexpr int kClipScratchAddr   = 974;
+constexpr int kClipScratchQwords = 36;
+
+// Everything in the map above, in order, with nothing left over.
+static_assert(kClipScratchAddr == kDoubleBufferBase + (2 * kDoubleBufferOffset),
+              "The clip scratch starts where the second double buffer ends");
+static_assert(kClipScratchAddr + kClipScratchQwords == 1010, "...and ends where the light block begins");
 
 constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
@@ -142,13 +159,20 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 // ------------------------------------------------------------------------------------------------
 
 // Vertices one VU1 run carries, bounded by the VU double buffer: input (8 + 2n) plus output
-// (7 + 3n) qwords must fit in one 496-qword buffer half, so n <= 96 - and chunks are whole
-// triangles, hence 96. Draws longer than this are split into chunks of this size.
-constexpr int kMaxVertsPerBatch = 96;
+// (7 + 3n) qwords must fit in one 483-qword buffer half, so n <= 93 - and chunks are whole
+// triangles, hence 93. Draws longer than this are split into chunks of this size.
+constexpr int kMaxVertsPerBatch = 93;
 
 // Batch layout, relative to the current double buffer (XTOP).
 constexpr int kBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
+
+// The ceiling above, enforced rather than just described - the lerp and particle layouts have
+// had this since they were written, and the world path is the one the other two are sized
+// against. Shared by textured, lit and warped: same header, same tag block, same chunk emitter.
+static_assert(kVertexDataAddr + (2 * kMaxVertsPerBatch) + kNumGifTagQwords + (3 * kMaxVertsPerBatch)
+              <= kDoubleBufferOffset, "World batch input + GS packet must fit one double-buffer half");
+static_assert((kMaxVertsPerBatch % 3) == 0, "World chunks are whole triangles");
 
 // Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an A+D qword so the VU
 // can raw-copy the packed colour instead of spreading one byte per word as the PACKED RGBAQ
@@ -250,9 +274,8 @@ constexpr float kTurbPoly3 = -kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTa
 constexpr float kTurbPoly5 =  kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau) / 120.0f;
 constexpr float kTurbPoly7 = -kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau * kTurbTau) / 5040.0f;
 
-// VU data address of the warp constant block. Above the double buffers (which end at 1000) and the
-// light block (1000-1011), in the last qwords of VU1 data memory, so it costs no vertex capacity.
-constexpr int kWarpConstBlockAddr = 1012;
+// VU data address of the warp constant block: the last two qwords of VU1 data memory.
+constexpr int kWarpConstBlockAddr = 1022;
 
 // The warp constants as the microprogram reads them. Uploaded once by Init and never rewritten -
 // everything here is a compile-time constant; what varies per frame or per batch travels in
@@ -263,7 +286,7 @@ struct alignas(16) WarpConstants
     math::Vec4 poly; // the four odd sine terms, amplitude folded in
 };
 static_assert(sizeof(WarpConstants) == 2 * 16, "Must match the VU memory layout");
-static_assert(kWarpConstBlockAddr + 2 <= 1024, "Warp constants overrun VU1 data memory");
+static_assert(kWarpConstBlockAddr + 2 == 1024, "Warp constants must be the last two qwords of VU1 data memory");
 
 constexpr WarpConstants kWarpConstants = {
     { kTurbPhaseBias, 0.5f, kTurbTurnsPerTexel, 0.0f },
@@ -275,9 +298,10 @@ constexpr WarpConstants kWarpConstants = {
 // ------------------------------------------------------------------------------------------------
 
 // Vertices one lerped VU run carries: the 3-qword-per-vertex batch (2 position qwords + 1
-// attribute) fits fewer than the world path's 96. Whole triangles, and even - so every full
-// chunk's slice of the 8-byte position stream is whole source qwords starting 16-byte aligned.
-constexpr int kMaxLerpVertsPerBatch = 78;
+// attribute) fits fewer than the world path's 93. Whole triangles, and even - so every full
+// chunk's slice of the 8-byte position stream is whole source qwords starting 16-byte aligned,
+// which together make it a multiple of six.
+constexpr int kMaxLerpVertsPerBatch = 72;
 
 // Fixed offsets sized for the maximum chunk (short chunks leave gaps), so the microprogram
 // addresses them with immediates.
@@ -290,7 +314,7 @@ constexpr int kLerpPositionsAddr   = kLerpGifTagsAddr + kNumGifTagQwords;       
 constexpr int kLerpAttribsAddr     = kLerpPositionsAddr + (2 * kMaxLerpVertsPerBatch); // 1 qword per vertex
 constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // the GS packet
 
-static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 167 && kLerpOutputAddr == 245, "Batch layout must match the #defines in lerped_triangles.vcl");
+static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 155 && kLerpOutputAddr == 227, "Batch layout must match the #defines in lerped_triangles.vcl");
 static_assert(kLerpOutputAddr + kNumGifTagQwords + (3 * kMaxLerpVertsPerBatch) <= kDoubleBufferOffset, "Lerp batch input + GS packet must fit one double-buffer half");
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
@@ -387,10 +411,10 @@ static_assert(sizeof(ParticleVertex) == 16, "ParticleVertex must be exactly 1 qw
 // packing one, and the FMAC's four-cycle latency is covered exactly.
 constexpr int kMaxDynamicLights = 4;
 
-// VU data address of the light block. Deliberately above the double buffers
-// (which end at 8 + 2*496 = 1000) rather than beside the frame constants, so
-// adding it costs no vertex capacity: qwords 1000-1023 were unused.
-constexpr int kLightBlockAddr = 1000;
+// VU data address of the light block, above the double buffers and the clip
+// scratch rather than beside the frame constants - those low 8 qwords are what
+// every batch layout indexes off.
+constexpr int kLightBlockAddr = 1010;
 
 // The GS alpha the lit colour carries. The lightmap pass needs its source alpha
 // left at 1.0 so the blend still modulates by the luxel intensity; the lighting
@@ -436,6 +460,6 @@ struct alignas(16) LightConstants
     math::Vec4 clamp;                            // (255, 255, 255, 128)
 };
 static_assert(sizeof(LightConstants) == 12 * 16, "Must match the VU memory layout");
-static_assert(kLightBlockAddr + 12 <= 1024, "Light block overruns VU1 data memory");
+static_assert(kLightBlockAddr + 12 == kWarpConstBlockAddr, "Light block must sit between the clip scratch and the warp constants");
 
 } // namespace ps2::vu1

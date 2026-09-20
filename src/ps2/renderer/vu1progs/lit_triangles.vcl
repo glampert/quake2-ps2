@@ -34,7 +34,7 @@
 ;   5        GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6        clip-judgement scale (guard band for x/y, 1.0 for z)
 ;   8+       XTOP double buffers (VIF1 BASE/OFFSET)
-;   1000+    the light block (see below), outside the double buffers
+;   1010+    the light block (see below), outside the double buffers
 ;
 ; Light block at kLightBlock, 12 qwords:
 ;   +0   light X positions   (x0, x1, x2, x3)
@@ -73,7 +73,7 @@
 #define kVertexData  8
 
 ; The light block's absolute address (outside the double buffers):
-#define kLightBlock  1000
+#define kLightBlock  1010
 
 ; Transforms and lights one vertex. Input is the same 2 qwords as the
 ; textured program - position, then (rgba, s, t, q) - but the packed

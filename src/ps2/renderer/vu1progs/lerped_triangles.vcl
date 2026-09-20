@@ -60,7 +60,10 @@
 ;   +155  attributes: 1 qword per vertex: (unused, s, t, q), handed
 ;         to the DMA straight out of the model hunk - .x is the
 ;         model's own keyframe index, never a float
-;   +227  the GS packet built here: 7 tags + 3 qwords per vertex
+;   +227  output window A: a copy of the 7 tags, then 3 qwords per
+;   +342  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 36 of
+;         them. Filled, tagged with the count actually written and
+;         kicked in turn, so a full 72-vertex chunk is two kicks
 ;
 ; The position qwords hold integer bit patterns until itof0
 ; converts them - they must only ever be touched by raw loads and
@@ -80,7 +83,15 @@
 #define kGifTags     4
 #define kPositions   11
 #define kAttributes  155
-#define kOutput      227
+
+; The two output windows: where they start, how far apart they are, how
+; many vertices each holds, and where the drawing tag sits inside one.
+; Must match the kLerp*Window* constants in vu1.h.
+#define kWindowA       227
+#define kWindowB       342
+#define kWindowQwords  115
+#define kWindowVerts   36
+#define kWindowPrimTag 6
 
 ; Transforms one vertex: two position qwords at offCur/offOld from
 ; iPosPtr (integer byte lanes of the two keyframes) and one attribute
@@ -256,8 +267,12 @@
 ;       qword* pos        = &batch[kPositions];  // 2 qwords per vertex
 ;       qword* attr       = &batch[kAttributes]; // 1 qword per vertex
 ;
-;       // The GS packet at its fixed home past the input regions:
-;       qword* kick = &batch[kOutput];
+;       // Output goes to a window, opened by copying the 7 GIF tag
+;       // qwords the EE prepared to its head:
+;       qword* win       = &batch[kWindowA];
+;       int    winStep   = kWindowQwords; // flips sign on every kick
+;       qword* out       = OpenWindow(win);
+;       int    vertsLeft = kWindowVerts;
 ;       qword* out  = kick;
 ;
 ;       // Packet head: the 7 GIF tag qwords prepared by the EE:
@@ -266,6 +281,14 @@
 ;
 ;       do // One triangle per iteration:
 ;       {
+;           if (vertsLeft == 0) // No room: send this window, start the other.
+;           {
+;               win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;               XGKICK(win);
+;               win += winStep; winStep = -winStep;
+;               out = OpenWindow(win); vertsLeft = kWindowVerts;
+;           }
+;
 ;           vec3 scr0, scr1, scr2; // float screen positions
 ;           DoVertex(0, 1,  0,  0, 1, 2,  scr0); // pos[0..1], attr[0] -> out[0..2]
 ;           DoVertex(2, 3,  1,  3, 4, 5,  scr1); // pos[2..3], attr[1] -> out[3..5]
@@ -302,11 +325,14 @@
 ;           pos  += 6;
 ;           attr += 3;
 ;           out  += 9;
-;           numVerts -= 3;
+;           vertsLeft -= 3;
+;           numVerts  -= 3;
 ;       }
 ;       while (numVerts != 0);
 ;
-;       XGKICK(kick); // Send the finished GS packet.
+;       // The last window always holds at least one triangle.
+;       win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;       XGKICK(win);
 ;   }
 #vuprog VU1Prog_LerpedTriangles
 
@@ -329,15 +355,30 @@
     ; -1.0 for the area clamp below (vf00.w is the +1).
     sub.x  fMinusOne, vf00, vf00[w]
 
-    ; The input regions and the GS packet, all at fixed offsets:
+    ; The input regions, all at fixed offsets:
     iaddiu iPosPtr,  iBase, kPositions
     iaddiu iAttrPtr, iBase, kAttributes
-    iaddiu iKick,    iBase, kOutput
 
-    CopyGifTags{ }
+    ; The first output window, and the step that alternates to the other
+    ; one - it flips sign on every kick.
+    iaddiu iWin,   iBase, kWindowA
+    iaddiu iDelta, vi00,  kWindowQwords
+
+    OpenOutputWindow{ }
 
     ; One triangle per iteration:
     lTriangleLoop:
+
+        ; Room for another triangle in this window? If not, send what is
+        ; there and start the other one. iVertsLeft only ever steps by
+        ; three, so "greater than zero" is "at least one triangle" and
+        ; the test needs no scratch register.
+        ibgtz iVertsLeft, lWindowHasRoom
+
+        CloseOutputWindowAndKick{ }
+        OpenOutputWindow{ }
+
+        lWindowHasRoom:
 
         DoVertex{ 0, 1, 0, 0, 1, 2, fScr0 }
         DoVertex{ 2, 3, 1, 3, 4, 5, fScr1 }
@@ -380,14 +421,16 @@
         isw.w  iADC, 5(iOutPtr)
         isw.w  iADC, 8(iOutPtr)
 
-        iaddiu iPosPtr,   iPosPtr,    6
-        iaddiu iAttrPtr,  iAttrPtr,   3
-        iaddiu iOutPtr,   iOutPtr,    9
-        iaddi  iNumVerts, iNumVerts, -3
+        iaddiu iPosPtr,    iPosPtr,     6
+        iaddiu iAttrPtr,   iAttrPtr,    3
+        iaddiu iOutPtr,    iOutPtr,     9
+        iaddi  iVertsLeft, iVertsLeft, -3
+        iaddi  iNumVerts,  iNumVerts,  -3
         ibne   iNumVerts, vi00, lTriangleLoop
 
-    --barrier
-
-    xgkick iKick
+    ; The last window always holds at least one triangle: a window is
+    ; closed only when a triangle will not fit, and that triangle goes
+    ; straight into the fresh one. So this never kicks an empty packet.
+    CloseOutputWindowAndKick{ }
 
 #endvuprog

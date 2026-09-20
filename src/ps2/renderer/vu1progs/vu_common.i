@@ -34,6 +34,11 @@
 ; the GS packet at iKick. kGifTags is the program's own offset for it
 ; and kNumGifTagQwords in vu1.h pins the count at the seven unrolled
 ; here. Leaves iOutPtr just past the block, where the vertices go.
+;
+; Only particles still uses this - every triangle program sends its
+; output through a window instead, and OpenOutputWindow below repeats
+; these lines rather than calling them, because vclpp cannot nest one
+; macro inside another.
 #macro CopyGifTags
     iaddiu iTagPtr, iBase, kGifTags
     iaddiu iOutPtr, iKick, 0
@@ -86,6 +91,9 @@
 ; the write cursor and the room left. Every window carries the whole
 ; block, the A+D state qwords included; re-latching state the GS already
 ; holds costs six qwords a kick and keeps one code path.
+;
+; The copy below is CopyGifTags' body written out again - see the note
+; there. Change one and change the other.
 #macro OpenOutputWindow
     iaddiu iTagPtr, iBase, kGifTags
     iaddiu iOutPtr, iWin,  0

@@ -328,10 +328,21 @@ constexpr int kLerpShadeLightAddr  = 3; // entity light in GS units, vertex alph
 constexpr int kLerpGifTagsAddr     = 4; // the same 7-qword block as the world path
 constexpr int kLerpPositionsAddr   = kLerpGifTagsAddr + kNumGifTagQwords;              // 2 qwords per vertex
 constexpr int kLerpAttribsAddr     = kLerpPositionsAddr + (2 * kMaxLerpVertsPerBatch); // 1 qword per vertex
-constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // the GS packet
+constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // window A
+
+// The lerp path's own pair of output windows, working exactly as the world path's above: a full
+// chunk is two kicks. The capacity is lower only because the input regions ahead of them are
+// bigger - two position qwords and an attribute qword per vertex, against the world's two.
+constexpr int kLerpMaxVertsPerWindow  = 36;
+constexpr int kLerpOutputWindowQwords = kNumGifTagQwords + (3 * kLerpMaxVertsPerWindow);
+constexpr int kLerpWindowAAddr        = kLerpOutputAddr;
+constexpr int kLerpWindowBAddr        = kLerpWindowAAddr + kLerpOutputWindowQwords;
 
 static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 155 && kLerpOutputAddr == 227, "Batch layout must match the #defines in lerped_triangles.vcl");
-static_assert(kLerpOutputAddr + kNumGifTagQwords + (3 * kMaxLerpVertsPerBatch) <= kDoubleBufferOffset, "Lerp batch input + GS packet must fit one double-buffer half");
+static_assert(kLerpWindowAAddr == 227 && kLerpWindowBAddr == 342 && kLerpOutputWindowQwords == 115, "Window layout must match the #defines in lerped_triangles.vcl");
+static_assert(kLerpWindowBAddr + kLerpOutputWindowQwords <= kDoubleBufferOffset, "Lerp batch input + both output windows must fit one double-buffer half");
+static_assert((kLerpMaxVertsPerWindow % 3) == 0, "A window holds whole triangles");
+static_assert(kMaxLerpVertsPerBatch == 2 * kLerpMaxVertsPerWindow, "A full lerp chunk should be exactly two kicks");
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
 

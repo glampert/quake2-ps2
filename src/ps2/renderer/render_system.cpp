@@ -859,7 +859,7 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     OpenInlineUnpack(vu1::kLerpBatchHeaderAddr, true);
     {
-        AddU32(static_cast<u32>(faceCull)); // backface cull mode in .x
+        AddFloat(CullSignFor(faceCull)); // backface cull sign in .x
         // The skin's size over its power-of-two TEX0 extent, multiplied onto every vertex's ST
         // by the microprogram: the VU has the multiply slot free and the EE does not.
         AddFloat(stScaleS); // .y

@@ -35,8 +35,8 @@
 ; Batch layout at XTOP - fixed offsets sized for the 78-vertex
 ; maximum chunk, so short chunks leave gaps rather than move the
 ; regions (the EE and this program share compile-time addresses):
-;   +0    header: backface cull mode in .x (0 = keep everything,
-;         1 = cull negative screen area, 2 = cull positive),
+;   +0    header: backface cull sign in .x (+1 culls negative screen
+;         areas, -1 culls positive, 0 culls nothing),
 ;         texture coordinate scale in .y/.z (the skin's size over
 ;         its power-of-two TEX0 extent - applied here so the EE
 ;         does not multiply it onto every vertex), vertex count
@@ -249,17 +249,12 @@
 ;       // This batch, in the current double buffer:
 ;       qword* batch    = &vuMem[XTOP];
 ;       int    numVerts = batch[kBatchHeader].w;
-;       int    cullMode = batch[kBatchHeader].x;
+;       float  cullSign = batch[kBatchHeader].x;
 ;       vec4   frontv     = batch[kFrontV];
 ;       vec4   backv      = batch[kBackV];
 ;       vec4   shadeLight = batch[kShadeLight];
 ;       qword* pos        = &batch[kPositions];  // 2 qwords per vertex
 ;       qword* attr       = &batch[kAttributes]; // 1 qword per vertex
-;
-;       // The sign-bit value (see the backface test below) of a culled
-;       // face: mode 1 culls negative areas (bit 15 set), mode 2
-;       // positive (clear); mode 0 skips the test entirely.
-;       int cullTarget = (cullMode == 1) ? 0x8000 : 0;
 ;
 ;       // The GS packet at its fixed home past the input regions:
 ;       qword* kick = &batch[kOutput];
@@ -291,15 +286,14 @@
 ;           // triangle draws. Guard-band-rejected triangles may cross
 ;           // garbage positions, but their ADC bit is already set and the
 ;           // +1 keeps it (and VU floats cannot produce NaN to trip this).
-;           if (cullMode != 0)
-;           {
-;               vec2  e1   = scr1.xy - scr0.xy;
-;               vec2  e2   = scr2.xy - scr0.xy;
-;               float area = e1.x * e2.y - e2.x * e1.y;
-;               int   sign = ftoi4(clamp(area, -1, +1)) & 0x8000;
-;               if (sign == cullTarget) // 0x8000 for mode 1, 0 for mode 2
-;                   adc += 1;           // bit 15 stays set either way
-;           }
+;           // The cull sign goes on before the clamp, so the test is
+;           // always just "is it negative". A sign of 0 flattens every
+;           // area to zero, which is not negative, so nothing is culled.
+;           vec2  e1   = scr1.xy - scr0.xy;
+;           vec2  e2   = scr2.xy - scr0.xy;
+;           float area = (e1.x * e2.y - e2.x * e1.y) * cullSign;
+;           if (ftoi4(clamp(area, -1, +1)) < 0)
+;               adc += 1; // bit 15 stays set either way
 ;
 ;           out[2].w = adc; // .w of each of the 3 vertices
 ;           out[5].w = adc;
@@ -322,27 +316,18 @@
     ; Current double buffer, this batch's counts and lerp constants:
     xtop   iBase
     ilw.w  iNumVerts,   kBatchHeader(iBase)
-    ilw.x  iCullMode,   kBatchHeader(iBase)
     lq     fFrontV,     kFrontV(iBase)
     lq     fBackV,      kBackV(iBase)
     lq     fShadeLight, kShadeLight(iBase)
 
-    ; The same header qword as a vector, for the ST scale in .y/.z. A raw
-    ; load, so .x and .w keep the integer bit patterns read above - only
-    ; ever used through a .yz mask, which never computes those lanes.
+    ; The same header qword as a vector: the ST scale in .y/.z and the
+    ; backface cull sign in .x. A raw load, so .w keeps the integer bit
+    ; pattern read above - it is only ever used through masks that never
+    ; compute that lane.
     lq     fStScale,  kBatchHeader(iBase)
 
-    ; Backface-test constants: -1.0 for the area clamp (vf00.w is the +1),
-    ; the 16-bit sign mask, and the masked value a culled face matches -
-    ; 0x8000 for mode 1 (cull negative areas), 0 for mode 2 (positive).
+    ; -1.0 for the area clamp below (vf00.w is the +1).
     sub.x  fMinusOne, vf00, vf00[w]
-    iaddiu iSignMask, vi00, 0x7FFF
-    iaddiu iSignMask, iSignMask, 1
-    iaddiu iCullTarget, vi00, 0
-    iaddi  iTmp, iCullMode, -1
-    ibne   iTmp, vi00, lCullTargetDone
-    iadd   iCullTarget, iSignMask, vi00
-    lCullTargetDone:
 
     ; The input regions and the GS packet, all at fixed offsets:
     iaddiu iPosPtr,  iBase, kPositions
@@ -368,19 +353,26 @@
         ; Backface reject, folded into the same ADC bit. The area's sign
         ; travels as data, never flags (openvcl reorders around flag
         ; reads): clamped to [-1, +1] so the ftoi4 cannot overflow the 16
-        ; bits mtir moves, leaving the sign in bit 15 of the VI register.
+        ; bits mtir moves, leaving the sign in bit 15 of the VI register,
+        ; which is exactly what ibgez reads.
         ; area.x = e1.x*e2.y - e2.x*e1.y, e1/e2 = the two edges from scr0.
-        ibeq    iCullMode, vi00, lNoFaceCull
+        ;
+        ; The batch's cull sign goes on before the clamp, so the test is
+        ; always just "is it negative": +1 rejects negative areas, -1
+        ; rejects positive ones, and 0 flattens every area to zero, which
+        ; is not negative and so never culls. That is one multiply in
+        ; place of a mask register, a compare target and a mode branch -
+        ; VI registers this program has none of to spare.
         sub.xy  fEdge1, fScr1, fScr0
         sub.xy  fEdge2, fScr2, fScr0
         mula.x  acc,   fEdge1, fEdge2[y]
         msub.x  fArea, fEdge2, fEdge1[y]
+        mul.x   fArea, fArea, fStScale[x]
         mini.x  fArea, fArea, vf00[w]
         max.x   fArea, fArea, fMinusOne[x]
         ftoi4.x fArea, fArea
         mtir    iAreaInt, fArea[x]
-        iand    iAreaSign, iAreaInt, iSignMask
-        ibne    iAreaSign, iCullTarget, lNoFaceCull
+        ibgez   iAreaInt, lNoFaceCull
         iaddiu  iADC, iADC, 1 ; bit 15 stays set either way
     lNoFaceCull:
 

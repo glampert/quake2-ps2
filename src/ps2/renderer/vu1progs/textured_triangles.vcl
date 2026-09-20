@@ -13,28 +13,44 @@
 ;   8+   XTOP double buffers (VIF1 BASE/OFFSET)
 ;
 ; Batch layout at XTOP:
-;   +0   header: vertex count in .w
-;   +1   7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
-;   +8   vertices, 2 qwords each: position, then (rgba, s, t, q)
+;   +0    header: vertex count in .w
+;   +1    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
+;   +8    vertices, 2 qwords each: position, then (rgba, s, t, q)
+;   +188  output window A: a copy of the 7 tags, then 3 qwords per
+;   +330  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 45 of them
 ;
-; The GS packet (the 7 GIF tags + 3 output qwords per vertex: ST,
-; RGBAQ, XYZ2) is built right after the input vertices in the same
-; buffer and sent with XGKICK. The color arrives packed in the .x
-; word of the second input qword and is raw-copied into an A+D
-; qword: the native RGBAQ register layout is exactly that u32 with
-; Q in the word above, so the bytes never need spreading apart (and
-; Q rides inline, independent of the GIF's ST-latched Q). Clipping
-; is a whole-triangle guard band reject: clipw flags outside the
-; scaled |w| range set the ADC bit on all 3 vertices so the GS
-; skips the drawing kick.
+; The GS packet goes to one of the two output windows rather than to
+; the space after the input vertices. The program fills a window, patches
+; its drawing tag with the vertex count it actually wrote, sends it with
+; XGKICK and carries on in the other one, so a full 90-vertex batch is
+; two kicks. That indirection buys nothing yet - the count is known up
+; front here - but it is what lets a clipping program, whose output count
+; is not known until it has run, place its packet at all.
+;
+; The color arrives packed in the .x word of the second input qword and
+; is raw-copied into an A+D qword: the native RGBAQ register layout is
+; exactly that u32 with Q in the word above, so the bytes never need
+; spreading apart (and Q rides inline, independent of the GIF's
+; ST-latched Q). Clipping is a whole-triangle guard band reject: clipw
+; flags outside the scaled |w| range set the ADC bit on all 3 vertices so
+; the GS skips the drawing kick.
 ;--------------------------------------------------------------------
 
 #include "vu_common.i"
 
-; Batch offsets, relative to XTOP:
+; Batch offsets, relative to XTOP. The window values must match the
+; kOutputWindow* / kMaxVertsPerWindow constants in vu1.h.
 #define kBatchHeader 0
 #define kGifTags     1
 #define kVertexData  8
+
+; The two output windows: where they start, how far apart they are, how
+; many vertices each holds, and where the drawing tag sits inside one.
+#define kWindowA       188
+#define kWindowB       330
+#define kWindowQwords  142
+#define kWindowVerts   45
+#define kWindowPrimTag 6
 
 ; Transforms one vertex: 2 input qwords at offPos/offStq from iInPtr
 ; become the ST, RGBAQ (via A+D) and XYZ2 output qwords at offST/offAD/
@@ -139,16 +155,23 @@
 ;       int    numVerts = batch[kBatchHeader].w;
 ;       qword* in       = &batch[kVertexData]; // 2 qwords per vertex
 ;
-;       // The GS packet starts right after the input vertices:
-;       qword* kick = in + (numVerts * 2);
-;       qword* out  = kick;
-;
-;       // Packet head: the 7 GIF tag qwords prepared by the EE:
-;       memcpy(out, &batch[kGifTags], 7 * sizeof(qword));
-;       out += 7;
+;       // Output goes to a window, which is opened by copying the 7
+;       // GIF tag qwords the EE prepared to its head:
+;       qword* win       = &vuMem[XTOP + kWindowA];
+;       int    winStep   = kWindowQwords; // flips sign on every kick
+;       qword* out       = OpenWindow(win);
+;       int    vertsLeft = kWindowVerts;
 ;
 ;       do // One triangle per iteration:
 ;       {
+;           if (vertsLeft < 3) // No room: send this window, start the other.
+;           {
+;               win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;               XGKICK(win);
+;               win += winStep; winStep = -winStep;
+;               out = OpenWindow(win); vertsLeft = kWindowVerts;
+;           }
+;
 ;           DoVertex(0, 1,  0, 1, 2); // in[0..1] -> out[0..2]
 ;           DoVertex(2, 3,  3, 4, 5); // in[2..3] -> out[3..5]
 ;           DoVertex(4, 5,  6, 7, 8); // in[4..5] -> out[6..8]
@@ -164,11 +187,14 @@
 ;
 ;           in  += 6;
 ;           out += 9;
-;           numVerts -= 3;
+;           vertsLeft -= 3;
+;           numVerts  -= 3;
 ;       }
 ;       while (numVerts != 0);
 ;
-;       XGKICK(kick); // Send the finished GS packet.
+;       // The last window always holds at least one triangle.
+;       win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;       XGKICK(win);
 ;   }
 #vuprog VU1Prog_TexturedTriangles
 
@@ -183,14 +209,27 @@
     ilw.w  iNumVerts, kBatchHeader(iBase)
     iaddiu iInPtr, iBase, kVertexData
 
-    ; Output (the GS packet) starts right after the input vertices:
-    iadd   iKick, iInPtr, iNumVerts
-    iadd   iKick, iKick,  iNumVerts
+    ; The first output window, and the step that alternates to the other
+    ; one - it flips sign on every kick.
+    iaddiu iWin,   iBase, kWindowA
+    iaddiu iDelta, vi00,  kWindowQwords
 
-    CopyGifTags{ }
+    OpenOutputWindow{ }
 
     ; One triangle per iteration:
     lTriangleLoop:
+
+        ; Room for another triangle in this window? If not, send what is
+        ; there and start the other one. iVertsLeft only ever steps by
+        ; three, so "greater than zero" is "at least one triangle" and
+        ; the test needs no scratch register - which the lerp program,
+        ; with eleven of its thirteen already spoken for, cannot spare.
+        ibgtz iVertsLeft, lWindowHasRoom
+
+        CloseOutputWindowAndKick{ }
+        OpenOutputWindow{ }
+
+        lWindowHasRoom:
 
         DoVertex{ 0, 1, 0, 1, 2 }
         DoVertex{ 2, 3, 3, 4, 5 }
@@ -198,13 +237,15 @@
 
         WholeTriangleReject{ }
 
-        iaddiu iInPtr,    iInPtr,     6
-        iaddiu iOutPtr,   iOutPtr,    9
-        iaddi  iNumVerts, iNumVerts, -3
+        iaddiu iInPtr,     iInPtr,      6
+        iaddiu iOutPtr,    iOutPtr,     9
+        iaddi  iVertsLeft, iVertsLeft, -3
+        iaddi  iNumVerts,  iNumVerts,  -3
         ibne   iNumVerts, vi00, lTriangleLoop
 
-    --barrier
-
-    xgkick iKick
+    ; The last window always holds at least one triangle: a window is
+    ; closed only when a triangle will not fit, and that triangle goes
+    ; straight into the fresh one. So this never kicks an empty packet.
+    CloseOutputWindowAndKick{ }
 
 #endvuprog

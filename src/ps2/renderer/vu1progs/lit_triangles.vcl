@@ -72,6 +72,15 @@
 #define kGifTags     1
 #define kVertexData  8
 
+; The two output windows: where they start, how far apart they are, how
+; many vertices each holds, and where the drawing tag sits inside one.
+; Must match the kOutputWindow* / kMaxVertsPerWindow constants in vu1.h.
+#define kWindowA       188
+#define kWindowB       330
+#define kWindowQwords  142
+#define kWindowVerts   45
+#define kWindowPrimTag 6
+
 ; The light block's absolute address (outside the double buffers):
 #define kLightBlock  1010
 
@@ -224,14 +233,27 @@
     ilw.w  iNumVerts, kBatchHeader(iBase)
     iaddiu iInPtr, iBase, kVertexData
 
-    ; Output (the GS packet) starts right after the input vertices:
-    iadd   iKick, iInPtr, iNumVerts
-    iadd   iKick, iKick,  iNumVerts
+    ; The first output window, and the step that alternates to the other
+    ; one - it flips sign on every kick.
+    iaddiu iWin,   iBase, kWindowA
+    iaddiu iDelta, vi00,  kWindowQwords
 
-    CopyGifTags{ }
+    OpenOutputWindow{ }
 
     ; One triangle per iteration:
     lTriangleLoop:
+
+        ; Room for another triangle in this window? If not, send what is
+        ; there and start the other one. iVertsLeft only ever steps by
+        ; three, so "greater than zero" is "at least one triangle" and
+        ; the test needs no scratch register - which the lerp program,
+        ; with eleven of its thirteen already spoken for, cannot spare.
+        ibgtz iVertsLeft, lWindowHasRoom
+
+        CloseOutputWindowAndKick{ }
+        OpenOutputWindow{ }
+
+        lWindowHasRoom:
 
         DoVertex{ 0, 1, 0, 1, 2 }
         DoVertex{ 2, 3, 3, 4, 5 }
@@ -239,13 +261,15 @@
 
         WholeTriangleReject{ }
 
-        iaddiu iInPtr,    iInPtr,     6
-        iaddiu iOutPtr,   iOutPtr,    9
-        iaddi  iNumVerts, iNumVerts, -3
+        iaddiu iInPtr,     iInPtr,      6
+        iaddiu iOutPtr,    iOutPtr,     9
+        iaddi  iVertsLeft, iVertsLeft, -3
+        iaddi  iNumVerts,  iNumVerts,  -3
         ibne   iNumVerts, vi00, lTriangleLoop
 
-    --barrier
-
-    xgkick iKick
+    ; The last window always holds at least one triangle: a window is
+    ; closed only when a triangle will not fit, and that triangle goes
+    ; straight into the fresh one. So this never kicks an empty packet.
+    CloseOutputWindowAndKick{ }
 
 #endvuprog

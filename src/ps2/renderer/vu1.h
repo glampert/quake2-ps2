@@ -158,21 +158,37 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 // Generic VU1 triangles (static world geometry)
 // ------------------------------------------------------------------------------------------------
 
-// Vertices one VU1 run carries, bounded by the VU double buffer: input (8 + 2n) plus output
-// (7 + 3n) qwords must fit in one 483-qword buffer half, so n <= 93 - and chunks are whole
-// triangles, hence 93. Draws longer than this are split into chunks of this size.
-constexpr int kMaxVertsPerBatch = 93;
+// Vertices one VU1 run carries. Two windows' worth exactly, so a full chunk is two kicks.
+// Draws longer than this are split into chunks of this size.
+constexpr int kMaxVertsPerBatch = 90;
 
 // Batch layout, relative to the current double buffer (XTOP).
 constexpr int kBatchHeaderAddr = 0; // vertex count in .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 
-// The ceiling above, enforced rather than just described - the lerp and particle layouts have
-// had this since they were written, and the world path is the one the other two are sized
-// against. Shared by textured, lit and warped: same header, same tag block, same chunk emitter.
-static_assert(kVertexDataAddr + (2 * kMaxVertsPerBatch) + kNumGifTagQwords + (3 * kMaxVertsPerBatch)
-              <= kDoubleBufferOffset, "World batch input + GS packet must fit one double-buffer half");
+// The GS packet is built in one of two fixed output windows rather than immediately after the
+// input vertices. A clipping microprogram does not know its output count until it has run, so
+// the packet can have neither a count-dependent address nor a count-dependent size; the
+// microprogram fills a window, patches the drawing tag's NLOOP with what it actually wrote,
+// kicks it, and moves to the other one.
+//
+// Two windows and not one because a window may not be rewritten while the GIF is still reading
+// it. Alternating gives that for free: the kick that starts window B is issued before window A
+// is ever touched again, and an XGKICK issued while a transfer is in flight stalls until that
+// transfer has drained.
+//
+// A window holds whole triangles only - a triangle split across two packets would be re-primed
+// by the second packet's tag and drawn wrong - so the capacity is a multiple of three.
+constexpr int kMaxVertsPerWindow  = 45;
+constexpr int kOutputWindowQwords = kNumGifTagQwords + (3 * kMaxVertsPerWindow);
+constexpr int kOutputWindowAAddr  = kVertexDataAddr + (2 * kMaxVertsPerBatch);
+constexpr int kOutputWindowBAddr  = kOutputWindowAAddr + kOutputWindowQwords;
+
+static_assert((kMaxVertsPerWindow % 3) == 0, "A window holds whole triangles");
 static_assert((kMaxVertsPerBatch % 3) == 0, "World chunks are whole triangles");
+static_assert(kMaxVertsPerBatch == 2 * kMaxVertsPerWindow, "A full chunk should be exactly two kicks");
+static_assert(kOutputWindowBAddr + kOutputWindowQwords <= kDoubleBufferOffset,
+              "World batch input + both output windows must fit one double-buffer half");
 
 // Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an A+D qword so the VU
 // can raw-copy the packed colour instead of spreading one byte per word as the PACKED RGBAQ

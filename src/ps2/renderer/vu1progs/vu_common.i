@@ -125,10 +125,19 @@
 ; NREG all sit at bit 46 and above - so isw.x cannot disturb them. The
 ; 0x8000 sets EOP, in two steps because iaddiu's immediate is 15 bits.
 ;
-; The kick is safe to issue straight into the other window: an XGKICK
-; raised while a transfer is in flight stalls until that transfer has
-; drained, so by the time this window comes round again the GIF has long
-; finished with it.
+; Reusing the other window is safe without any fence of our own: XGKICK
+; stalls if a PATH1 transfer is already in process, so this kick cannot
+; return until the *previous* window has drained - and that window is
+; the next one to be written. The VU manual's caution about rewriting VU
+; Mem mid-transfer is about the window being sent now, which nothing
+; touches again until it has come round.
+;
+; What does need care is the tag store just above. XGKICK hands the
+; address to the GIF and ends; the GIF starts reading immediately, so a
+; store in the shadow of the kick races its own latency to VU Mem. The
+; window advance is placed in that gap deliberately, which is why the
+; kick takes its address from a copy made before the advance rather than
+; from iWin.
 ;
 ; The first instruction below must stay harmless if it lands in a branch
 ; delay slot - callers skip this macro by branching over it.
@@ -141,8 +150,11 @@
 
     --barrier
 
-    xgkick iWin
+    iaddiu iKickAt, iWin, 0
+    iadd   iWin,    iWin, iDelta
+    isub   iDelta,  vi00, iDelta
 
-    iadd iWin,   iWin, iDelta
-    isub iDelta, vi00, iDelta
+    --barrier
+
+    xgkick iKickAt
 #endmacro

@@ -2,7 +2,7 @@
 """Generate compile_commands.json for IntelliSense / clangd from the Makefile.
 
 Usage (see the `compiledb` target in the Makefile):
-    make -Bnk | python3 scripts/gen_compile_commands.py
+    make -Bnk | python3 src/tools/gen_compile_commands.py
 
 Reads a `make --dry-run` transcript on stdin, extracts every EE compiler
 invocation that compiles a single source (`... -c <src> -o <obj>`), and writes a

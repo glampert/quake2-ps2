@@ -105,6 +105,7 @@ PS2_CXX_SRC =                         \
 	ps2/tests/perf_run.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
+	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
 	ps2/debug/profile.cpp             \
 	ps2/builtin/palette.cpp           \
@@ -172,6 +173,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/tests/perf_run.cpp            \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
+	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
 	ps2/debug/profile.cpp
 
@@ -391,7 +393,7 @@ run: all $(OUTPUT_DIR)/baseq2
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact
 # per-file compile flags. Run after adding/removing source files.
 compiledb:
-	@$(MAKE) -Bnk | python3 scripts/gen_compile_commands.py
+	@$(MAKE) -Bnk | python3 src/tools/gen_compile_commands.py
 
 # Both configs, not just the selected one.
 clean:

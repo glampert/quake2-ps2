@@ -72,6 +72,19 @@ void DumpVif1()
                 Reg(A_EE_VIF1_OFST), Reg(A_EE_VIF1_TOPS), Reg(A_EE_VIF1_TOP));
 }
 
+// The GIF's own DMA channel, which is what feeds PATH3 - the texture uploads here. VIF1's FLUSH
+// waits on PATH3 as well as on the microprograms, so a stalled channel 2 deadlocks channel 1
+// without either of them looking wrong on its own.
+void DumpGifDma()
+{
+    const u32 chcr = Reg(A_EE_D2_CHCR);
+
+    std::printf("  D2_CHCR  %08x  STR=%u (%s)  MOD=%u  TTE=%u   D2_MADR %08x  D2_QWC %5u  D2_TADR %08x\n",
+                chcr, Bits(chcr, 8, 1), Bits(chcr, 8, 1) ? "still running" : "finished",
+                Bits(chcr, 2, 2), Bits(chcr, 6, 1),
+                Reg(A_EE_D2_MADR), Reg(A_EE_D2_QWC), Reg(A_EE_D2_TADR));
+}
+
 void DumpGif()
 {
     const u32 stat = Reg(A_EE_GIF_STAT);
@@ -101,6 +114,7 @@ Q_COLD_FUNC void DumpPipelineState(const char * const why)
     std::printf("\n=== RENDER PIPELINE STALLED: %s ===\n", why);
     DumpVif1Dma();
     DumpVif1();
+    DumpGifDma();
     DumpGif();
     std::printf("  GS_CSR   %08x  FINISH=%u  VSINT=%u\n",
                 static_cast<u32>(*GS_REG_CSR), Bits(static_cast<u32>(*GS_REG_CSR), 1, 1),

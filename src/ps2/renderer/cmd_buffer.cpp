@@ -9,6 +9,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/profile.h"
+#include "ps2/debug/pipeline_dump.h"
 
 #include <cstdint>
 #include <dma.h>
@@ -19,6 +20,7 @@
 #include <gif_tags.h>       // PACK_GIFTAG, GIF_SET_TAG
 #include <gs_gp.h>          // GS_REG_FINISH
 #include <gs_privileged.h>  // GS_REG_CSR
+#include <ee_regs.h>        // R_EE_D1_CHCR
 
 namespace ps2::cmdbuf {
 namespace {
@@ -444,6 +446,54 @@ void Kick()
     }
 }
 
+namespace {
+
+// DMA channel control: STR is raised when a transfer starts and clears when it ends.
+constexpr u32 kDmaChcrStr = 1u << 8;
+
+#if PS2_QUAKE_DEBUG
+
+// How long a wait runs before it is called a hang rather than slow hardware. A frame's drawing is
+// tens of microseconds and the whole frame is 16ms, so a second is four orders of magnitude past
+// anything legitimate - and well inside the ~14.5s the 32-bit COP0 Count takes to wrap, of which
+// the unsigned subtraction below tolerates exactly one.
+constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
+
+// Nothing on this side of the fence explains a stall. It is nearly always a microprogram that did
+// not end or a GS packet that never reached EOP, and neither is visible without the VIF, GIF and
+// DMA registers - so print them before dying, while they still hold the stalled state.
+Q_COLD_FUNC void ReportPipelineHang(const char * const what)
+{
+    debug::DumpPipelineState(what);
+    Sys_Error("Render pipeline hang: %s. See the pipeline dump above.", what);
+}
+
+#endif // PS2_QUAKE_DEBUG
+
+// Spins until 'ready'. In debug a wait that outlasts the timeout dumps the pipeline and dies; in
+// release it is the bare spin it has always been, and 'what' costs nothing.
+template<typename ReadyFn>
+Q_ALWAYS_INLINE void SpinUntilReady(ReadyFn && ready, const char * const what)
+{
+#if PS2_QUAKE_DEBUG
+    const debug::CpuCycles start = debug::ReadCycles();
+
+    while (!ready())
+    {
+        if ((debug::ReadCycles() - start) > kHangTimeoutCycles)
+        {
+            ReportPipelineHang(what);
+            return; // Sys_Error is not marked noreturn, so do not spin on it.
+        }
+    }
+#else
+    (void)what;
+    while (!ready()) { }
+#endif // PS2_QUAKE_DEBUG
+}
+
+} // namespace
+
 void WaitIdle()
 {
     if (!s_kickInFlight)
@@ -456,12 +506,19 @@ void WaitIdle()
 
         // The transfer first: VIF1 has swallowed the whole chain, and the FLUSH in its terminator
         // has let the microprograms finish and their XGKICKs reach the GIF.
+        //
+        // Watched here rather than left to dma_channel_wait, which has no way to say why it never
+        // came back. CHCR's STR bit clears when the channel is done, so on the way out of this the
+        // call below returns at once and the sdk keeps whatever bookkeeping it does.
+        SpinUntilReady([] { return (*R_EE_D1_CHCR & kDmaChcrStr) == 0; },
+                       "the VIF1 chain never drained");
         dma_channel_wait(DMA_CHANNEL_VIF1, 0);
 
         // Then the GS. Everything above only says the work was *handed over*; this is where it has
         // actually been drawn, which is what the framebuffer flip needs before it shows the buffer
         // and what keeps two frames from meeting in the one z-buffer they share.
-        while ((*GS_REG_CSR & 2) == 0) { }
+        SpinUntilReady([] { return (*GS_REG_CSR & 2) != 0; },
+                       "the GS never raised FINISH");
         *GS_REG_CSR = 2; // write 1 to clear, leaving the other event bits alone
     }
 

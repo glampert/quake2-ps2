@@ -250,7 +250,7 @@
         ; with eleven of its thirteen already spoken for, cannot spare.
         ibgtz iVertsLeft, lWindowHasRoom
 
-        CloseOutputWindowAndKick{ }
+        CloseOutputWindowAndKick{ lKicked1 }
         OpenOutputWindow{ }
 
         lWindowHasRoom:
@@ -270,6 +270,6 @@
     ; The last window always holds at least one triangle: a window is
     ; closed only when a triangle will not fit, and that triangle goes
     ; straight into the fresh one. So this never kicks an empty packet.
-    CloseOutputWindowAndKick{ }
+    CloseOutputWindowAndKick{ lKicked2 }
 
 #endvuprog

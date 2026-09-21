@@ -462,9 +462,17 @@ constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
 // Nothing on this side of the fence explains a stall. It is nearly always a microprogram that did
 // not end or a GS packet that never reached EOP, and neither is visible without the VIF, GIF and
 // DMA registers - so print them before dying, while they still hold the stalled state.
+static HangReportFn s_hangReportHook = nullptr;
+
 Q_COLD_FUNC void ReportPipelineHang(const char * const what)
 {
     debug::DumpPipelineState(what);
+
+    if (s_hangReportHook != nullptr)
+    {
+        s_hangReportHook();
+    }
+
     Sys_Error("Render pipeline hang: %s. See the pipeline dump above.", what);
 }
 
@@ -529,6 +537,13 @@ bool KickInFlight()
 {
     return s_kickInFlight;
 }
+
+#if PS2_QUAKE_DEBUG
+void SetHangReportHook(const HangReportFn hook)
+{
+    s_hangReportHook = hook;
+}
+#endif // PS2_QUAKE_DEBUG
 
 bool Drain()
 {

@@ -237,6 +237,14 @@ void WaitIdle();
 // pixels, the half it was built in) must WaitIdle() first.
 bool KickInFlight();
 
+#if PS2_QUAKE_DEBUG
+// Installed by the renderer, called when a wait gives up, just after the pipeline registers are
+// dumped. Those say *that* the pipeline is stuck; only the renderer can say what its
+// microprograms were building when it happened, so it adds that here.
+using HangReportFn = void (*)();
+void SetHangReportHook(HangReportFn hook);
+#endif // PS2_QUAKE_DEBUG
+
 // Kick + WaitIdle, for a caller that needs what is built so far to have reached the GS before it
 // changes something those draws depend on - an upload into evicted VRAM, a lightmap atlas
 // rewrite, a CLUT refresh. Returns false if there was nothing to drain. The wait covers the GS as

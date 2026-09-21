@@ -73,6 +73,22 @@
     isw.w  iADC, 8(iOutPtr)
 #endmacro
 
+; The same judgement, split, for a program that has to *act* on it as well as
+; record it. Reading the clip flags twice for one triangle is the thing to
+; avoid: openvcl reorders around flag reads (see the note in the lerp
+; program's backface cull), so the two reads are not guaranteed to see the
+; same flags. Judge once, branch on vi01, and store the ADC afterwards.
+#macro JudgeTriangleAdc
+    fcand  vi01, 0x3FFFF
+    iaddiu iADC, vi01, 0x7FFF
+#endmacro
+
+#macro StoreTriangleAdc
+    isw.w  iADC, 2(iOutPtr)
+    isw.w  iADC, 5(iOutPtr)
+    isw.w  iADC, 8(iOutPtr)
+#endmacro
+
 ; ---------------------------------------------------------------------
 ; Output windows
 ;
@@ -141,9 +157,21 @@
 ;
 ; The first instruction below must stay harmless if it lands in a branch
 ; delay slot - callers skip this macro by branching over it.
-#macro CloseOutputWindowAndKick
+#macro CloseOutputWindowAndKick: lblEmpty
     iaddiu iNloop, vi00,   kWindowVerts
     isub   iNloop, iNloop, iVertsLeft
+
+    ; Nothing was written, so there is no packet to send. Worth the test even
+    ; though only a clipping program can get here: a window is otherwise closed
+    ; only when a triangle will not fit, and that triangle goes straight into
+    ; the fresh one - but a triangle that is clipped away emits nothing, and
+    ; kicking the empty window leaves VIF1 waiting at the chain terminator's
+    ; FLUSH for a PATH1 transfer the GIF never reports finishing.
+    ;
+    ; 'lblEmpty' has to be a label name unique to this invocation - vclpp
+    ; substitutes it as text, and two invocations cannot share one.
+    ibeq   iNloop, vi00, lblEmpty
+
     iaddiu iNloop, iNloop, 0x7FFF
     iaddiu iNloop, iNloop, 1
     isw.x  iNloop, kWindowPrimTag(iWin)
@@ -157,4 +185,6 @@
     --barrier
 
     xgkick iKickAt
+
+    lblEmpty:
 #endmacro

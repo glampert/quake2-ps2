@@ -25,6 +25,7 @@
 
 #include "ps2/renderer/render_system.h"
 #include "ps2/debug/profile.h"
+#include "ps2/debug/pipeline_dump.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/texture.h"
 
@@ -36,6 +37,7 @@
 #include <packet2_chain.h>
 #include <packet2_utils.h>
 #include <packet2_vif.h>
+#include <vif_registers.h> // VIF1_TOPS
 
 namespace ps2::rs {
 namespace {
@@ -541,6 +543,27 @@ void EnsureTextureResident(const tex::Texture & texture)
 // Initialization / frame lifecycle
 // ------------------------------------------------------------------------------------------------
 
+#if PS2_QUAKE_DEBUG
+
+// Added to the pipeline dump when a frame stops finishing. The registers say the pipeline is
+// stuck; this says what the microprograms were building when it happened.
+//
+// The GIF tag block at the head of an output window is what a stalled PATH1 transfer is about. A
+// drawing tag whose NLOOP does not match the vertices actually written, or that never got its
+// EOP, is a packet the GIF can never finish - and the VU is long gone by then, so the only place
+// left to read it is the memory it wrote.
+Q_COLD_FUNC void DumpVuWorkInProgress()
+{
+    // Which half XTOP handed the microprograms this run.
+    const int tops = static_cast<int>(VIF1_TOPS);
+
+    debug::DumpVu1DataMemory("batch header and GIF tags", tops + vu1::kBatchHeaderAddr, 8);
+    debug::DumpVu1DataMemory("output window A", tops + vu1::kOutputWindowAAddr, vu1::kNumGifTagQwords);
+    debug::DumpVu1DataMemory("output window B", tops + vu1::kOutputWindowBAddr, vu1::kNumGifTagQwords);
+}
+
+#endif // PS2_QUAKE_DEBUG
+
 void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes)
 {
     gs::Init(gsConfig);
@@ -550,6 +573,10 @@ void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes)
 
     // NOTE: Must happen after cmdbuf::Init since the microprogram upload goes out on the cmdbuf chain.
     vu1::Init();
+
+#if PS2_QUAKE_DEBUG
+    cmdbuf::SetHangReportHook(&DumpVuWorkInProgress);
+#endif
 }
 
 void SetClearColor(const u8 r, const u8 g, const u8 b)

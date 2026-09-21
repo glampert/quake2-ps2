@@ -327,7 +327,7 @@
         iaddiu iOutPtr,    iOutPtr,     9
         iaddi  iVertsLeft, iVertsLeft, -3
         iaddi  iNumVerts,  iNumVerts,  -3
-        ibne   iNumVerts, vi00, lTriangleLoop
+        ibgtz  iNumVerts, lTriangleLoop
 
     ; The last window always holds at least one triangle: a window is
     ; closed only when a triangle will not fit, and that triangle goes

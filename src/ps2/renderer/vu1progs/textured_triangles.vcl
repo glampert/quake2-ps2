@@ -315,7 +315,7 @@
 
             iaddiu iWalk, iWalk, 2
             iaddi  iLeft, iLeft, -1
-            ibne   iLeft, vi00, lClipEdgeLoop
+            ibgtz  iLeft, lClipEdgeLoop
 
         ; Park the survivor end where the fan can reach it. See kClipSpill.
         isw.x iOut, kClipSpill(vi00)
@@ -383,7 +383,7 @@
 
         iaddiu iInPtr,    iInPtr,     6
         iaddi  iNumVerts, iNumVerts, -3
-        ibne   iNumVerts, vi00, lTriangleLoop
+        ibgtz  iNumVerts, lTriangleLoop
 
     ; The last window always holds at least one triangle: a window is
     ; closed only when a triangle will not fit, and that triangle goes

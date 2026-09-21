@@ -241,7 +241,7 @@
         iaddiu iInPtr,   iInPtr,   1
         iaddiu iOutPtr,  iOutPtr,  5
         iaddi  iNumPrts, iNumPrts, -1
-        ibne   iNumPrts, vi00, lParticleLoop
+        ibgtz  iNumPrts, lParticleLoop
 
     --barrier
 

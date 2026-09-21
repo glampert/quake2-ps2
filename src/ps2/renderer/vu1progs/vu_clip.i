@@ -105,12 +105,19 @@
     sub.x fClipT, vDIn, vDFar
     div   q,      vDIn[x], fClipT[x]
 
-    sub  vOutPos, vFarPos, vInPos
-    sub  vOutStq, vFarStq, vInStq
-    mulq vOutPos, vOutPos, q
-    mulq vOutStq, vOutStq, q
-    add  vOutPos, vInPos,  vOutPos
-    add  vOutStq, vInStq,  vOutStq
+    ; Q lands in a register here, and the two interpolations read it from
+    ; there. Pipeline Q with more than one consumer is only correct while the
+    ; scheduler keeps every consumer inside the divide's window, and the next
+    ; regeneration is under no obligation to. One consumer, then broadcasts.
+    ; vf00.x is zero - vf00.w is ONE, which is a different trap.
+    addq.x fClipQ, vf00, q
+
+    sub vOutPos, vFarPos, vInPos
+    sub vOutStq, vFarStq, vInStq
+    mul vOutPos, vOutPos, fClipQ[x]
+    mul vOutStq, vOutStq, fClipQ[x]
+    add vOutPos, vInPos,  vOutPos
+    add vOutStq, vInStq,  vOutStq
 #endmacro
 
 ; Guard-band judgement for a vertex the clipper produced. The plane pass

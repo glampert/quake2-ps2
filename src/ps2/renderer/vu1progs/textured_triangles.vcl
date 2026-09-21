@@ -37,6 +37,7 @@
 ;--------------------------------------------------------------------
 
 #include "vu_common.i"
+#include "vu_clip.i"
 
 ; Batch offsets, relative to XTOP. The window values must match the
 ; kOutputWindow* / kMaxVertsPerWindow constants in vu1.h.
@@ -217,6 +218,10 @@
     ; (0x01 = the RGBAQ register):
     iaddiu iRegRGBAQ, vi00, 1
 
+    ; -1.0, the lower end of the clipper's distance clamp (vf00.w is the
+    ; upper one). VU1 has no float immediates.
+    sub.x fMinusOne, vf00, vf00[w]
+
     ; Current double buffer and this batch's pointers:
     xtop   iBase
     ilw.w  iNumVerts, kBatchHeader(iBase)
@@ -232,37 +237,157 @@
     ; One triangle per iteration:
     lTriangleLoop:
 
-        ; Room for another triangle in this window? If not, send what is
-        ; there and start the other one. iVertsLeft only ever steps by
-        ; three, so "greater than zero" is "at least one triangle" and
-        ; the test needs no scratch register - which the lerp program,
-        ; with eleven of its thirteen already spoken for, cannot spare.
-        ibgtz iVertsLeft, lWindowHasRoom
-
+        ; Room for everything this triangle can produce, asked once, here.
+        ;
+        ; Two rules meet at this line. It has to come *before* the corners are
+        ; transformed, because OpenOutputWindow reloads the GIF tag block into
+        ; seven VF registers and openvcl will put those on top of a
+        ; transformed corner that is still live across the call. And it has to
+        ; cover the worst case up front - six vertices, since cutting against
+        ; one plane leaves at most four corners, so at most two triangles -
+        ; because asking again from inside the clipper means more window
+        ; opens and kicks in there, and that is what stalls VIF1.
+        iaddi iRoom, iVertsLeft, -6
+        ibgez iRoom, lWindowHasRoom
         CloseOutputWindowAndKick{ lKicked1 }
         OpenOutputWindow{ }
-
         lWindowHasRoom:
 
         ClipTransform{ fPos0, fStq0, 0, 1 }
         ClipTransform{ fPos1, fStq1, 2, 3 }
         ClipTransform{ fPos2, fStq2, 4, 5 }
 
+        ; Did any corner leave the volume? About one triangle in fifty
+        ; does; the rest go straight out below.
+        JudgeTriangleAdc{ }
+        ibne  vi01, vi00, lClipTriangle
+
+        ; --- every corner inside: emit the triangle as it stands ---
         EmitVertex{ fPos0, fStq0, 0, 1, 2 }
         EmitVertex{ fPos1, fStq1, 3, 4, 5 }
         EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+        StoreTriangleAdc{ }
 
-        WholeTriangleReject{ }
-
-        iaddiu iInPtr,     iInPtr,      6
         iaddiu iOutPtr,    iOutPtr,     9
         iaddi  iVertsLeft, iVertsLeft, -3
-        iaddi  iNumVerts,  iNumVerts,  -3
+        b lTriangleAdvance
+
+        ; --- a corner is outside: cut against near, fan what survives ---
+    lClipTriangle:
+
+        ClipSeedTriangle{ iWalk }
+
+        iaddiu iOut,  vi00, kClipBufB
+        iaddiu iLeft, vi00, 3
+
+        lClipEdgeLoop:
+
+            lq fCurPos, 0(iWalk)
+            lq fCurStq, 1(iWalk)
+            lq fNxtPos, 2(iWalk)
+            lq fNxtStq, 3(iWalk)
+
+            ClipNearDist{ fDCur, fCurPos }
+            ClipNearDist{ fDNxt, fNxtPos }
+            ClipSignOf{ iSignCur, fDCur }
+
+            ; Keep this corner if it is inside the plane.
+            ibltz iSignCur, lClipDropCur
+            sq fCurPos, 0(iOut)
+            sq fCurStq, 1(iOut)
+            iaddiu iOut, iOut, 2
+            lClipDropCur:
+
+            ; The edge crosses when the two distances differ in sign,
+            ; which is when their product is negative.
+            mul.x fClipT, fDCur, fDNxt
+            ClipSignOf{ iSignProd, fClipT }
+            ibgez iSignProd, lClipNoCut
+
+            ClipCutVertex{ fCutPos, fCutStq, fCurPos, fCurStq, fNxtPos, fNxtStq, fDCur, fDNxt }
+            sq fCutPos, 0(iOut)
+            sq fCutStq, 1(iOut)
+            ; The cut's colour lane is FMAC garbage, so put the edge's
+            ; first corner's packed colour back over it with a raw store.
+            sq.x fCurStq, 1(iOut)
+            iaddiu iOut, iOut, 2
+            lClipNoCut:
+
+            iaddiu iWalk, iWalk, 2
+            iaddi  iLeft, iLeft, -1
+            ibne   iLeft, vi00, lClipEdgeLoop
+
+        ; Park the survivor end where the fan can reach it. See kClipSpill.
+        isw.x iOut, kClipSpill(vi00)
+
+        ; Fan the survivors. Cutting a triangle against one plane leaves
+        ; three corners or four and never more, so this is two triangles at
+        ; most and is written out rather than looped. That is not only for
+        ; the saving: a loop here would be a nested one writing the enclosing
+        ; loop's window state, and openvcl miscompiles that shape - quietly,
+        ; and in the code that *does* run.
+        ilw.x  iEnd,  kClipSpill(vi00)
+        iaddiu iLeft, vi00, kClipSurvived3
+        isub   iLeft, iEnd, iLeft
+        ibltz  iLeft, lClipDone
+
+        ; --- v0, v1, v2 ---
+        lq fPos0, kClipBufB(vi00)
+        lq fStq0, kClipBufB1(vi00)
+        lq fPos1, kClipBufB2(vi00)
+        lq fStq1, kClipBufB3(vi00)
+        lq fPos2, kClipBufB4(vi00)
+        lq fStq2, kClipBufB5(vi00)
+
+        ClipJudge{ fPos0 }
+        ClipJudge{ fPos1 }
+        ClipJudge{ fPos2 }
+
+        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
+        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
+        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+        WholeTriangleReject{ }
+
+        iaddiu iOutPtr,    iOutPtr,     9
+        iaddi  iVertsLeft, iVertsLeft, -3
+
+        ; A fourth corner survived, so the quad needs its second triangle.
+        ilw.x  iEnd,  kClipSpill(vi00)
+        iaddiu iLeft, vi00, kClipSurvived4
+        isub   iLeft, iEnd, iLeft
+        ibltz  iLeft, lClipDone
+
+        ; --- v0, v2, v3 ---
+        lq fPos0, kClipBufB(vi00)
+        lq fStq0, kClipBufB1(vi00)
+        lq fPos1, kClipBufB4(vi00)
+        lq fStq1, kClipBufB5(vi00)
+        lq fPos2, kClipBufB6(vi00)
+        lq fStq2, kClipBufB7(vi00)
+
+        ClipJudge{ fPos0 }
+        ClipJudge{ fPos1 }
+        ClipJudge{ fPos2 }
+
+        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
+        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
+        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+        WholeTriangleReject{ }
+
+        iaddiu iOutPtr,    iOutPtr,     9
+        iaddi  iVertsLeft, iVertsLeft, -3
+
+        lClipDone:
+
+    lTriangleAdvance:
+
+        iaddiu iInPtr,    iInPtr,     6
+        iaddi  iNumVerts, iNumVerts, -3
         ibne   iNumVerts, vi00, lTriangleLoop
 
     ; The last window always holds at least one triangle: a window is
     ; closed only when a triangle will not fit, and that triangle goes
     ; straight into the fresh one. So this never kicks an empty packet.
-    CloseOutputWindowAndKick{ lKicked2 }
+    CloseOutputWindowAndKick{ lKicked3 }
 
 #endvuprog

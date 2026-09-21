@@ -52,22 +52,21 @@
 #define kWindowVerts   45
 #define kWindowPrimTag 6
 
-; Transforms one vertex: 2 input qwords at offPos/offStq from iInPtr
-; become the ST, RGBAQ (via A+D) and XYZ2 output qwords at offST/offAD/
-; offXyz from iOutPtr (input is 2 qwords per vertex but output is 3, so
-; the offsets no longer coincide). Leaves this vertex's clipw flags as
-; the newest entry in the clip flag register; the caller judges whole
-; triangles with fcand after 3 calls and writes the XYZ2 .w ADC bit.
+; Reads one vertex and leaves it in clip space, in vPos/vStq, without
+; touching the output. Splitting the transform from the emission is what
+; lets a clipper sit between them: the survivors of a cut are emitted,
+; the rest never are, and neither is known until all three corners have
+; been transformed.
 ;
-; The packed color is moved with raw copies only (lq/sq.x): FMAC ops
-; would flush denormal color bit patterns (e.g. 0x800000FF) to zero.
+; Leaves this vertex's clipw flags as the newest entry in the clip flag
+; register; the caller judges whole triangles with fcand after 3 calls.
 ;
-; C-like pseudo-code ('in'/'out' are the qword arrays at iInPtr/iOutPtr):
+; C-like pseudo-code ('in' is the qword array at iInPtr):
 ;
-;   void DoVertex(int offPos, int offStq, int offST, int offAD, int offXyz)
+;   void ClipTransform(int offPos, int offStq, vec4& pos, vec4& stq)
 ;   {
-;       vec4 pos = in[offPos];
-;       vec4 stq = in[offStq]; // (rgba, s, t, q); raw packed color in .x
+;       pos = in[offPos];
+;       stq = in[offStq]; // (rgba, s, t, q); raw packed color in .x
 ;
 ;       // Object space to clip space (row-vector MVP):
 ;       pos = pos.x * mvp[0] + pos.y * mvp[1]
@@ -78,64 +77,78 @@
 ;       // onto the clip flag queue for the caller to inspect:
 ;       vec3 judge = pos.xyz * clipScale.xyz;
 ;       clipFlagQueue.push(judge, abs(pos.w));
+;   }
+#macro ClipTransform: vPos, vStq, offPos, offStq
+
+    lq vPos, offPos(iInPtr)
+    lq vStq, offStq(iInPtr)
+
+    ; Position to clip space (row-vector MVP):
+    mul  acc,  fMVP0, vPos[x]
+    madd acc,  fMVP1, vPos[y]
+    madd acc,  fMVP2, vPos[z]
+    ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
+    ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
+    ; producer writes a 1.0 that this no longer needs. Same reason
+    ; lerped_triangles.vcl does it - see the note on mod::PolyVertex.
+    madd vPos, fMVP3, vf00[w]
+
+    ; Guard-band clip judgement against |w|: scaled x/y, exact z.
+    mul.xyz   fJudge, vPos, fClipScale
+    clipw.xyz fJudge, vPos[w]
+
+#endmacro
+
+; Projects one clip-space vertex and writes its three output qwords: ST,
+; RGBAQ (via A+D) and XYZ2, at offST/offAD/offXyz from iOutPtr.
 ;
+; The packed color is moved with raw copies only (lq/sq.x): FMAC ops
+; would flush denormal color bit patterns (e.g. 0x800000FF) to zero.
+;
+; vPos is read, never written - the clipper needs the clip-space position
+; to survive, so the projection lands in a scratch register instead.
+;
+; C-like pseudo-code:
+;
+;   void EmitVertex(vec4 pos, vec4 stq, int offST, int offAD, int offXyz)
+;   {
 ;       // Perspective divide; the STQ words share the 1/w so the GS
 ;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
 ;       // The color bits get scaled too - garbage, but the rotate
 ;       // below moves it into the ST qword's ignored .w:
-;       float q  = 1.0f / pos.w;
-;       pos.xyz *= q;                    // now NDC
-;       vec4 stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
+;       float q    = 1.0f / pos.w;
+;       vec3  proj = pos.xyz * q;         // now NDC
+;       vec4  stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
 ;
 ;       // NDC to GS window coordinates, in 12.4 fixed point:
-;       pos.xyz = ftoi4(gsOffset.xyz + pos.xyz * gsScale.xyz);
+;       proj = ftoi4(gsOffset.xyz + proj * gsScale.xyz);
 ;
 ;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
 ;       out[offAD].x    = stq.x;          // native RGBAQ: packed color...
 ;       out[offAD].y    = q;              // ...with Q in the word above
 ;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
-;       out[offXyz].xyz = pos.xyz;        // XYZ (.w ADC bit set by caller)
+;       out[offXyz].xyz = proj;           // XYZ (.w ADC bit set by caller)
 ;   }
-#macro DoVertex: offPos, offStq, offST, offAD, offXyz
+#macro EmitVertex: vPos, vStq, offST, offAD, offXyz
 
-    lq fPos, offPos(iInPtr)
-    lq fStq, offStq(iInPtr)
-
-    ; Position to clip space (row-vector MVP):
-    mul  acc,  fMVP0, fPos[x]
-    madd acc,  fMVP1, fPos[y]
-    madd acc,  fMVP2, fPos[z]
-    ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
-    ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
-    ; producer writes a 1.0 that this no longer needs. Same reason
-    ; lerped_triangles.vcl does it - see the note on mod::PolyVertex.
-    madd fPos, fMVP3, vf00[w]
-
-    ; Guard-band clip judgement against |w|: scaled x/y, exact z.
-    mul.xyz   fJudge, fPos, fClipScale
-    clipw.xyz fJudge, fPos[w]
-
-    ; Perspective divide, with the same 1/w multiplied onto the texture
-    ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
-    ; interpolation - and captured into .y for the A+D RGBAQ qword.
-    div        q,          vf00[w], fPos[w]
-    mul.xyz    fPos,       fPos,    q
-    mulq       fStqScaled, fStq,    q
+    div        q,          vf00[w], vPos[w]
+    mul.xyz    fProj,      vPos,    q
+    mulq       fStqScaled, vStq,    q
     addq.y     fQ,         vf00,    q
 
     ; NDC to GS window coordinates, in 12.4 fixed point:
-    mula.xyz  acc,  fGSOffset, vf00[w]
-    madd.xyz  fPos, fPos, fGSScale
-    ftoi4.xyz fPos, fPos
+    mula.xyz  acc,   fGSOffset, vf00[w]
+    madd.xyz  fProj, fProj, fGSScale
+    ftoi4.xyz fProj, fProj
 
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
 
     sq     fST,  offST(iOutPtr)
-    sq.x   fStq, offAD(iOutPtr)
+    sq.x   vStq, offAD(iOutPtr)
     sq.y   fQ,   offAD(iOutPtr)
     isw.z  iRegRGBAQ, offAD(iOutPtr)
-    sq.xyz fPos, offXyz(iOutPtr)
+    sq.xyz fProj, offXyz(iOutPtr)
 
 #endmacro
 
@@ -231,9 +244,13 @@
 
         lWindowHasRoom:
 
-        DoVertex{ 0, 1, 0, 1, 2 }
-        DoVertex{ 2, 3, 3, 4, 5 }
-        DoVertex{ 4, 5, 6, 7, 8 }
+        ClipTransform{ fPos0, fStq0, 0, 1 }
+        ClipTransform{ fPos1, fStq1, 2, 3 }
+        ClipTransform{ fPos2, fStq2, 4, 5 }
+
+        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
+        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
+        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
 
         WholeTriangleReject{ }
 

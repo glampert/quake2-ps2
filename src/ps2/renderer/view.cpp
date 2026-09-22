@@ -428,9 +428,15 @@ Q_ALWAYS_INLINE bool SurfaceInsideClipVolumeCached(const mod::ModelSurface & sur
 //
 // Off, only the world passes can answer at all, and only for surfaces the clip
 // volume test proves are wholly inside. Everything else clips on the EE.
+// True while VU1 is doing the clipping rather than the EE.
+Q_ALWAYS_INLINE bool VuClippingEnabled()
+{
+    return s_vuClip->value != 0.0f;
+}
+
 Q_ALWAYS_INLINE bool SurfaceSkipsEeClipping(const mod::ModelSurface & surf, const bool worldTransform)
 {
-    if (s_vuClip->value != 0.0f)
+    if (VuClippingEnabled())
     {
         return true;
     }
@@ -1342,7 +1348,21 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     //
     // World transform only - the microprogram lights in world space, and a brush
     // model's vertices are in its own model space (see the same guard below).
-    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
+    //
+    // Not while VU1 is doing the clipping, and this is a hole rather than a
+    // preference. The flag routes this pass to the lit microprogram, and lit has
+    // no clipper - so a triangle the diffuse pass cuts and draws whole is one lit
+    // rejects whole through the ADC bit, and the surface comes out with its
+    // diffuse and no lightmap over it. Fullbright, on exactly the large surfaces
+    // that straddle a plane.
+    //
+    // Sending this pass through the textured program instead keeps both passes
+    // cutting identically, which is what matters: clip on the EE for one and on
+    // the VU for the other and the two polygons stop agreeing at the seam. The
+    // cost is that mode 2's point lights do not draw while ps2_vu_clip is on.
+    // Interim, until lit has a clipper of its own - which needs the
+    // textured/lit/warped merge to pay for the micro memory.
+    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix && !VuClippingEnabled())
     {
         state.flags = state.flags | rs::DrawFlags::DynamicLights;
     }

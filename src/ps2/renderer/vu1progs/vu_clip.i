@@ -168,13 +168,28 @@
         mul.x   fDCur, fDCur,   fGSOffset[w]
         mul.x   fDNxt, fDNxt,   fGSOffset[w]
 
-        ; Sign of this corner's distance; negative is outside. Clamped to
-        ; [-1, +1] first so the ftoi4 cannot overflow the 16 bits mtir
-        ; moves. vf00.w is ONE - vf00.x is zero, which is a different trap.
-        mini.x  fClipT,   fDCur,  vf00[w]
-        max.x   fClipT,   fClipT, fMinusOne[x]
-        ftoi4.x fClipT,   fClipT
-        mtir    iSignCur, fClipT[x]
+        ; Two signs, taken together: this corner's distance, and the product
+        ; of the two endpoints' - which is negative exactly when the edge
+        ; crosses the plane, since that is when they differ in sign.
+        ;
+        ; Both are clamped to [-1, +1] first so the ftoi4 cannot overflow the
+        ; 16 bits mtir moves. vf00.w is ONE - vf00.x is zero, which is a
+        ; different trap.
+        ;
+        ; The two chains are four deep and independent, and are interleaved by
+        ; hand for the same reason the distances above are: openvcl will not
+        ; overlap them on its own, and run one after the other they are three
+        ; nops in every four. The crossing test used to sit after the keep
+        ; branch, where it could not be overlapped with anything at all.
+        mul.x   fClipP,    fDCur,   fDNxt
+        mini.x  fClipT,    fDCur,   vf00[w]
+        mini.x  fClipP,    fClipP,  vf00[w]
+        max.x   fClipT,    fClipT,  fMinusOne[x]
+        max.x   fClipP,    fClipP,  fMinusOne[x]
+        ftoi4.x fClipT,    fClipT
+        ftoi4.x fClipP,    fClipP
+        mtir    iSignCur,  fClipT[x]
+        mtir    iSignProd, fClipP[x]
 
         ; Keep this corner if it is inside the plane.
         ibltz iSignCur, lblKept
@@ -184,14 +199,7 @@
         iaddiu iCount, iCount, 1
         lblKept:
 
-        ; The edge crosses when the two distances differ in sign, which is
-        ; when their product is negative.
-        mul.x   fClipT,    fDCur,  fDNxt
-        mini.x  fClipT,    fClipT, vf00[w]
-        max.x   fClipT,    fClipT, fMinusOne[x]
-        ftoi4.x fClipT,    fClipT
-        mtir    iSignProd, fClipT[x]
-        ibgez   iSignProd, lblNoCut
+        ibgez iSignProd, lblNoCut
 
         ; Interpolate the cut onto the plane: t = dCur / (dCur - dNxt).
         ;

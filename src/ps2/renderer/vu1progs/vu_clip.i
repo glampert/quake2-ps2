@@ -96,7 +96,7 @@
 ;
 ; In:  iCount  corners in srcBuf, first one repeated at the end
 ; Out: iCount  corners in dstBuf, same arrangement. Zero, or three and up.
-#macro ClipPlanePass: vSel, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblOut
+#macro ClipPlanePass: vSel, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblWrap, lblOut
     iaddiu iWalk,  vi00,   srcBuf
     iaddiu iOut,   vi00,   dstBuf
     iaddiu iLeft,  iCount, 0
@@ -193,9 +193,18 @@
         ibgtz  iLeft, lblLoop
 
     ; Repeat the first survivor at the end, so the next pass - or the fan -
-    ; walks edges without a wrap test. A polygon that lost too many corners
-    ; is finished, and leaves iCount below three for everyone downstream.
-    iaddi iLeft, iCount, -3
+    ; walks edges without a wrap test.
+    ;
+    ; A polygon that lost too many corners is finished, and is forced to
+    ; nothing rather than left as it fell. Sutherland-Hodgman on a convex
+    ; input leaves none or three and up, but a corner sitting exactly on the
+    ; plane can leave two - and two corners with no wrap vertex is an edge
+    ; list the next pass would walk straight off the end of.
+    iaddi  iLeft,  iCount, -3
+    ibgez  iLeft,  lblWrap
+    iaddiu iCount, vi00,   0
+    lblWrap:
+
     ibltz iLeft, lblOut
     lq fCurPos, dstBuf + 0(vi00)
     lq fCurStq, dstBuf + 1(vi00)

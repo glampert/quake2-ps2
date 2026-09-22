@@ -279,7 +279,7 @@
 
         ; One plane for now. The other four guard-band sides are the same
         ; macro with a different selector, and go in next.
-        ClipPlanePass{ fJn[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearOut }
+        ClipPlanePass{ fJn[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearWrap, lNearOut }
 
         ; Park the survivor count where the fan can reach it, and fence the
         ; store from the load: vcl does not model VU memory aliasing, so
@@ -288,58 +288,44 @@
         --barrier
         ilw.x iCount, kClipCount(vi00)
 
-        ; Fan the survivors. One plane can leave three corners or four and
-        ; never more, so this is two triangles at most and is written out
-        ; rather than looped. That is not only for the saving: a loop here
-        ; would be a nested one writing the enclosing loop's window state,
-        ; and openvcl miscompiles that shape - quietly, and in the code that
-        ; *does* run.
-        iaddi iLeft, iCount, -3
+        ; Fan the survivors from corner 0 - (0,1,2), (0,2,3), ... - which is
+        ; iCount-2 triangles. Five planes can leave eight corners, so this is
+        ; a loop rather than the two triangles one plane could be written out
+        ; by hand. It writes the enclosing loop's iOutPtr and iVertsLeft,
+        ; which is the shape openvcl miscompiles when a window open joins it;
+        ; there is none here, and the two loop-variable checks in the Makefile
+        ; are what say so on every build.
+        iaddi iLeft, iCount, -2
         ibltz iLeft, lClipDone
+        ibeq  iLeft, vi00, lClipDone
 
-        ; --- v0, v1, v2 ---
+        ; Corner 0 is in every triangle of the fan, so it is loaded once.
         lq fPos0, kClipBufB + 0(vi00)
         lq fStq0, kClipBufB + 1(vi00)
-        lq fPos1, kClipBufB + 2(vi00)
-        lq fStq1, kClipBufB + 3(vi00)
-        lq fPos2, kClipBufB + 4(vi00)
-        lq fStq2, kClipBufB + 5(vi00)
+        iaddiu iFan, vi00, kClipBufB + 2
 
-        ClipJudge{ fPos0 }
-        ClipJudge{ fPos1 }
-        ClipJudge{ fPos2 }
+        lFanLoop:
 
-        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
-        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
-        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
-        WholeTriangleReject{ }
+            lq fPos1, 0(iFan)
+            lq fStq1, 1(iFan)
+            lq fPos2, 2(iFan)
+            lq fStq2, 3(iFan)
 
-        iaddiu iOutPtr,    iOutPtr,     9
-        iaddi  iVertsLeft, iVertsLeft, -3
+            ClipJudge{ fPos0 }
+            ClipJudge{ fPos1 }
+            ClipJudge{ fPos2 }
 
-        ; A fourth corner survived, so the quad needs its second triangle.
-        iaddi iLeft, iCount, -4
-        ibltz iLeft, lClipDone
+            EmitVertex{ fPos0, fStq0, 0, 1, 2 }
+            EmitVertex{ fPos1, fStq1, 3, 4, 5 }
+            EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+            WholeTriangleReject{ }
 
-        ; --- v0, v2, v3 ---
-        lq fPos0, kClipBufB + 0(vi00)
-        lq fStq0, kClipBufB + 1(vi00)
-        lq fPos1, kClipBufB + 4(vi00)
-        lq fStq1, kClipBufB + 5(vi00)
-        lq fPos2, kClipBufB + 6(vi00)
-        lq fStq2, kClipBufB + 7(vi00)
+            iaddiu iOutPtr,    iOutPtr,     9
+            iaddi  iVertsLeft, iVertsLeft, -3
 
-        ClipJudge{ fPos0 }
-        ClipJudge{ fPos1 }
-        ClipJudge{ fPos2 }
-
-        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
-        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
-        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
-        WholeTriangleReject{ }
-
-        iaddiu iOutPtr,    iOutPtr,     9
-        iaddi  iVertsLeft, iVertsLeft, -3
+            iaddiu iFan,  iFan,  2
+            iaddi  iLeft, iLeft, -1
+            ibgtz  iLeft, lFanLoop
 
         lClipDone:
 

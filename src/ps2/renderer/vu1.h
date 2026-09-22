@@ -132,6 +132,29 @@ constexpr float kGuardBandNdcLimit = 0.8f;
 // planes, z scale 1) are dropped whole via the ADC bit.
 constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
 
+// How far inside the clip planes the VU1 clipper actually cuts, as a fraction of w.
+//
+// A cut lands the vertex exactly on the plane, and the guard-band judgement that runs on the
+// survivors tests the very same quantity - so whether it reads as inside comes down to which way
+// the divide rounded. That is a coin flip on every cut vertex, and a lost toss takes the whole
+// triangle with it through the ADC bit. Clipping a hair early means a survivor is strictly
+// inside and the judgement can only agree.
+//
+// clip::kClipEpsilon is the EE clipper's version of this and exists for the same reason. This one
+// is relative rather than absolute, so the margin holds at any depth; 0.1% of the guard band is
+// some five hundred times the rounding it covers and still far below anything visible, the band
+// being about five times the half-screen.
+constexpr float kVuClipShrink = 0.001f;
+
+// What the clipper multiplies a plane distance by before reading its sign.
+//
+// The sign comes off an ftoi4, which resolves 1/16 of a unit, and the crossing test
+// multiplies two distances together - so the headroom has to cover the product, not just
+// the distance. 2048 squared was previously applied as two multiplies by fGSScale.x; as its
+// own constant it is one, which takes four cycles of FMAC latency off a chain that the
+// clipper walks twice per edge and five times per triangle.
+constexpr float kVuClipDistScale = 2048.0f * 2048.0f;
+
 // Values FrameConstants::clipScale and ::colorClamp are always set to. clipScale's .w is the
 // exception: no program reads it as part of the clip judgement, so the turbulent animation phase
 // rides there instead and BeginDrawChain fills it per frame (see rs::SetWarpAnimation).

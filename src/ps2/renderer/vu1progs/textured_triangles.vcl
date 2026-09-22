@@ -254,7 +254,13 @@
         ; window closes once fewer than eighteen are left, so it carries
         ; between 27 and 45 instead of always 45, and a full chunk takes two
         ; to four kicks where it took two. GsWait is the canary.
-        iaddi iRoom, iVertsLeft, -18
+        ; Through a register, not an immediate: iaddi's immediate is five bits
+        ; signed, and dvp-as truncates anything larger without a word - -18
+        ; assembles to exactly the same instruction as +14, which made this
+        ; test always pass and walked the GIF straight out of the window.
+        ; check_vu_immediates.py now fails the build on it.
+        iaddiu iRoom, vi00,       18
+        isub   iRoom, iVertsLeft, iRoom
         ibgez iRoom, lWindowHasRoom
         CloseOutputWindowAndKick{ lKicked1 }
         OpenOutputWindow{ }
@@ -296,11 +302,11 @@
         ;
         ; Near goes first because it collapses the most geometry, so the four
         ; passes behind it walk shorter edge lists.
-        ClipPlanePass{ fJn[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearWrap, lNearOut }
-        ClipPlanePass{ fJn[x], kClipBufB, kClipBufA, lXlLoop,   lXlKept,   lXlNoCut,   lXlWrap,   lXlOut   }
-        ClipPlanePass{ fJp[x], kClipBufA, kClipBufB, lXrLoop,   lXrKept,   lXrNoCut,   lXrWrap,   lXrOut   }
-        ClipPlanePass{ fJn[y], kClipBufB, kClipBufA, lYbLoop,   lYbKept,   lYbNoCut,   lYbWrap,   lYbOut   }
-        ClipPlanePass{ fJp[y], kClipBufA, kClipBufB, lYtLoop,   lYtKept,   lYtNoCut,   lYtWrap,   lYtOut   }
+        ClipPlanePass{ fJnC[z], fJnN[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearWrap, lNearOut }
+        ClipPlanePass{ fJnC[x], fJnN[x], kClipBufB, kClipBufA, lXlLoop,   lXlKept,   lXlNoCut,   lXlWrap,   lXlOut   }
+        ClipPlanePass{ fJpC[x], fJpN[x], kClipBufA, kClipBufB, lXrLoop,   lXrKept,   lXrNoCut,   lXrWrap,   lXrOut   }
+        ClipPlanePass{ fJnC[y], fJnN[y], kClipBufB, kClipBufA, lYbLoop,   lYbKept,   lYbNoCut,   lYbWrap,   lYbOut   }
+        ClipPlanePass{ fJpC[y], fJpN[y], kClipBufA, kClipBufB, lYtLoop,   lYtKept,   lYtNoCut,   lYtWrap,   lYtOut   }
 
         ilw.x iCount, kClipCount(vi00)
 

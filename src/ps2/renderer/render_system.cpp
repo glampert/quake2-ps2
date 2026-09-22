@@ -793,10 +793,14 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
     vu1::FrameConstants * const constants = cmdbuf::Alloc<vu1::FrameConstants>(1);
 
     constants->mvp        = mvp;
-    constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 0.0f };
+    // .w is the clipper's plane shrink, and is read by nothing else - the screen mapping uses
+    // .xyz only. See vu1::kVuClipShrink.
+    constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 1.0f - vu1::kVuClipShrink };
+    // .w is the clipper's distance scale, read by nothing else - the screen mapping
+    // uses .xyz only. See vu1::kVuClipDistScale.
     constants->gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
-                              depthOffset, 0.0f };
+                              depthOffset, vu1::kVuClipDistScale };
     // .xyz is the constant guard band scale; .w is the turbulent animation phase, which only
     // the warp program reads. See the note on vu1::kClipScale.
     constants->clipScale   = vu1::kClipScale;

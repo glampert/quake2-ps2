@@ -77,15 +77,23 @@
 ; with a different selector, which is what lets the planes need no table
 ; in VU memory and no pointer register of their own.
 ;
-; 'vSel' names the lane of the judgement vector, or of its negation, that
-; carries this plane's term. It is the only thing that differs between
-; the invocations:
+; 'vSelCur'/'vSelNxt' name the lane of the judgement vector, or of its
+; negation, that carries this plane's term. They are the only thing that
+; differs between the invocations:
 ;
-;   near   fJn[z]    w - z      (which also excludes everything behind the eye)
-;   x-     fJn[x]    w - G*x    G being what fClipScale already carries,
-;   x+     fJp[x]    w + G*x    the reciprocal of the guard band limit
-;   y-     fJn[y]    w - G*y
-;   y+     fJp[y]    w + G*y
+;   near   fJn?[z]   w - z      (which also excludes everything behind the eye)
+;   x-     fJn?[x]   w - G*x    G being what fClipScale already carries,
+;   x+     fJp?[x]   w + G*x    the reciprocal of the guard band limit
+;   y-     fJn?[y]   w - G*y
+;   y+     fJp?[y]   w + G*y
+;
+; The two endpoints get their own judgement registers - C for cur, N for nxt -
+; which is why the selector is passed twice. Sharing one pair made every
+; instruction of the second endpoint's chain wait on the first's through a
+; write-after-read hazard, and openvcl ran the two strictly in series: 58% of
+; the loop was nops covering FMAC latency that the other endpoint's work
+; should have been filling. The chains are independent; only the register
+; names were not.
 ;
 ; There is no far plane. Across 606,931 clipped triangles it was never
 ; once straddled, and leaving it out takes a corner off the worst case.
@@ -103,7 +111,7 @@
 ;
 ; In:  kClipCount  corners in srcBuf, first one repeated at the end
 ; Out: kClipCount  corners in dstBuf, same arrangement. Zero, or three up.
-#macro ClipPlanePass: vSel, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblWrap, lblOut
+#macro ClipPlanePass: vSelCur, vSelNxt, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblWrap, lblOut
     ilw.x  iLeft,  kClipCount(vi00)
 
     ; Dead unless proven otherwise: every path out of here that drops the
@@ -132,24 +140,33 @@
         ; (G*x, G*y, z) - so every plane's term is one lane of it or of
         ; its negation, and the distance is w plus that lane.
         ;
-        ; Scaled by 2048 twice afterwards. The sign is read through ftoi4,
-        ; which resolves 1/16 of a unit, and the crossing test below
-        ; multiplies two of these together, so the headroom has to cover
-        ; the product and not just the distance. fGSScale.x is 2048
-        ; already, so this costs no constant of its own.
-        mul.xyz fJp,   fCurPos, fClipScale
-        sub.xyz fJn,   vf00,    fJp
+        ; w is shrunk by fGSScale[w] first, so a cut lands strictly inside the
+        ; plane rather than exactly on it - the judgement further down tests the
+        ; same quantity, and on a tie it is the divide's rounding that decides
+        ; whether the triangle lives. See vu1::kVuClipShrink.
+        ;
+        ; Scaled by fGSOffset[w] afterwards - see vu1::kVuClipDistScale. The
+        ; sign is read through ftoi4, which resolves 1/16 of a unit, and the
+        ; crossing test below multiplies two of these together, so the
+        ; headroom has to cover the product and not just the distance.
+        ;
+        ; The two endpoints are interleaved by hand. They are independent, but
+        ; openvcl will not reorder across them on its own - it emitted one
+        ; chain then the other, three nops between every pair, and renaming the
+        ; registers changed nothing because it coalesces them straight back.
+        ; Written alternately, each instruction covers the other's latency.
+        mul.xyz fJpC,  fCurPos, fClipScale
+        mul.xyz fJpN,  fNxtPos, fClipScale
         addw.x  fDCur, vf00,    fCurPos
-        add.x   fDCur, fDCur,   vSel
-        mul.x   fDCur, fDCur,   fGSScale[x]
-        mul.x   fDCur, fDCur,   fGSScale[x]
-
-        mul.xyz fJp,   fNxtPos, fClipScale
-        sub.xyz fJn,   vf00,    fJp
         addw.x  fDNxt, vf00,    fNxtPos
-        add.x   fDNxt, fDNxt,   vSel
-        mul.x   fDNxt, fDNxt,   fGSScale[x]
-        mul.x   fDNxt, fDNxt,   fGSScale[x]
+        sub.xyz fJnC,  vf00,    fJpC
+        sub.xyz fJnN,  vf00,    fJpN
+        mul.x   fDCur, fDCur,   fGSScale[w]
+        mul.x   fDNxt, fDNxt,   fGSScale[w]
+        add.x   fDCur, fDCur,   vSelCur
+        add.x   fDNxt, fDNxt,   vSelNxt
+        mul.x   fDCur, fDCur,   fGSOffset[w]
+        mul.x   fDNxt, fDNxt,   fGSOffset[w]
 
         ; Sign of this corner's distance; negative is outside. Clamped to
         ; [-1, +1] first so the ftoi4 cannot overflow the 16 bits mtir

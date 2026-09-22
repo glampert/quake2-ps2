@@ -70,6 +70,7 @@ static const cvar_t * s_skipParticles     = nullptr;
 static const cvar_t * s_forceNullModels   = nullptr;
 static const cvar_t * s_skipWeaponModel   = nullptr;
 static const cvar_t * s_dynamicLightmaps  = nullptr;
+static const cvar_t * s_vuClip            = nullptr;
 static const cvar_t * s_dlightScale       = nullptr;
 static const cvar_t * s_lightmaps         = nullptr;
 static const cvar_t * s_lightmapOnly      = nullptr;
@@ -416,6 +417,24 @@ Q_ALWAYS_INLINE bool SurfaceInsideClipVolumeCached(const mod::ModelSurface & sur
         surf.clipVolumeInside = SurfaceInsideClipVolume(surf);
     }
     return surf.clipVolumeInside;
+}
+
+// Whether a surface's triangles can go to VU1 uncut.
+//
+// With ps2_vu_clip on, always. The microprogram clips in clip space, after the
+// MVP, so it needs no proof and does not care whose transform this is - which is
+// the whole point of the cvar: nothing else routes geometry into the VU clipper,
+// so without it that code is never executed and never tested.
+//
+// Off, only the world passes can answer at all, and only for surfaces the clip
+// volume test proves are wholly inside. Everything else clips on the EE.
+Q_ALWAYS_INLINE bool SurfaceSkipsEeClipping(const mod::ModelSurface & surf, const bool worldTransform)
+{
+    if (s_vuClip->value != 0.0f)
+    {
+        return true;
+    }
+    return worldTransform && SurfaceInsideClipVolumeCached(surf);
 }
 
 // True when the box is completely outside the frustum and must not draw.
@@ -1272,7 +1291,7 @@ void DrawTextureChains(const SurfaceDrawState & base)
             // Unlightmapped here means sky: RecursiveWorldNode sends turbulent
             // and translucent faces down the alpha pass instead.
             state.lightmapTint = tinted && (surf->lightmapTextureNum != mod::kNotLightmapped);
-            state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*surf);
+            state.skipClipping = SurfaceSkipsEeClipping(*surf, worldTransform);
             s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -1354,7 +1373,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
         {
-            state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*surf);
+            state.skipClipping = SurfaceSkipsEeClipping(*surf, worldTransform);
             s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -1546,7 +1565,7 @@ void RenderAlphaSurfaces()
         // test only speaks for entries drawn through it. A brush model entity
         // carries its own transform and keeps clipping per triangle.
         const bool worldTransform = (entry.mvp == &s_viewProjMatrix);
-        state.skipClipping = worldTransform && SurfaceInsideClipVolumeCached(*entry.surf);
+        state.skipClipping = SurfaceSkipsEeClipping(*entry.surf, worldTransform);
         s_drawStats.surfsUnclipped += state.skipClipping;
 
         if (texFlags & SURF_WARP)
@@ -2107,6 +2126,12 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
             ApplyDrawState(state, *batchTexture); // flushes what the outgoing texture gathered
         }
 
+        // Brush models have never been able to skip the EE clipper - the clip
+        // volume is judged in world space and this is not the world's matrix -
+        // so this is false unless the VU clipper is on, which does not care.
+        state.skipClipping = SurfaceSkipsEeClipping(*surf, /*worldTransform=*/false);
+        s_drawStats.surfsUnclipped += state.skipClipping;
+
         ++s_drawStats.surfaces;
         for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
         {
@@ -2536,6 +2561,7 @@ void Init()
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
     s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
     s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   0); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
+    s_vuClip            = Cvar_Get("ps2_vu_clip",             "0",   0); // 1 = world surfaces go to VU1 uncut and the microprogram clips them; 0 = the EE clipper, as before.
     s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", 0); // Brightness of the VU1 point lights.
     s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
     s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.

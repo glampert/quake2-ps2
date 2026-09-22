@@ -99,9 +99,43 @@
 ;
 ; The including program must define kGifTags, kWindowVerts (the window's
 ; vertex capacity) and kWindowPrimTag (the drawing tag's qword offset
-; inside the window), and must set up iWin and iDelta before the first
+; inside the window), and must call InitOutputWindows before the first
 ; Open.
+;
+; The window's own state - which of the two windows is current, the step
+; to the other one, and where this batch's GIF tag block sits - lives in
+; a spill qword rather than in VI registers. There are only 13 of those
+; and openvcl hands them out by live interval, so three values that are
+; live across the whole triangle loop but read at one place each cost
+; three registers for the loop's entire length. Parked here they cost
+; two loads at an open and two at a close, which happen once per window
+; rather than once per triangle. See kWindowSpillAddr in vu1.h.
+;
+;   .x  iWin     the current window's address
+;   .y  iDelta   +/- the step to the other window; flips on every kick
+;   .z  iTagPtr  this batch's GIF tag block, iBase + kGifTags
 ; ---------------------------------------------------------------------
+#define kWindowSpill 1008
+
+; Sets up the window state the macros below read. Must run before the
+; first OpenOutputWindow, and needs iBase.
+;
+; The barrier is load-bearing: the very next thing a program does is an
+; OpenOutputWindow, whose first act is to read back what is stored here,
+; and vcl does not model VU memory aliasing - without it the loads are
+; free to be hoisted above the stores. Elsewhere the two are separated
+; by a label, which fences them for free.
+#macro InitOutputWindows
+    iaddiu iWin,    iBase, kWindowA
+    iaddiu iDelta,  vi00,  kWindowQwords
+    iaddiu iTagPtr, iBase, kGifTags
+
+    isw.x iWin,    kWindowSpill(vi00)
+    isw.y iDelta,  kWindowSpill(vi00)
+    isw.z iTagPtr, kWindowSpill(vi00)
+
+    --barrier
+#endmacro
 
 ; Starts a packet in the window at iWin: the batch's GIF tag block, then
 ; the write cursor and the room left. Every window carries the whole
@@ -111,8 +145,11 @@
 ; The copy below is CopyGifTags' body written out again - see the note
 ; there. Change one and change the other.
 #macro OpenOutputWindow
-    iaddiu iTagPtr, iBase, kGifTags
-    iaddiu iOutPtr, iWin,  0
+    ; The window address lands straight in the write cursor: an open has no
+    ; use for iWin itself, and not naming it here is what keeps it out of
+    ; the loop's live set.
+    ilw.x iOutPtr, kWindowSpill(vi00)
+    ilw.z iTagPtr, kWindowSpill(vi00)
 
     lqi fTag0, (iTagPtr++)
     lqi fTag1, (iTagPtr++)
@@ -172,6 +209,12 @@
     ; substitutes it as text, and two invocations cannot share one.
     ibeq   iNloop, vi00, lblEmpty
 
+    ; Read here and written back below, so neither is live outside this
+    ; macro. Harmless in the branch delay slot above: on the empty path
+    ; the window does not advance and nothing reads either value.
+    ilw.x  iWin,   kWindowSpill(vi00)
+    ilw.y  iDelta, kWindowSpill(vi00)
+
     iaddiu iNloop, iNloop, 0x7FFF
     iaddiu iNloop, iNloop, 1
     isw.x  iNloop, kWindowPrimTag(iWin)
@@ -181,6 +224,8 @@
     iaddiu iKickAt, iWin, 0
     iadd   iWin,    iWin, iDelta
     isub   iDelta,  vi00, iDelta
+    isw.x  iWin,    kWindowSpill(vi00)
+    isw.y  iDelta,  kWindowSpill(vi00)
 
     --barrier
 

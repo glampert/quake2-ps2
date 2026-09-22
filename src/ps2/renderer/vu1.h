@@ -93,6 +93,21 @@ static_assert(kClipScratchAddr == kDoubleBufferBase + (2 * kDoubleBufferOffset),
               "The clip scratch starts where the second double buffer ends");
 static_assert(kClipScratchAddr + kClipScratchQwords == 1010, "...and ends where the light block begins");
 
+// The top two qwords of that scratch are not buffer space. They are a spill area for integer
+// state the microprograms deliberately do not keep in VI registers: 1008 the output window's own
+// address and step (see vu_common.i), 1009 the clipper's survivor pointer (see vu_clip.i).
+//
+// openvcl allocates the 13 usable VI registers by live interval, so a value that is live across
+// a whole loop but read in only one place is dearer held than parked - it holds a register for
+// the loop's whole length and squeezes everything the loop actually needs. It is also what
+// openvcl gets wrong: a value carried from one loop into a sibling loop can have its register
+// handed to a temporary inside the second one, silently.
+constexpr int kWindowSpillAddr = 1008;
+constexpr int kClipSpillAddr   = 1009;
+static_assert(kWindowSpillAddr >= kClipScratchAddr &&
+              kClipSpillAddr < kClipScratchAddr + kClipScratchQwords,
+              "The spill qwords live at the top of the clip scratch");
+
 constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
 

@@ -359,10 +359,10 @@
     iaddiu iPosPtr,  iBase, kPositions
     iaddiu iAttrPtr, iBase, kAttributes
 
-    ; The first output window, and the step that alternates to the other
-    ; one - it flips sign on every kick.
-    iaddiu iWin,   iBase, kWindowA
-    iaddiu iDelta, vi00,  kWindowQwords
+    ; The first output window, the step that alternates to the other one,
+    ; and where this batch's GIF tags are - all parked in VU memory rather
+    ; than held in VI registers. See vu_common.i.
+    InitOutputWindows{ }
 
     OpenOutputWindow{ }
 

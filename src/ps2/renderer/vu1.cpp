@@ -22,7 +22,6 @@ namespace ps2::vu1 {
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_TexturedTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LerpedTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_Particles);
-PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LitTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_WarpedTriangles);
 
 namespace {
@@ -58,7 +57,6 @@ void Init()
         { VU1Prog_TexturedTriangles_Code(), VU1Prog_TexturedTriangles_InstructionCount() },
         { VU1Prog_LerpedTriangles_Code(),   VU1Prog_LerpedTriangles_InstructionCount()   },
         { VU1Prog_Particles_Code(),         VU1Prog_Particles_InstructionCount()         },
-        { VU1Prog_LitTriangles_Code(),      VU1Prog_LitTriangles_InstructionCount()      },
         { VU1Prog_WarpedTriangles_Code(),   VU1Prog_WarpedTriangles_InstructionCount()   },
     };
     static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");

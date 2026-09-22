@@ -44,10 +44,11 @@ enum struct ProgramAddr : u32 {};
 
 enum class Program
 {
-    Textured,  // world geometry: transform, guard-band clip, textured gouraud triangles
+    Textured,  // world geometry: transform, clip, gouraud triangles. Its batch header picks how
+               // the colour arrives - a packed u32, or summed from the frame's dynamic lights,
+               // which used to be a program of its own. See kBatchColorMode.
     Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
     Particles, // camera-facing billboards expanded to GS sprites
-    Lit,       // world geometry, with the vertex colour computed from the frame's dynamic lights
     Warped,    // turbulent surfaces: the textured path with ref_gl's warp animation on the VU
 
     Count      // Number of VU1 programs - not valid for ProgramAddress.
@@ -110,6 +111,15 @@ static_assert(kWindowSpillAddr >= kClipScratchAddr &&
 
 constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
+
+// Batch header .x, which tells the textured program where a vertex's colour comes from. It
+// carries two programs' worth of emit since the lit one was folded into it: one clipper, one
+// window scheme and one transform serving both, which is what made room for the clipper at all.
+enum class BatchColorMode : u32
+{
+    PackedU32 = 0, // A+D write to RGBAQ, straight out of the vertex - world diffuse, sprites, beams
+    DynamicLights, // four point lights summed on the VU, emitted as PACKED RGBAQ - the lightmap pass
+};
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
 // 0xFFFF/32 maps z/w [-1 (far), +1 (near)] onto [0, 0xFFFF] in the 16-bit z-buffer.

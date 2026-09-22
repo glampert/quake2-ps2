@@ -858,7 +858,11 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
         }
         else
         {
-            AddU32(0);
+            // .x tells the textured program where the colour comes from; see BatchColorMode.
+            // The warp program reads its own three values here instead and has no second form
+            // of colour, so the two never collide.
+            AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::DynamicLights
+                                        : vu1::BatchColorMode::PackedU32));
             AddU32(0);
             AddU32(0);
         }
@@ -871,8 +875,7 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
     AddStartProgram(vu1::ProgramAddress(warped ? vu1::Program::Warped
-                                      : lit    ? vu1::Program::Lit
-                                      : vu1::Program::Textured));
+                                               : vu1::Program::Textured));
 }
 
 // The lerped equivalent: header (count + the two lerp scale vectors) and GIF tags inline, then the

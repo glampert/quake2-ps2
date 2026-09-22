@@ -53,6 +53,10 @@
 #define kWindowVerts   45
 #define kWindowPrimTag 6
 
+; The dynamic light block, uploaded once per draw chain. Only colour mode 1
+; reads it. Must match vu1::kLightBlockAddr.
+#define kLightBlock  1010
+
 ; Reads one vertex and leaves it in clip space, in vPos/vStq, without
 ; touching the output. Splitting the transform from the emission is what
 ; lets a clipper sit between them: the survivors of a cut are emitted,
@@ -79,10 +83,62 @@
 ;       vec3 judge = pos.xyz * clipScale.xyz;
 ;       clipFlagQueue.push(judge, abs(pos.w));
 ;   }
-#macro ClipTransform: vPos, vStq, offPos, offStq
+#macro ClipTransform: vPos, vStq, vCol, offPos, offStq, lblNoLight
 
     lq vPos, offPos(iInPtr)
     lq vStq, offStq(iInPtr)
+
+    ; Colour mode 1: the frame's point lights, summed here rather than at the
+    ; emit because the sum is a function of the vertex's *world* position, and
+    ; the transform below is about to overwrite it. Computing it here also makes
+    ; it an ordinary per-vertex attribute, which is what a clipper needs - a cut
+    ; vertex has no world position to light, only two endpoints to interpolate
+    ; between, and light is linear in exactly the way Gouraud already assumes.
+    ; Defined on both paths before it is read: openvcl checks that statically and
+    ; nothing below this branch writes it in mode 0. One instruction, and the
+    ; alternative is a register the emit could read as whatever was left in it.
+    move vCol, vf00
+    ibeq iColorMode, vi00, lblNoLight
+
+    ; Four light vectors at once, one lane per light, then squared distances.
+    sub fLx, fLightX, vPos[x]
+    sub fLy, fLightY, vPos[y]
+    sub fLz, fLightZ, vPos[z]
+    mul  acc,   fLx, fLx
+    madd acc,   fLy, fLy
+    madd fDist, fLz, fLz
+
+    ; Start at black, with the alpha the lightmap pass needs already in place:
+    ; .w stays untouched by the .xyz lighting below and converts to the GS 1.0.
+    move.xyz vCol, vf00
+    move.w   vCol, fLightClamp
+
+    ; light += max(distSqr.i * -(colour_i / radius_i^2) + colour_i, 0)
+    mula.xyz acc,   fNegDiv0, fDist[x]
+    madd.xyz fTerm, fColour0, vf00[w]
+    max.xyz  fTerm, fTerm,    vf00
+    add.xyz  vCol,  vCol,     fTerm
+
+    mula.xyz acc,   fNegDiv1, fDist[y]
+    madd.xyz fTerm, fColour1, vf00[w]
+    max.xyz  fTerm, fTerm,    vf00
+    add.xyz  vCol,  vCol,     fTerm
+
+    mula.xyz acc,   fNegDiv2, fDist[z]
+    madd.xyz fTerm, fColour2, vf00[w]
+    max.xyz  fTerm, fTerm,    vf00
+    add.xyz  vCol,  vCol,     fTerm
+
+    mula.xyz acc,   fNegDiv3, fDist[w]
+    madd.xyz fTerm, fColour3, vf00[w]
+    max.xyz  fTerm, fTerm,    vf00
+    add.xyz  vCol,  vCol,     fTerm
+
+    ; Saturate to the GS byte range. ftoi0 happens at the emit, one byte per
+    ; word, which is the PACKED RGBAQ layout.
+    mini.xyz vCol, vCol, fLightClamp
+
+    lblNoLight:
 
     ; Position to clip space (row-vector MVP):
     mul  acc,  fMVP0, vPos[x]
@@ -130,7 +186,7 @@
 ;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
 ;       out[offXyz].xyz = proj;           // XYZ (.w ADC bit set by caller)
 ;   }
-#macro EmitVertex: vPos, vStq, offST, offAD, offXyz
+#macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lblPacked, lblDone
 
     div        q,          vf00[w], vPos[w]
     mul.xyz    fProj,      vPos,    q
@@ -145,11 +201,32 @@
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
 
+    ; Word 2 of a PACKED ST write latches Q for an RGBAQ that follows it, which
+    ; is where colour mode 1 gets its Q from - it cannot ride in from the vertex
+    ; the way the A+D form's does, because PolyVertex keeps its lightmap T in
+    ; that lane. Written unconditionally: the A+D form sets Q in its own write
+    ; and leaves this word unread. vf00.z is zero, so the reciprocal lands exact.
+    addq.z fST, vf00, q
+
     sq     fST,  offST(iOutPtr)
+    sq.xyz fProj, offXyz(iOutPtr)
+
+    ibeq iColorMode, vi00, lblPacked
+
+    ; Mode 1: a computed colour, four floats. ftoi0 lands them one byte per
+    ; word, which is exactly what the PACKED RGBAQ descriptor reads.
+    ftoi0 fRGBA, vCol
+    sq    fRGBA, offAD(iOutPtr)
+    b lblDone
+
+    lblPacked:
+    ; Mode 0: the packed u32 straight out of the untouched input register, as an
+    ; A+D write to RGBAQ with Q alongside it.
     sq.x   vStq, offAD(iOutPtr)
     sq.y   fQ,   offAD(iOutPtr)
     isw.z  iRegRGBAQ, offAD(iOutPtr)
-    sq.xyz fProj, offXyz(iOutPtr)
+
+    lblDone:
 
 #endmacro
 
@@ -223,8 +300,12 @@
     sub.x fMinusOne, vf00, vf00[w]
 
     ; Current double buffer and this batch's pointers:
+    ; Which colour form this batch carries; see the emit. Read before the
+    ; light block, because only mode 1 has any use for it.
     xtop   iBase
-    ilw.w  iNumVerts, kBatchHeader(iBase)
+    ilw.w  iNumVerts,  kBatchHeader(iBase)
+    ilw.x  iColorMode, kBatchHeader(iBase)
+
     iaddiu iInPtr, iBase, kVertexData
 
     ; The first output window, the step that alternates to the other one,
@@ -236,6 +317,30 @@
 
     ; One triangle per iteration:
     lTriangleLoop:
+
+        ; The dynamic light block, re-read every triangle rather than held.
+        ;
+        ; Held, it is twelve float registers live from the top of the program to
+        ; the bottom, and with the clipper's own fifteen that is more than the
+        ; thirty-two this machine has - openvcl says so, in as many words. Read
+        ; here it is live only as far as the third transform below, which is
+        ; before the clipper needs anything, so the two sets never overlap.
+        ;
+        ; Unconditional, although only colour mode 1 reads it: guarding it would
+        ; leave the registers undefined on the other path, which openvcl rejects
+        ; statically whether or not the read is reachable.
+        lq fLightX,     kLightBlock + 0(vi00)
+        lq fLightY,     kLightBlock + 1(vi00)
+        lq fLightZ,     kLightBlock + 2(vi00)
+        lq fNegDiv0,    kLightBlock + 3(vi00)
+        lq fNegDiv1,    kLightBlock + 4(vi00)
+        lq fNegDiv2,    kLightBlock + 5(vi00)
+        lq fNegDiv3,    kLightBlock + 6(vi00)
+        lq fColour0,    kLightBlock + 7(vi00)
+        lq fColour1,    kLightBlock + 8(vi00)
+        lq fColour2,    kLightBlock + 9(vi00)
+        lq fColour3,    kLightBlock + 10(vi00)
+        lq fLightClamp, kLightBlock + 11(vi00)
 
         ; Room for everything this triangle can produce, asked once, here.
         ;
@@ -266,9 +371,9 @@
         OpenOutputWindow{ }
         lWindowHasRoom:
 
-        ClipTransform{ fPos0, fStq0, 0, 1 }
-        ClipTransform{ fPos1, fStq1, 2, 3 }
-        ClipTransform{ fPos2, fStq2, 4, 5 }
+        ClipTransform{ fPos0, fStq0, fCol0, 0, 1, lLight0Done }
+        ClipTransform{ fPos1, fStq1, fCol1, 2, 3, lLight1Done }
+        ClipTransform{ fPos2, fStq2, fCol2, 4, 5, lLight2Done }
 
         ; Did any corner leave the volume? About one triangle in fifty
         ; does; the rest go straight out below.
@@ -276,9 +381,9 @@
         ibne  vi01, vi00, lClipTriangle
 
         ; --- every corner inside: emit the triangle as it stands ---
-        EmitVertex{ fPos0, fStq0, 0, 1, 2 }
-        EmitVertex{ fPos1, fStq1, 3, 4, 5 }
-        EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0Packed, lEmitUn0Done }
+        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1Packed, lEmitUn1Done }
+        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2Packed, lEmitUn2Done }
         StoreTriangleAdc{ }
 
         iaddiu iOutPtr,    iOutPtr,     9
@@ -337,9 +442,9 @@
             ClipJudge{ fPos1 }
             ClipJudge{ fPos2 }
 
-            EmitVertex{ fPos0, fStq0, 0, 1, 2 }
-            EmitVertex{ fPos1, fStq1, 3, 4, 5 }
-            EmitVertex{ fPos2, fStq2, 6, 7, 8 }
+            EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitFan0Packed, lEmitFan0Done }
+            EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitFan1Packed, lEmitFan1Done }
+            EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2Packed, lEmitFan2Done }
             WholeTriangleReject{ }
 
             iaddiu iOutPtr,    iOutPtr,     9

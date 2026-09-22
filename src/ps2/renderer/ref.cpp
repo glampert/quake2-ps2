@@ -425,6 +425,8 @@ void DrawDrawStatsOverlay()
         { "ClipNear", rcStats.trisClipNearOnly },
         { "ClipNoNr", rcStats.trisClipNoNear   },
         { "ClipMix",  rcStats.trisClipMixed    },
+        { "ClipFar",  rcStats.trisClipFar      },
+        { "ClipMaxV", rcStats.clipMaxVerts     },
         { "Culled",  rcStats.trisCulled   },
         { "BoxCull", stats.boxesCulled    },
         // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and

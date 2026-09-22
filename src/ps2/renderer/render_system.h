@@ -93,6 +93,18 @@ struct DrawStats
     int trisClipNearOnly;
     int trisClipNoNear;
     int trisClipMixed;
+
+    // Straddled the far plane, on top of whatever else it straddled - so this
+    // overlaps the three above rather than partitioning with them. Far is the
+    // plane a VU1 clipper would most like to drop: skipping it costs one corner
+    // off the worst-case fan, 8 instead of 9, which is a whole output triangle
+    // off what a window has to reserve.
+    int trisClipFar;
+
+    // Most corners the clipper has handed back this frame. The worst case is 9
+    // and what a window must reserve is driven by it, but what actually happens
+    // is the number worth designing against.
+    int clipMaxVerts;
     int drawBatches; // VU1 batches submitted (one or more per texture).
     int particles;   // Particle billboards submitted.
 };
@@ -114,10 +126,19 @@ Q_ALWAYS_INLINE DrawStats & GetStats()
 // and by itself, while the other two are triangles it would either not help with
 // at all or cut only for the microprogram to reject the survivors whole - the
 // guard band is judged again after the cut.
-Q_ALWAYS_INLINE void CountClippedTriangle(const u32 planesCrossed)
+Q_ALWAYS_INLINE void CountClippedTriangle(const u32 planesCrossed, const int survivors)
 {
     DrawStats & stats = GetStats();
     ++stats.trisClipped;
+
+    if ((planesCrossed & clip::kPlaneFarBit) != 0)
+    {
+        ++stats.trisClipFar;
+    }
+    if (survivors > stats.clipMaxVerts)
+    {
+        stats.clipMaxVerts = survivors;
+    }
 
     const bool crossesNear  = (planesCrossed &  clip::kPlaneNearBit) != 0;
     const bool crossesOther = (planesCrossed & ~clip::kPlaneNearBit) != 0;
@@ -503,7 +524,7 @@ public:
 
         if (planesCrossed != 0)
         {
-            CountClippedTriangle(planesCrossed);
+            CountClippedTriangle(planesCrossed, count);
         }
 
         // The survivors fan-triangulate.

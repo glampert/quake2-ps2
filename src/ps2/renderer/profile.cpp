@@ -75,6 +75,7 @@ struct FrameSample
     // view::DrawStats/rs::DrawStats
     int nodes, surfs, surfsAlpha, surfsTurb, surfsUnclipped, skyFaces;
     int tris, trisClipped, trisCulled, boxesCulled;
+    int trisClipNearOnly, trisClipNoNear, trisClipMixed;
     int batches, entities, particles, dlights;
 
     // lm::Stats
@@ -134,6 +135,7 @@ void WriteBatch()
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
                     "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,"
                     "nodes,surfs,surfsAlpha,surfsTurb,surfsUnclipped,skyFaces,tris,trisClipped,trisCulled,"
+                    "clipNear,clipNoNear,clipMixed,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
@@ -161,10 +163,11 @@ void WriteBatch()
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
-                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
+                          ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
                           "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.surfsUnclipped, s.skyFaces,
-                          s.tris, s.trisClipped, s.trisCulled, s.boxesCulled,
+                          s.tris, s.trisClipped, s.trisCulled,
+                          s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed, s.boxesCulled,
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
@@ -237,6 +240,9 @@ void FrameLogCapture()
     s.tris        = r.trisDrawn;
     s.trisClipped = r.trisClipped;
     s.trisCulled  = r.trisCulled;
+    s.trisClipNearOnly = r.trisClipNearOnly;
+    s.trisClipNoNear   = r.trisClipNoNear;
+    s.trisClipMixed    = r.trisClipMixed;
     s.batches     = r.drawBatches;
     s.particles   = r.particles;
 

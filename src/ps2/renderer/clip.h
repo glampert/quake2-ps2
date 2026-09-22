@@ -29,6 +29,15 @@ namespace ps2::clip {
 
 constexpr int kNumClipPlanes = 6;
 
+// One bit per plane in the mask ClipTriangle reports, in the order SetClipDists
+// writes the distances. Which planes a triangle actually straddles is what says
+// whether a clipper handling only some of them could stand on its own - a cut
+// against a plane whose corners are all inside cannot push a vertex out of it,
+// but one against a plane they straddle leaves work behind.
+constexpr u32 kPlaneNearBit  = 1u << 0;
+constexpr u32 kPlaneFarBit   = 1u << 1;
+constexpr u32 kPlaneSideBits = 0xFu << 2;
+
 // Each pass can add one vertex, so a triangle survives as at most 3 + 6 corners.
 constexpr int kMaxClippedVerts = 3 + kNumClipPlanes;
 
@@ -141,11 +150,13 @@ inline int ClipAgainstPlane(const ClipVertex * in, const int inCount, ClipVertex
 // to kMaxClippedVerts corners of a convex polygon for the caller to fan
 // triangulate - and points '*outVerts' at them: 'corners' itself when nothing
 // needed cutting (the common case, which copies no vertices at all), otherwise
-// into 'scratch'. '*outWasClipped' distinguishes the two for draw statistics.
+// into 'scratch'. '*outPlanesCrossed' reports which planes it straddled, and is
+// zero when nothing needed cutting - which is what distinguishes the two for
+// draw statistics.
 inline int ClipTriangle(ClipVertex (&corners)[3], const math::Mat4 & mvp, Scratch & scratch,
-                        const ClipVertex ** outVerts, bool * outWasClipped)
+                        const ClipVertex ** outVerts, u32 * outPlanesCrossed)
 {
-    *outWasClipped = false;
+    *outPlanesCrossed = 0;
 
     int insidePerPlane[kNumClipPlanes] = {};
     for (ClipVertex & c : corners)
@@ -178,7 +189,16 @@ inline int ClipTriangle(ClipVertex (&corners)[3], const math::Mat4 & mvp, Scratc
 
     // Straddling triangle: clip against every plane in turn. Each pass
     // can add one vertex (3 -> at most kMaxClippedVerts).
-    *outWasClipped = true;
+    //
+    // Which planes those are is reported to the caller. Zero corners inside
+    // would read as a straddle here too, but 'outsideAny' has already returned.
+    for (int p = 0; p < kNumClipPlanes; ++p)
+    {
+        if (insidePerPlane[p] != 3)
+        {
+            *outPlanesCrossed |= (1u << p);
+        }
+    }
 
     const ClipVertex * in = corners;
     ClipVertex * out = scratch.a;

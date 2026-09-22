@@ -418,6 +418,13 @@ void DrawDrawStatsOverlay()
         { "DLights", stats.dlights        },
         { "Batches", rcStats.drawBatches  },
         { "Clipped", rcStats.trisClipped  },
+        // How Clipped splits by plane: ClipNear is the near plane alone, which a
+        // VU1 near-plane clipper handles by itself; ClipNoNr never touches near,
+        // and ClipMix needs both. The two right-hand columns are what a near-only
+        // clipper would still leave for the EE.
+        { "ClipNear", rcStats.trisClipNearOnly },
+        { "ClipNoNr", rcStats.trisClipNoNear   },
+        { "ClipMix",  rcStats.trisClipMixed    },
         { "Culled",  rcStats.trisCulled   },
         { "BoxCull", stats.boxesCulled    },
         // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and

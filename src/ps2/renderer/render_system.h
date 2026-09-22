@@ -87,6 +87,12 @@ struct DrawStats
     int trisDrawn;   // Triangles handed to VU1, after EE clipping.
     int trisClipped; // Triangles re-cut against the VU clip volume.
     int trisCulled;  // Triangles dropped whole, entirely outside it.
+
+    // How 'trisClipped' splits by which planes the triangle straddled; the three
+    // partition it. See CountClippedTriangle for what the split is for.
+    int trisClipNearOnly;
+    int trisClipNoNear;
+    int trisClipMixed;
     int drawBatches; // VU1 batches submitted (one or more per texture).
     int particles;   // Particle billboards submitted.
 };
@@ -99,6 +105,35 @@ extern DrawStats g_drawStats;
 Q_ALWAYS_INLINE DrawStats & GetStats()
 {
     return detail::g_drawStats;
+}
+
+// Bins a clipped triangle by the planes it straddled, and counts it.
+//
+// The split is what says whether a VU1 clipper handling only the near plane could
+// stand on its own: 'trisClipNearOnly' is what such a clipper would cut correctly
+// and by itself, while the other two are triangles it would either not help with
+// at all or cut only for the microprogram to reject the survivors whole - the
+// guard band is judged again after the cut.
+Q_ALWAYS_INLINE void CountClippedTriangle(const u32 planesCrossed)
+{
+    DrawStats & stats = GetStats();
+    ++stats.trisClipped;
+
+    const bool crossesNear  = (planesCrossed &  clip::kPlaneNearBit) != 0;
+    const bool crossesOther = (planesCrossed & ~clip::kPlaneNearBit) != 0;
+
+    if (crossesNear && !crossesOther)
+    {
+        ++stats.trisClipNearOnly;
+    }
+    else if (crossesOther && !crossesNear)
+    {
+        ++stats.trisClipNoNear;
+    }
+    else
+    {
+        ++stats.trisClipMixed;
+    }
 }
 
 // High-water of one GIF block, in qwords. Measured against the command buffer half it must fit
@@ -455,10 +490,10 @@ public:
     void PushClippedTriangle(clip::ClipVertex (&corners)[3], ColorFn && vertexColor)
     {
         const clip::ClipVertex * verts = nullptr;
-        bool wasClipped = false;
+        u32 planesCrossed = 0;
         const int count = clip::ClipTriangle(corners, Transform(),
                                              clip::SharedScratch(),
-                                             &verts, &wasClipped);
+                                             &verts, &planesCrossed);
 
         if (count == 0)
         {
@@ -466,9 +501,9 @@ public:
             return;
         }
 
-        if (wasClipped)
+        if (planesCrossed != 0)
         {
-            ++GetStats().trisClipped;
+            CountClippedTriangle(planesCrossed);
         }
 
         // The survivors fan-triangulate.

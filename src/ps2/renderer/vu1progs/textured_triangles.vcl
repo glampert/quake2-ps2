@@ -277,67 +277,33 @@
 
         ClipSeedTriangle{ iWalk }
 
-        iaddiu iOut,  vi00, kClipBufB
-        iaddiu iLeft, vi00, 3
+        ; One plane for now. The other four guard-band sides are the same
+        ; macro with a different selector, and go in next.
+        ClipPlanePass{ fJn[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearOut }
 
-        lClipEdgeLoop:
+        ; Park the survivor count where the fan can reach it, and fence the
+        ; store from the load: vcl does not model VU memory aliasing, so
+        ; without this the load is free to be hoisted above the store.
+        isw.x iCount, kClipCount(vi00)
+        --barrier
+        ilw.x iCount, kClipCount(vi00)
 
-            lq fCurPos, 0(iWalk)
-            lq fCurStq, 1(iWalk)
-            lq fNxtPos, 2(iWalk)
-            lq fNxtStq, 3(iWalk)
-
-            ClipNearDist{ fDCur, fCurPos }
-            ClipNearDist{ fDNxt, fNxtPos }
-            ClipSignOf{ iSignCur, fDCur }
-
-            ; Keep this corner if it is inside the plane.
-            ibltz iSignCur, lClipDropCur
-            sq fCurPos, 0(iOut)
-            sq fCurStq, 1(iOut)
-            iaddiu iOut, iOut, 2
-            lClipDropCur:
-
-            ; The edge crosses when the two distances differ in sign,
-            ; which is when their product is negative.
-            mul.x fClipT, fDCur, fDNxt
-            ClipSignOf{ iSignProd, fClipT }
-            ibgez iSignProd, lClipNoCut
-
-            ClipCutVertex{ fCutPos, fCutStq, fCurPos, fCurStq, fNxtPos, fNxtStq, fDCur, fDNxt }
-            sq fCutPos, 0(iOut)
-            sq fCutStq, 1(iOut)
-            ; The cut's colour lane is FMAC garbage, so put the edge's
-            ; first corner's packed colour back over it with a raw store.
-            sq.x fCurStq, 1(iOut)
-            iaddiu iOut, iOut, 2
-            lClipNoCut:
-
-            iaddiu iWalk, iWalk, 2
-            iaddi  iLeft, iLeft, -1
-            ibgtz  iLeft, lClipEdgeLoop
-
-        ; Park the survivor end where the fan can reach it. See kClipSpill.
-        isw.x iOut, kClipSpill(vi00)
-
-        ; Fan the survivors. Cutting a triangle against one plane leaves
-        ; three corners or four and never more, so this is two triangles at
-        ; most and is written out rather than looped. That is not only for
-        ; the saving: a loop here would be a nested one writing the enclosing
-        ; loop's window state, and openvcl miscompiles that shape - quietly,
-        ; and in the code that *does* run.
-        ilw.x  iEnd,  kClipSpill(vi00)
-        iaddiu iLeft, vi00, kClipSurvived3
-        isub   iLeft, iEnd, iLeft
-        ibltz  iLeft, lClipDone
+        ; Fan the survivors. One plane can leave three corners or four and
+        ; never more, so this is two triangles at most and is written out
+        ; rather than looped. That is not only for the saving: a loop here
+        ; would be a nested one writing the enclosing loop's window state,
+        ; and openvcl miscompiles that shape - quietly, and in the code that
+        ; *does* run.
+        iaddi iLeft, iCount, -3
+        ibltz iLeft, lClipDone
 
         ; --- v0, v1, v2 ---
-        lq fPos0, kClipBufB(vi00)
-        lq fStq0, kClipBufB1(vi00)
-        lq fPos1, kClipBufB2(vi00)
-        lq fStq1, kClipBufB3(vi00)
-        lq fPos2, kClipBufB4(vi00)
-        lq fStq2, kClipBufB5(vi00)
+        lq fPos0, kClipBufB + 0(vi00)
+        lq fStq0, kClipBufB + 1(vi00)
+        lq fPos1, kClipBufB + 2(vi00)
+        lq fStq1, kClipBufB + 3(vi00)
+        lq fPos2, kClipBufB + 4(vi00)
+        lq fStq2, kClipBufB + 5(vi00)
 
         ClipJudge{ fPos0 }
         ClipJudge{ fPos1 }
@@ -352,18 +318,16 @@
         iaddi  iVertsLeft, iVertsLeft, -3
 
         ; A fourth corner survived, so the quad needs its second triangle.
-        ilw.x  iEnd,  kClipSpill(vi00)
-        iaddiu iLeft, vi00, kClipSurvived4
-        isub   iLeft, iEnd, iLeft
-        ibltz  iLeft, lClipDone
+        iaddi iLeft, iCount, -4
+        ibltz iLeft, lClipDone
 
         ; --- v0, v2, v3 ---
-        lq fPos0, kClipBufB(vi00)
-        lq fStq0, kClipBufB1(vi00)
-        lq fPos1, kClipBufB4(vi00)
-        lq fStq1, kClipBufB5(vi00)
-        lq fPos2, kClipBufB6(vi00)
-        lq fStq2, kClipBufB7(vi00)
+        lq fPos0, kClipBufB + 0(vi00)
+        lq fStq0, kClipBufB + 1(vi00)
+        lq fPos1, kClipBufB + 4(vi00)
+        lq fStq1, kClipBufB + 5(vi00)
+        lq fPos2, kClipBufB + 6(vi00)
+        lq fStq2, kClipBufB + 7(vi00)
 
         ClipJudge{ fPos0 }
         ClipJudge{ fPos1 }

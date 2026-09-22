@@ -69,6 +69,7 @@
     sq fStq0, 7(iScratch)
 
     iaddiu iCount, vi00, 3
+    isw.x  iCount, kClipCount(vi00)
 #endmacro
 
 ; One Sutherland-Hodgman pass, against one plane, over a polygon of any
@@ -94,13 +95,29 @@
 ; rather than called. The label parameters need one unique set per
 ; invocation - vclpp substitutes them as text.
 ;
-; In:  iCount  corners in srcBuf, first one repeated at the end
-; Out: iCount  corners in dstBuf, same arrangement. Zero, or three and up.
+; The corner count travels through kClipCount rather than in a register.
+; Two passes in a row are sibling loops, and openvcl's liveness does not
+; carry a value from one into the next - it hands the register to a
+; temporary inside the second one, with no diagnostic. Reading and writing
+; it here also means the count is live nowhere but inside a pass.
+;
+; In:  kClipCount  corners in srcBuf, first one repeated at the end
+; Out: kClipCount  corners in dstBuf, same arrangement. Zero, or three up.
 #macro ClipPlanePass: vSel, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblWrap, lblOut
-    iaddiu iWalk,  vi00,   srcBuf
-    iaddiu iOut,   vi00,   dstBuf
-    iaddiu iLeft,  iCount, 0
-    iaddiu iCount, vi00,   0
+    ilw.x  iLeft,  kClipCount(vi00)
+
+    ; Dead unless proven otherwise: every path out of here that drops the
+    ; polygon leaves this store standing, and only the surviving one
+    ; overwrites it.
+    iaddiu iCount, vi00, 0
+    isw.x  iCount, kClipCount(vi00)
+
+    ; An earlier plane already finished it off.
+    iaddi iSignCur, iLeft, -3
+    ibltz iSignCur, lblOut
+
+    iaddiu iWalk, vi00, srcBuf
+    iaddiu iOut,  vi00, dstBuf
 
     lblLoop:
 
@@ -200,16 +217,17 @@
     ; input leaves none or three and up, but a corner sitting exactly on the
     ; plane can leave two - and two corners with no wrap vertex is an edge
     ; list the next pass would walk straight off the end of.
-    iaddi  iLeft,  iCount, -3
-    ibgez  iLeft,  lblWrap
-    iaddiu iCount, vi00,   0
+    iaddi  iSignCur, iCount, -3
+    ibgez  iSignCur, lblWrap
+    iaddiu iCount,   vi00, 0
     lblWrap:
 
-    ibltz iLeft, lblOut
+    ibltz iSignCur, lblOut
     lq fCurPos, dstBuf + 0(vi00)
     lq fCurStq, dstBuf + 1(vi00)
     sq fCurPos, 0(iOut)
     sq fCurStq, 1(iOut)
+    isw.x iCount, kClipCount(vi00)
     lblOut:
 #endmacro
 

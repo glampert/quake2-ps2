@@ -243,11 +243,18 @@
         ; transformed, because OpenOutputWindow reloads the GIF tag block into
         ; seven VF registers and openvcl will put those on top of a
         ; transformed corner that is still live across the call. And it has to
-        ; cover the worst case up front - six vertices, since cutting against
-        ; one plane leaves at most four corners, so at most two triangles -
+        ; cover the worst case up front - eighteen vertices, since five planes
+        ; can each add a corner, so eight corners fan to six triangles -
         ; because asking again from inside the clipper means more window
         ; opens and kicks in there, and that is what stalls VIF1.
-        iaddi iRoom, iVertsLeft, -6
+        ;
+        ; Eighteen of a 45-vertex window is a lot to hold back for the 2% of
+        ; triangles that clip, and the measured fan never exceeded six corners
+        ; anyway. The cost is paid in window occupancy, not in vertices: a
+        ; window closes once fewer than eighteen are left, so it carries
+        ; between 27 and 45 instead of always 45, and a full chunk takes two
+        ; to four kicks where it took two. GsWait is the canary.
+        iaddi iRoom, iVertsLeft, -18
         ibgez iRoom, lWindowHasRoom
         CloseOutputWindowAndKick{ lKicked1 }
         OpenOutputWindow{ }
@@ -279,13 +286,22 @@
 
         ; One plane for now. The other four guard-band sides are the same
         ; macro with a different selector, and go in next.
+        ; Five planes: near, then the four guard-band sides. No far plane -
+        ; it was never once straddled across 606,931 clipped triangles.
+        ;
+        ; The buffers ping-pong A->B->A->B->A->B, so an odd number of passes
+        ; leaves the survivors in B, which is where the fan looks. A is sized
+        ; for the 7 corners pass 4 can write and B for the 8 pass 5 can, each
+        ; plus its wrap vertex, and that is the clip scratch exactly full.
+        ;
+        ; Near goes first because it collapses the most geometry, so the four
+        ; passes behind it walk shorter edge lists.
         ClipPlanePass{ fJn[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearWrap, lNearOut }
+        ClipPlanePass{ fJn[x], kClipBufB, kClipBufA, lXlLoop,   lXlKept,   lXlNoCut,   lXlWrap,   lXlOut   }
+        ClipPlanePass{ fJp[x], kClipBufA, kClipBufB, lXrLoop,   lXrKept,   lXrNoCut,   lXrWrap,   lXrOut   }
+        ClipPlanePass{ fJn[y], kClipBufB, kClipBufA, lYbLoop,   lYbKept,   lYbNoCut,   lYbWrap,   lYbOut   }
+        ClipPlanePass{ fJp[y], kClipBufA, kClipBufB, lYtLoop,   lYtKept,   lYtNoCut,   lYtWrap,   lYtOut   }
 
-        ; Park the survivor count where the fan can reach it, and fence the
-        ; store from the load: vcl does not model VU memory aliasing, so
-        ; without this the load is free to be hoisted above the store.
-        isw.x iCount, kClipCount(vi00)
-        --barrier
         ilw.x iCount, kClipCount(vi00)
 
         ; Fan the survivors from corner 0 - (0,1,2), (0,2,3), ... - which is

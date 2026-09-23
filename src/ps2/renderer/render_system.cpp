@@ -746,9 +746,9 @@ bool AddBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx, D
 }
 
 // The batch's 7 GIF tag qwords into an open inline unpack: the A+D state block plus the drawing
-// tag for 'vertCount' vertices.
+// tag, whose NLOOP the microprogram fills in.
 void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
-                     int vertCount, DrawFlags flags, bool packedRgbaOut = false)
+                     DrawFlags flags, bool packedRgbaOut = false)
 {
     const bool blended = AddBatchStateBlock(texture, drawCtx, flags);
     const int  tme     = HasDrawFlag(flags, DrawFlags::Untextured) ? 0 : 1;
@@ -765,7 +765,14 @@ void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
     // Programs that *compute* their colour emit PACKED RGBAQ; ones receiving it already packed
     // emit an A+D write. The register list follows whichever this batch runs, so the caller says.
     const bool packedRgba = packedRgbaOut || HasDrawFlag(flags, DrawFlags::DynamicLights);
-    AddQword(GIF_SET_TAG(vertCount, 1, 1, prim, GIF_FLG_PACKED, 3),
+
+    // NLOOP starts at 0 and the microprogram patches it with what it actually wrote - the count
+    // is not knowable here, since a clipping program's output depends on the geometry. Zero is
+    // the safe placeholder rather than the vertex count: a patch that somehow never happened
+    // then draws nothing, where a real-looking count would send the GIF reading past what was
+    // written and into the next window's tag block. Both callers patch; particles do not come
+    // through here, and their count *is* known up front.
+    AddQword(GIF_SET_TAG(0, 1, 1, prim, GIF_FLG_PACKED, 3),
              packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList);
 }
 
@@ -868,7 +875,7 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
         }
         AddU32(static_cast<u32>(vertCount));
 
-        AddBatchGifTags(texture, drawCtx, vertCount, flags);
+        AddBatchGifTags(texture, drawCtx, flags);
     }
     CloseInlineUnpack();
 
@@ -918,7 +925,7 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
         AddFloat(shadeLight.z);
         AddFloat(shadeLight.w); // vertex alpha, GS units
 
-        AddBatchGifTags(texture, drawCtx, vertCount, flags, /*packedRgbaOut=*/true);
+        AddBatchGifTags(texture, drawCtx, flags, /*packedRgbaOut=*/true);
     }
     CloseInlineUnpack();
 

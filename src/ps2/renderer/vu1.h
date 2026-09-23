@@ -48,7 +48,7 @@ enum class Program
     // per-vertex work: the vertex format (a DrawVertex, or two MD2 keyframes lerped on the VU),
     // how the colour arrives, and whether the texture coordinates animate (for wrap/turbulent
     // surfaces). Clips and splits triangles fully in the VU.
-    Textured,
+    TexturedTriangles,
 
     // Camera-facing billboards expanded to GS sprites.
     Particles,

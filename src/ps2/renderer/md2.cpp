@@ -983,7 +983,7 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             {
                 trisStream.BeginVerts(3);
 
-                vu1::DrawVertex * const dst = trisStream.PushTriangle();
+                vu1::DrawVertex * const __restrict dst = trisStream.PushTriangle();
                 for (int i = 0; i < 3; ++i)
                 {
                     // All three read up front; see the note in the VU path.

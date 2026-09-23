@@ -913,7 +913,7 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
+    AddStartProgram(vu1::ProgramAddress(vu1::Program::TexturedTriangles));
 }
 
 // The lerped equivalent, for the same microprogram: the same head as a world batch, then the two
@@ -965,7 +965,7 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
                      P2_UNPACK_V4_32, true,
                      /*writeLen=*/1, /*cycleLen=*/vu1::kLerpVertexQwords);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
+    AddStartProgram(vu1::ProgramAddress(vu1::Program::TexturedTriangles));
 }
 
 // One particle chunk: header, batch constants and GIF tags unpacked inline, the particles

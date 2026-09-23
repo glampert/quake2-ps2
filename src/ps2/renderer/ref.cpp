@@ -406,28 +406,20 @@ void DrawDrawStatsOverlay()
     const ps2::lm::Stats & lmStats = ps2::lm::GetStats();
 
     const struct { const char * label; int value; } rows[] = {
-        { "Nodes",   stats.nodesWalked    },
-        { "Surfs",   stats.surfaces       },
-        { "Alpha",   stats.surfacesAlpha  },
-        { "Turb",    stats.surfacesTurb   },
-        { "Sky",     stats.skyFaces       },
-        { "Tris",    rcStats.trisDrawn    },
-        { "Ents",    stats.entities       },
-        { "Prts",    rcStats.particles    },
-        { "DLights", stats.dlights        },
-        { "Batches", rcStats.drawBatches  },
-        { "Clipped", rcStats.trisClipped  },
-        // How Clipped splits by plane: ClipNear is the near plane alone, which a
-        // VU1 near-plane clipper handles by itself; ClipNoNr never touches near,
-        // and ClipMix needs both. The two right-hand columns are what a near-only
-        // clipper would still leave for the EE.
-        { "ClipNear", rcStats.trisClipNearOnly },
-        { "ClipNoNr", rcStats.trisClipNoNear   },
-        { "ClipMix",  rcStats.trisClipMixed    },
-        { "ClipFar",  rcStats.trisClipFar      },
-        { "ClipMaxV", rcStats.clipMaxVerts     },
-        { "Culled",  rcStats.trisCulled   },
-        { "BoxCull", stats.boxesCulled    },
+        { "Nodes",    stats.nodesWalked    },
+        { "Surfs",    stats.surfaces       },
+        { "Alpha",    stats.surfacesAlpha  },
+        { "Turb",     stats.surfacesTurb   },
+        { "Sky",      stats.skyFaces       },
+        { "Tris",     rcStats.trisDrawn    },
+        { "Ents",     stats.entities       },
+        { "Prts",     rcStats.particles    },
+        { "DLights",  stats.dlights        },
+        { "Batches",  rcStats.drawBatches  },
+        { "Clipped",  rcStats.trisClipped  },
+        { "ClipMaxV", rcStats.clipMaxVerts },
+        { "Culled",   rcStats.trisCulled   },
+        { "BoxCull",  stats.boxesCulled    },
         // Lightmap rebuilds this frame. LmDyn tracks moving dynamic lights and
         // LmRest the surfaces they have just left; both should fall back to
         // zero once the lights stop moving. A stuck LmRest means the restore
@@ -447,7 +439,6 @@ void DrawDrawStatsOverlay()
         // emergency drains is the target; a drain firing every frame means
         // cmdbuf::kHalfBytes is too small for the level.
         { "ChainKB",  static_cast<int>(ps2::cmdbuf::PeakBytes() / 1024u) },
-        { "ChainCap", static_cast<int>(ps2::cmdbuf::kHalfBytes / 1024u)  },
         { "ChainKck", ps2::cmdbuf::KicksLastFrame()                      },
         { "ChainDrn", ps2::cmdbuf::EmergencyDrainsLastFrame()            },
     };

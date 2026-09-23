@@ -237,16 +237,16 @@ void FrameLogCapture()
     s.dlights        = d.dlights;
 
     const rs::DrawStats & r = rs::GetStats();
-    s.tris        = r.trisDrawn;
-    s.trisClipped = r.trisClipped;
-    s.trisCulled  = r.trisCulled;
+    s.tris             = r.trisDrawn;
+    s.trisClipped      = r.trisClipped;
+    s.trisCulled       = r.trisCulled;
     s.trisClipNearOnly = r.trisClipNearOnly;
     s.trisClipNoNear   = r.trisClipNoNear;
     s.trisClipMixed    = r.trisClipMixed;
     s.trisClipFar      = r.trisClipFar;
     s.clipMaxVerts     = r.clipMaxVerts;
-    s.batches     = r.drawBatches;
-    s.particles   = r.particles;
+    s.batches          = r.drawBatches;
+    s.particles        = r.particles;
 
     const lm::Stats & l = lm::GetStats();
     s.lmAtlases = l.atlases;

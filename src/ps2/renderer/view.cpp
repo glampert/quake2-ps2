@@ -745,16 +745,11 @@ struct SurfaceDrawState
 // cuts whatever straddles; nothing on this path meets the EE clipper any more.
 // ------------------------------------------------------------------------------------------------
 
-// A corner as those gathers build one. clip::ClipVertex used to serve, at 80
-// bytes for the six floats they actually set - the rest was the clip distances
-// the EE clipper filled in, and the flares' rim[16] alone was 1280 bytes of
-// stack. .z of the UVs is the per-vertex alpha, which only the flares vary.
 struct GatherCorner
 {
-    math::Vec4 pos;
-    math::Vec4 st;
+    math::Vec3 position;
+    math::Vec3 st;
 };
-static_assert(sizeof(GatherCorner) == 32, "Two qwords, like the vertex it becomes");
 
 // Scales one 0-255 colour channel by a 0..1 factor, rounded so a factor of 1
 // leaves it exactly where it was.
@@ -810,12 +805,12 @@ Q_ALWAYS_INLINE void GatherTriangle(const GatherCorner (&corners)[3], const Surf
 {
     state.stream->BeginVerts(3);
 
-    vu1::DrawVertex * const dst = state.stream->PushTriangle();
+    vu1::DrawVertex * __restrict const dst = state.stream->PushTriangle();
     for (int i = 0; i < 3; ++i)
     {
         const GatherCorner & src = corners[i];
 
-        dst[i].position   = { src.pos.x, src.pos.y, src.pos.z };
+        dst[i].position   = src.position;
         dst[i].rgba       = state.vertexAlpha ? WithVertexAlpha(state.rgba, src.st.z) : state.rgba;
         dst[i].s          = src.st.x;
         dst[i].t          = src.st.y;
@@ -888,8 +883,7 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
 // emission of one is byte for byte the same. So each vertex is assembled once
 // into s_polyVertexCache and the triangle loop only copies, which also lifts the
 // draw state's branches out of the inner loop entirely.
-void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
-                                const SurfaceDrawState & state)
+void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     // TriangulatePolygon refuses a polygon wider than the cache and leaves its
     // triangle list degenerate, so one draws nothing by either route; bailing
@@ -958,7 +952,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
 // there is - the clipped twin it used to pick between is gone with the EE
 // clipper. Kept as a name rather than folded into the callers because sky still
 // has its own path and the passes read better calling one thing.
-void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
+Q_ALWAYS_INLINE void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     EmitPolyTrianglesUnclipped(poly, state);
 }
@@ -1458,10 +1452,10 @@ void RenderDLights(const refdef_t & viewDef)
 
         // The cone apex, at full alpha.
         GatherCorner centre;
-        centre.pos = { light->origin[0] - (s_forwardVec[0] * radius),
-                       light->origin[1] - (s_forwardVec[1] * radius),
-                       light->origin[2] - (s_forwardVec[2] * radius), 1.0f };
-        centre.st  = { 0.0f, 0.0f, 1.0f, 0.0f };
+        centre.position = { light->origin[0] - (s_forwardVec[0] * radius),
+                            light->origin[1] - (s_forwardVec[1] * radius),
+                            light->origin[2] - (s_forwardVec[2] * radius) };
+        centre.st = { 0.0f, 0.0f, 1.0f };
 
         // The rim, at zero alpha. ref_gl's descending loop is the same ring
         // walked the other way round, which is why the sine is negated -
@@ -1473,10 +1467,10 @@ void RenderDLights(const refdef_t & viewDef)
             const float c     =  math::Cosf(angle) * radius;
             const float s     = -math::Sinf(angle) * radius;
 
-            rim[i].pos = { light->origin[0] + (s_rightVec[0] * c) + (s_upVec[0] * s),
-                           light->origin[1] + (s_rightVec[1] * c) + (s_upVec[1] * s),
-                           light->origin[2] + (s_rightVec[2] * c) + (s_upVec[2] * s), 1.0f };
-            rim[i].st  = { 0.0f, 0.0f, 0.0f, 0.0f };
+            rim[i].position = { light->origin[0] + (s_rightVec[0] * c) + (s_upVec[0] * s),
+                                light->origin[1] + (s_rightVec[1] * c) + (s_upVec[1] * s),
+                                light->origin[2] + (s_rightVec[2] * c) + (s_upVec[2] * s) };
+            rim[i].st  = { 0.0f, 0.0f, 0.0f };
         }
 
         // Fan to triangle list, the only topology the VU path takes.
@@ -2011,13 +2005,12 @@ void DrawSpriteEntity(const entity_t & entity)
     GatherCorner quad[4];
     for (int i = 0; i < 4; ++i)
     {
-        quad[i].pos = {
+        quad[i].position = {
             entity.origin[0] + (s_rightVec[0] * layout[i].along) + (s_upVec[0] * layout[i].up),
             entity.origin[1] + (s_rightVec[1] * layout[i].along) + (s_upVec[1] * layout[i].up),
-            entity.origin[2] + (s_rightVec[2] * layout[i].along) + (s_upVec[2] * layout[i].up),
-            1.0f
+            entity.origin[2] + (s_rightVec[2] * layout[i].along) + (s_upVec[2] * layout[i].up)
         };
-        quad[i].st = { layout[i].s * stScaleS, layout[i].t * stScaleT, 0.0f, 0.0f };
+        quad[i].st = { layout[i].s * stScaleS, layout[i].t * stScaleT, 0.0f };
     }
 
     ApplyDrawState(state, *skin);
@@ -2073,8 +2066,8 @@ void DrawBeamEntity(const entity_t & entity)
         .vertexAlpha = false
     };
 
-    math::Vec4 startPoints[kNumBeamSegs];
-    math::Vec4 endPoints[kNumBeamSegs];
+    math::Vec3 startPoints[kNumBeamSegs];
+    math::Vec3 endPoints[kNumBeamSegs];
 
     for (int i = 0; i < kNumBeamSegs; ++i)
     {
@@ -2083,16 +2076,17 @@ void DrawBeamEntity(const entity_t & entity)
                                 (360.0f / kNumBeamSegs) * static_cast<float>(i));
         VectorAdd(start, entity.origin, start);
 
-        startPoints[i] = { start[0], start[1], start[2], 1.0f };
+        startPoints[i] = { start[0], start[1], start[2] };
         endPoints[i]   = { start[0] + direction[0],
                            start[1] + direction[1],
-                           start[2] + direction[2], 1.0f };
+                           start[2] + direction[2] };
     }
 
     // Untextured, but a batch still binds one.
     const tex::Texture & texture = tex::DebugTexture();
     ApplyDrawState(state, texture);
-    const math::Vec4 zero = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+    const math::Vec3 zero = { 0.0f, 0.0f, 0.0f };
 
     // ref_gl walks the ring as one triangle strip of (start[i], end[i],
     // start[i+1], end[i+1]) groups; expanded to the triangle lists the VU
@@ -2102,10 +2096,10 @@ void DrawBeamEntity(const entity_t & entity)
         const int next = (i + 1) % kNumBeamSegs;
 
         GatherCorner quad[4];
-        quad[0].pos = startPoints[i];
-        quad[1].pos = endPoints[i];
-        quad[2].pos = startPoints[next];
-        quad[3].pos = endPoints[next];
+        quad[0].position = startPoints[i];
+        quad[1].position = endPoints[i];
+        quad[2].position = startPoints[next];
+        quad[3].position = endPoints[next];
         for (GatherCorner & c : quad)
         {
             c.st = zero;
@@ -2164,11 +2158,11 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
     constexpr float kApex   = 16.0f;
 
     // The square ring in the entity's XY plane both fans close over.
-    math::Vec4 ring[5];
+    math::Vec3 ring[5];
     for (int i = 0; i <= 4; ++i)
     {
         const float angle = static_cast<float>(i) * math::kHalfPI;
-        ring[i] = { kRadius * math::Cosf(angle), kRadius * math::Sinf(angle), 0.0f, 1.0f };
+        ring[i] = { kRadius * math::Cosf(angle), kRadius * math::Sinf(angle), 0.0f };
     }
 
     // The pink checkerboard doubles as the "this model is missing" signal;
@@ -2179,8 +2173,8 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
     for (int half = 0; half < 2; ++half)
     {
         GatherCorner apex;
-        apex.pos = { 0.0f, 0.0f, (half == 0) ? -kApex : kApex, 1.0f };
-        apex.st  = { 0.5f, 0.5f, 0.0f, 0.0f };
+        apex.position = { 0.0f, 0.0f, (half == 0) ? -kApex : kApex };
+        apex.st = { 0.5f, 0.5f, 0.0f };
 
         for (int i = 0; i < 4; ++i)
         {
@@ -2191,10 +2185,10 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 
             GatherCorner triangle[3];
             triangle[0] = apex;
-            triangle[1].pos = ring[a];
-            triangle[1].st  = { 0.0f, 1.0f, 0.0f, 0.0f };
-            triangle[2].pos = ring[b];
-            triangle[2].st  = { 1.0f, 1.0f, 0.0f, 0.0f };
+            triangle[1].position = ring[a];
+            triangle[1].st = { 0.0f, 1.0f, 0.0f };
+            triangle[2].position = ring[b];
+            triangle[2].st = { 1.0f, 1.0f, 0.0f };
 
             GatherTriangle(triangle, state);
         }

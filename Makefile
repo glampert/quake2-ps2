@@ -349,21 +349,30 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # VU1 microprograms.
 # TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
-# The three checks are not optional, and every one of them exists because the
+# The five checks are not optional, and every one of them exists because the
 # toolchain fails silently. openvcl allocates VI registers by liveness and gets
 # it wrong on control flow past a single counted loop - it hands a live register
 # to a temporary, with no diagnostic, and the microprogram then runs away or
-# reads garbage. dvp-as truncates an immediate that does not fit its field and
-# says nothing, so a constant one larger than the instruction can hold becomes a
-# different constant. All of them reach the screen rather than the build log.
+# reads garbage. check_vu_regalloc.py is the general check for that, and needs a
+# second openvcl run with -c for the source names; the two older ones cover
+# particular shapes of it. dvp-as truncates an immediate that does not fit its
+# field and says nothing, so a constant one larger than the instruction can hold
+# becomes a different constant. All of them reach the screen rather than the
+# build log. The branch check runs on the object, so a failure deletes it -
+# otherwise the next make would take the bad object as up to date. Its 'operand
+# out of range' warnings from dvp-as are expected; see the check for why they
+# are harmless.
 $(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS)
 	@mkdir -p $(dir $@)
 	cd $(VCL_PATH) && vclpp $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
 	@python3 $(SRC_DIR)/tools/check_vu_crossloop.py $(basename $@).pp.vcl
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
+	@openvcl -c -o $(basename $@).c.vsm $(basename $@).pp.vcl
+	@python3 $(SRC_DIR)/tools/check_vu_regalloc.py $(basename $@).c.vsm $(basename $@).vsm
 	@python3 $(SRC_DIR)/tools/check_vu_loopvar.py $(basename $@).vsm
 	@python3 $(SRC_DIR)/tools/check_vu_immediates.py $(basename $@).vsm
 	dvp-as $(basename $@).vsm -o $@
+	@python3 $(SRC_DIR)/tools/check_vu_branches.py $(basename $@).vsm $@ || { rm -f $@; exit 1; }
 
 # IOP modules embedded via bin2c.
 $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx

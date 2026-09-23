@@ -7,11 +7,18 @@
 ; the clip volume, which is why geometry that can cross those planes had
 ; to be cut on the EE first. These macros cut it here instead.
 ;
-; A polygon lives in one of two scratch buffers as 2 qwords per vertex -
+; A polygon lives in one of two scratch buffers as 3 qwords per vertex -
 ; the clip-space position, then (rgba, s, t, q) exactly as the vertex
-; arrived - with the first vertex repeated once at the end, so the edge
-; walk runs 0-1, 1-2, ... n-1,0 with no wrap test. The buffers ping-pong:
-; a plane pass reads one and writes the other.
+; arrived, then the colour the transform computed - with the first vertex
+; repeated once at the end, so the edge walk runs 0-1, 1-2, ... n-1,0 with
+; no wrap test. The buffers ping-pong: a plane pass reads one and writes
+; the other.
+;
+; Everything in those three qwords is interpolated at a cut, the packed
+; colour word excepted: it is a bit pattern, not a number, and is put back
+; over the result afterwards. The third qword is what lets the dynamic
+; light mode clip at all - its colour is computed from the world position,
+; which a cut vertex does not have.
 ;
 ; Signs come from the float distances rather than from the clip flag
 ; register. The flag register's six bits per vertex are documented
@@ -35,17 +42,15 @@
 ; plane can add a corner, so three corners in means at most eight out
 ; after five planes.
 ;
-;   A   8 entries (7 corners + wrap), 16 qwords, 974..989 - read by
+;   A   8 entries (7 corners + wrap), 24 qwords, 957..980 - read by
 ;       passes 1, 3, 5 and written by 2, 4
-;   B   9 entries (8 corners + wrap), 18 qwords, 990..1007 - the other
+;   B   9 entries (8 corners + wrap), 27 qwords, 981..1007 - the other
 ;       way round, and where the survivors always end up
 ;
-; 1008 and 1009 are the spill qwords; see vu1.h. Together that is exactly
-; the 36 qwords of clip scratch, with nothing left over.
-#define kClipBufA   974
-#define kClipBufA1  975
-#define kClipBufB   990
-#define kClipBufB1  991
+; 1008 and 1009 are the spill qwords; see vu1.h. 956 is the odd qword the
+; re-tile left over and nothing uses it.
+#define kClipBufA   957
+#define kClipBufB   981
 
 ; Where the survivor count is parked between the last plane pass and the
 ; fan. It cannot stay in a register: openvcl's liveness does not carry a
@@ -61,12 +66,16 @@
 
     sq fPos0, 0(iScratch)
     sq fStq0, 1(iScratch)
-    sq fPos1, 2(iScratch)
-    sq fStq1, 3(iScratch)
-    sq fPos2, 4(iScratch)
-    sq fStq2, 5(iScratch)
-    sq fPos0, 6(iScratch)
-    sq fStq0, 7(iScratch)
+    sq fCol0, 2(iScratch)
+    sq fPos1, 3(iScratch)
+    sq fStq1, 4(iScratch)
+    sq fCol1, 5(iScratch)
+    sq fPos2, 6(iScratch)
+    sq fStq2, 7(iScratch)
+    sq fCol2, 8(iScratch)
+    sq fPos0, 9(iScratch)
+    sq fStq0, 10(iScratch)
+    sq fCol0, 11(iScratch)
 
     iaddiu iCount, vi00, 3
     isw.x  iCount, kClipCount(vi00)
@@ -131,8 +140,10 @@
 
         lq fCurPos, 0(iWalk)
         lq fCurStq, 1(iWalk)
-        lq fNxtPos, 2(iWalk)
-        lq fNxtStq, 3(iWalk)
+        lq fCurCol, 2(iWalk)
+        lq fNxtPos, 3(iWalk)
+        lq fNxtStq, 4(iWalk)
+        lq fNxtCol, 5(iWalk)
 
         ; Both endpoints' distance to this plane, in .x.
         ;
@@ -195,7 +206,8 @@
         ibltz iSignCur, lblKept
         sq fCurPos, 0(iOut)
         sq fCurStq, 1(iOut)
-        iaddiu iOut,   iOut,   2
+        sq fCurCol, 2(iOut)
+        iaddiu iOut,   iOut,   3
         iaddiu iCount, iCount, 1
         lblKept:
 
@@ -213,24 +225,33 @@
 
         sub fCutPos, fNxtPos, fCurPos
         sub fCutStq, fNxtStq, fCurStq
+        sub fCutCol, fNxtCol, fCurCol
         mul fCutPos, fCutPos, fClipQ[x]
         mul fCutStq, fCutStq, fClipQ[x]
+        mul fCutCol, fCutCol, fClipQ[x]
         add fCutPos, fCurPos, fCutPos
         add fCutStq, fCurStq, fCutStq
+        add fCutCol, fCurCol, fCutCol
 
         sq fCutPos, 0(iOut)
         sq fCutStq, 1(iOut)
-        ; The cut's colour lane came out of the FMAC as garbage - two
+        sq fCutCol, 2(iOut)
+        ; The cut's packed colour lane came out of the FMAC as garbage - two
         ; denormal bit patterns lerped - so put the edge's first corner's
         ; packed colour back over it with a raw store. Telling the inside
         ; corner from the outside one would cost a branch, and for a
         ; flat-coloured batch, which is nearly all of them, they are equal.
+        ;
+        ; Unconditional although only one colour mode reads that word. The
+        ; computed colour lives in its own qword and this store cannot reach
+        ; it; the two forms share no lane, which is the whole reason the third
+        ; qword exists.
         sq.x fCurStq, 1(iOut)
-        iaddiu iOut,   iOut,   2
+        iaddiu iOut,   iOut,   3
         iaddiu iCount, iCount, 1
         lblNoCut:
 
-        iaddiu iWalk, iWalk, 2
+        iaddiu iWalk, iWalk, 3
         iaddi  iLeft, iLeft, -1
         ibgtz  iLeft, lblLoop
 
@@ -250,8 +271,10 @@
     ibltz iSignCur, lblOut
     lq fCurPos, dstBuf + 0(vi00)
     lq fCurStq, dstBuf + 1(vi00)
+    lq fCurCol, dstBuf + 2(vi00)
     sq fCurPos, 0(iOut)
     sq fCurStq, 1(iOut)
+    sq fCurCol, 2(iOut)
     isw.x iCount, kClipCount(vi00)
     lblOut:
 #endmacro

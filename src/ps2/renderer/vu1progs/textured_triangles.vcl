@@ -206,6 +206,7 @@
     ; the way the A+D form's does, because PolyVertex keeps its lightmap T in
     ; that lane. Written unconditionally: the A+D form sets Q in its own write
     ; and leaves this word unread. vf00.z is zero, so the reciprocal lands exact.
+    ;
     addq.z fST, vf00, q
 
     sq     fST,  offST(iOutPtr)
@@ -429,14 +430,17 @@
         ; Corner 0 is in every triangle of the fan, so it is loaded once.
         lq fPos0, kClipBufB + 0(vi00)
         lq fStq0, kClipBufB + 1(vi00)
-        iaddiu iFan, vi00, kClipBufB + 2
+        lq fCol0, kClipBufB + 2(vi00)
+        iaddiu iFan, vi00, kClipBufB + 3
 
         lFanLoop:
 
             lq fPos1, 0(iFan)
             lq fStq1, 1(iFan)
-            lq fPos2, 2(iFan)
-            lq fStq2, 3(iFan)
+            lq fCol1, 2(iFan)
+            lq fPos2, 3(iFan)
+            lq fStq2, 4(iFan)
+            lq fCol2, 5(iFan)
 
             ClipJudge{ fPos0 }
             ClipJudge{ fPos1 }
@@ -450,7 +454,7 @@
             iaddiu iOutPtr,    iOutPtr,     9
             iaddi  iVertsLeft, iVertsLeft, -3
 
-            iaddiu iFan,  iFan,  2
+            iaddiu iFan,  iFan,  3
             iaddi  iLeft, iLeft, -1
             ibgtz  iLeft, lFanLoop
 

@@ -41,7 +41,7 @@ enum class DrawFlags : u32
     Modulate      = 1 << 3, // Cd * As / 128: scales the framebuffer, adds nothing of its own.
     DepthHack     = 1 << 4, // Squeeze depth into the near slice of the z-buffer (RF_DEPTHHACK).
     NoDepthWrite  = 1 << 5, // Mask depth writes alone, without a blend equation or the ABE bit.
-    DynamicLights = 1 << 6, // Run the lit microprogram; colour comes from SetDynamicLights.
+    DynamicLights = 1 << 6, // Colour summed from SetDynamicLights on the VU, not taken from the vertex.
     Warped        = 1 << 7, // Run the warp microprogram: UVs arrive in raw texels and animate on VU1.
     WarpFlowing   = 1 << 8, // With Warped: also drift the surface along S (SURF_FLOWING).
 };

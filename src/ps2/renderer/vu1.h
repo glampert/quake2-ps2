@@ -65,8 +65,8 @@ void Init();
 // VU1 data memory layout (1024 qwords; addresses in qwords)
 //
 //      0-7       the frame constants below
-//      8-973     the two XTOP double buffers (VIF1 BASE=8, OFFSET=483)
-//      974-1009  the clipper's ping-pong scratch
+//      8-955     the two XTOP double buffers (VIF1 BASE=8, OFFSET=474)
+//      956-1009  the clipper's ping-pong scratch
 //      1010-1021 the dynamic light block
 //      1022-1023 the turbulent surface constants
 //
@@ -78,16 +78,32 @@ void Init();
 // Frame constants at fixed low VU addresses (below kDoubleBufferBase).
 constexpr int kFrameConstantsAddr = 0;
 
-// VIF1 double-buffer registers: two 483-qword buffers above the constants.
+// VIF1 double-buffer registers: two 474-qword buffers above the constants.
 constexpr int kDoubleBufferBase   = 8;
-constexpr int kDoubleBufferOffset = 483;
+constexpr int kDoubleBufferOffset = 474;
 
 // The clipper's Sutherland-Hodgman ping-pong, above the double buffers rather than inside them:
 // only one microprogram runs at a time, so one shared region costs half what a copy in each
-// buffer half would. Two buffers of the 9 corners a clipped triangle can leave, 2 qwords each -
-// clip space position in one, s/t and the raw packed colour word in the other.
-constexpr int kClipScratchAddr   = 974;
-constexpr int kClipScratchQwords = 36;
+// buffer half would.
+//
+// Three qwords per corner: the clip-space position, then s/t with the raw packed colour word,
+// then the computed vertex colour. The third exists for BatchColorMode::DynamicLights, whose
+// colour is a function of the *world* position - which a cut vertex does not have, having only
+// two endpoints to interpolate between - so the light sum has to travel as an ordinary
+// attribute. It will not fit in the first two: the transform's last madd writes all four lanes
+// of the position, and a corner's own colour lane is the packed u32 the other mode needs.
+//
+// It costs the clipper alone. The input vertex stays at two qwords, so the diffuse pass still
+// hands the loader's memory straight to DMA - which is what made the first attempt at this, in
+// the vertex format, cost 49% of TexChains.
+//
+// Two unequal buffers, since a pass reads one and writes the other and Sutherland-Hodgman can
+// add a corner per plane: A holds the 7 corners pass 4 can leave and B the 8 of pass 5, each
+// plus the repeated first corner the edge walk needs. 24 + 27 qwords, two spill qwords above
+// them, and one qword of slack that the double buffer cannot use either (474 is the largest
+// half that leaves room for this block, and 2 * 474 is one short of filling it).
+constexpr int kClipScratchAddr   = 956;
+constexpr int kClipScratchQwords = 54;
 
 // Everything in the map above, in order, with nothing left over.
 static_assert(kClipScratchAddr == kDoubleBufferBase + (2 * kDoubleBufferOffset),
@@ -437,8 +453,10 @@ static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qw
 // ------------------------------------------------------------------------------------------------
 
 // Particles one VU run carries. Input is 1 qword each and the sprite output 5, so a chunk
-// occupies kPrtDataAddr + 6n qwords of a double-buffer half; 78 leaves a little room under 496.
-constexpr int kMaxParticlesPerBatch = 78;
+// occupies kPrtDataAddr + 6n qwords of a double-buffer half; 77 is what fits the 474 the clip
+// scratch left, and this is the one batch ceiling that binds against it - the triangle and lerp
+// layouts had slack to give.
+constexpr int kMaxParticlesPerBatch = 77;
 
 constexpr int kPrtBatchHeaderAddr = 0;  // particle count in .w
 constexpr int kPrtQuadOffsetAddr  = 1;  // clip-space corner offset in .xyz, blow-up rate in .w

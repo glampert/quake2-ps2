@@ -1349,20 +1349,29 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     // World transform only - the microprogram lights in world space, and a brush
     // model's vertices are in its own model space (see the same guard below).
     //
-    // Not while VU1 is doing the clipping, and this is a hole rather than a
-    // preference. The flag routes this pass to the lit microprogram, and lit has
-    // no clipper - so a triangle the diffuse pass cuts and draws whole is one lit
-    // rejects whole through the ADC bit, and the surface comes out with its
-    // diffuse and no lightmap over it. Fullbright, on exactly the large surfaces
-    // that straddle a plane.
+    // This pass and the diffuse one now run the same microprogram - the flag picks
+    // a colour mode inside it rather than a program of its own - so the two cut
+    // identically whether or not VU1 is doing the clipping. That is the property
+    // that matters: clipping one pass on the EE and the other on the VU leaves the
+    // polygons disagreeing at the seam, and clipping only the diffuse one left the
+    // lightmap rejected whole and the surface fullbright.
     //
-    // Sending this pass through the textured program instead keeps both passes
-    // cutting identically, which is what matters: clip on the EE for one and on
-    // the VU for the other and the two polygons stop agreeing at the seam. The
-    // cost is that mode 2's point lights do not draw while ps2_vu_clip is on.
-    // Interim, until lit has a clipper of its own - which needs the
-    // textured/lit/warped merge to pay for the micro memory.
-    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix && !VuClippingEnabled())
+    // Withheld for now, because that colour mode does not render: this pass comes
+    // out black over each triangle's interior with a rim of unmodulated diffuse at
+    // the edges, on every ps2_vu_clip setting. The fault is open. What has been
+    // eliminated, each by experiment rather than by reading: the PACKED RGBAQ
+    // register list, the light block (its RGB renders correctly as a colour), the
+    // vertex alpha (128, rendered and read back), and Q in four separate forms
+    // including pinned to a constant with affine mapping. The source alpha is
+    // near zero in triangle interiors and right at their edges, and nothing
+    // found so far explains that.
+    //
+    // While this stands, mode 2 lights the world exactly as mode 1 does and its
+    // point lights do not draw. That is a hole, not a preference, and it closes
+    // by deleting this constant.
+    constexpr bool kDynamicLightColorModeBroken = true;
+
+    if (!kDynamicLightColorModeBroken && VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
     {
         state.flags = state.flags | rs::DrawFlags::DynamicLights;
     }

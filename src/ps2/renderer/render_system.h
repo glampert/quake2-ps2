@@ -65,14 +65,24 @@ enum class FaceCull : u32
     Positive = 2,
 };
 
-// What the microprogram actually receives: the sign it multiplies the area by, after which it
-// only ever asks whether the result is negative. Zero never culls, because zero is not negative.
-// Cheaper on the VU than the mode itself - a mask register, a compare target and a branch, all
-// of which VI registers the lerp program does not have to spare.
+// The magnitude of the sign below. The microprogram does not see the screen area itself but the
+// determinant of the triangle's three clip-space (x, y, w) corners, which is that area times
+// w0*w1*w2 - it shrinks with the cube of the depth. A pixel-sized triangle at the view weapon's
+// 0.25 near plane comes out around 1e-8, and the sign is read through an ftoi4 that resolves
+// 1/16, so unscaled it would truncate to zero and never be culled. 2^40 resolves it with room to
+// spare, and the largest the determinant can reach, around the far plane's 4096 cubed, still
+// lands over ten orders of magnitude below the float range. Too small a scale fails safe:
+// the triangle draws, and the z-buffer hides it.
+constexpr float kCullSignScale = 1099511627776.0f; // 2^40
+
+// What the microprogram actually receives: the sign it multiplies the determinant by, after
+// which it only ever asks whether the result is negative. Zero never culls, because zero is not
+// negative. Cheaper on the VU than the mode itself - a mask register, a compare target and a
+// branch, all of which VI registers the lerp program does not have to spare.
 constexpr float CullSignFor(const FaceCull cull)
 {
-    return (cull == FaceCull::Negative) ?  1.0f
-         : (cull == FaceCull::Positive) ? -1.0f
+    return (cull == FaceCull::Negative) ?  kCullSignScale
+         : (cull == FaceCull::Positive) ? -kCullSignScale
                                         :  0.0f;
 }
 

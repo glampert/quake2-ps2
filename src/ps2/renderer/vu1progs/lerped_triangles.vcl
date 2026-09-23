@@ -106,10 +106,10 @@
 ; XYZ2 output qwords at offST/offRGBA/offXyz from iOutPtr. Leaves this
 ; vertex's clipw flags as the newest entry in the clip flag register;
 ; the caller judges whole triangles with fcand after 3 calls and
-; writes the XYZ2 .w ADC bit. 'dstScreen' additionally receives the
-; float screen-space position (pre-ftoi4), which the caller's
-; backface test crosses across the triangle - one register per
-; vertex, at no extra instruction (the madd lands there anyway).
+; writes the XYZ2 .w ADC bit. 'vClip' additionally keeps the vertex's
+; clip-space position, which the caller's backface test takes the
+; determinant of across the triangle - one register per vertex, at no
+; extra instruction (the transform's last madd lands there anyway).
 ;
 ; The position integers must not reach an FMAC before itof0 - they
 ; look like denormals and would flush to zero.
@@ -132,24 +132,25 @@
 ;       vec4 pos = cur * frontv + old * backv;
 ;
 ;       // Model space to clip space (row-vector MVP); w comes from
-;       // vf00's hardwired 1, not from the junk in pos.w:
-;       pos = pos.x * mvp[0] + pos.y * mvp[1]
-;           + pos.z * mvp[2] + 1.0 * mvp[3];
+;       // vf00's hardwired 1, not from the junk in pos.w. Kept, for
+;       // the caller's backface test:
+;       clip = pos.x * mvp[0] + pos.y * mvp[1]
+;            + pos.z * mvp[2] + 1.0 * mvp[3];
 ;
 ;       // Guard-band clip judgement: compare the scaled position
 ;       // against |w| and push the 6 outside flags (+x,-x,+y,-y,+z,-z)
 ;       // onto the clip flag queue for the caller to inspect:
-;       vec3 judge = pos.xyz * clipScale.xyz;
-;       clipFlagQueue.push(judge, abs(pos.w));
+;       vec3 judge = clip.xyz * clipScale.xyz;
+;       clipFlagQueue.push(judge, abs(clip.w));
 ;
 ;       // Perspective divide; the STQ words share the 1/w so the GS
 ;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
 ;       // The keyframe index in .x gets scaled too - it reads as
 ;       // zero (the VU has no denormals) and the rotate below moves
 ;       // it into the ST qword's ignored .w:
-;       float q  = 1.0f / pos.w;
-;       pos.xyz *= q;                    // now NDC
-;       vec4 stqScaled = stq * q;        // (junk, s/w, t/w, 1/w)
+;       float q    = 1.0f / clip.w;
+;       vec3  proj = clip.xyz * q;       // now NDC
+;       vec4  stqScaled = stq * q;       // (junk, s/w, t/w, 1/w)
 ;
 ;       // The vertex colour, from the quantized shade term in the
 ;       // old keyframe's .w broadcast across the entity's light.
@@ -160,19 +161,17 @@
 ;       colour.xyz   = clamp(colour.xyz, 0, 255);
 ;       colour.w     = shadeLight.w;         // alpha, untouched
 ;
-;       // NDC to GS window coordinates; the float form feeds the
-;       // caller's backface cross product, the 12.4 form the GS:
-;       dstScreen = gsOffset.xyz + pos.xyz * gsScale.xyz;
-;       pos.xyz   = ftoi4(dstScreen.xyz);
+;       // NDC to GS window coordinates, in 12.4 fixed point:
+;       proj = ftoi4(gsOffset.xyz + proj * gsScale.xyz);
 ;
 ;       // ST scaled by the skin's power-of-two correction:
 ;       stqScaled.yz   *= stScale.yz;
 ;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
 ;       out[offRGBA]    = ftoi0(colour);  // PACKED RGBAQ: one byte per word,
 ;                                         // Q from the ST write just above
-;       out[offXyz].xyz = pos.xyz;        // XYZ (.w ADC bit set by caller)
+;       out[offXyz].xyz = proj;           // XYZ (.w ADC bit set by caller)
 ;   }
-#macro DoVertex: offCur, offOld, offStq, offST, offRGBA, offXyz, dstScreen
+#macro DoVertex: offCur, offOld, offStq, offST, offRGBA, offXyz, vClip
 
     lq fCurI, offCur(iInPtr)
     lq fOldI, offOld(iInPtr)
@@ -188,14 +187,14 @@
 
     ; Position to clip space (row-vector MVP); w = 1 from vf00, never
     ; from fPos.w, which holds lerped normal-index junk:
-    mul  acc,  fMVP0, fPos[x]
-    madd acc,  fMVP1, fPos[y]
-    madd acc,  fMVP2, fPos[z]
-    madd fPos, fMVP3, vf00[w]
+    mul  acc,   fMVP0, fPos[x]
+    madd acc,   fMVP1, fPos[y]
+    madd acc,   fMVP2, fPos[z]
+    madd vClip, fMVP3, vf00[w]
 
     ; Guard-band clip judgement against |w|: scaled x/y, exact z.
-    mul.xyz   fJudge, fPos, fClipScale
-    clipw.xyz fJudge, fPos[w]
+    mul.xyz   fJudge, vClip, fClipScale
+    clipw.xyz fJudge, vClip[w]
 
     ; Perspective divide, with the same 1/w multiplied onto the texture
     ; coords - the GS wants (s/w, t/w, 1/w) for perspective-correct
@@ -209,19 +208,18 @@
     ; and nowhere else: the lane it rotates into is the ST qword's unread fourth
     ; word. Masking to .yzw instead would leave .x uninitialised for the mr32
     ; below, which openvcl rejects outright.
-    div        q,          vf00[w], fPos[w]
-    mul.xyz    fPos,       fPos,    q
+    div        q,          vf00[w], vClip[w]
+    mul.xyz    fProj,      vClip,   q
     mulq       fStqScaled, fStq,    q
 
-    ; NDC to GS window coordinates: float into dstScreen for the caller's
-    ; backface test, then 12.4 fixed point for the GS packet:
-    mula.xyz  acc,  fGSOffset, vf00[w]
-    madd.xyz  dstScreen, fPos, fGSScale
-    ftoi4.xyz fPos, dstScreen
+    ; NDC to GS window coordinates, in 12.4 fixed point:
+    mula.xyz  acc,   fGSOffset, vf00[w]
+    madd.xyz  fProj, fProj, fGSScale
+    ftoi4.xyz fProj, fProj
 
     ; The skin's power-of-two correction, which the EE used to multiply onto
-    ; every vertex before handing them over. Masked to .yz so the header
-    ; integers sitting in fStScale.x/.w are never computed.
+    ; every vertex before handing them over. Masked to .yz: the cull sign
+    ; shares that qword, in .x.
     mul.yz fStqScaled, fStqScaled, fStScale
 
     ; The vertex colour: the entity's light scaled by this vertex's shade
@@ -247,7 +245,7 @@
     ; write latches, which is why the two cannot be reordered.
     sq     fST,   offST(iOutPtr)
     sq     fRGBA, offRGBA(iOutPtr)
-    sq.xyz fPos,  offXyz(iOutPtr)
+    sq.xyz fProj, offXyz(iOutPtr)
 
 #endmacro
 
@@ -296,10 +294,10 @@
 ;               out = OpenWindow(win); vertsLeft = kWindowVerts;
 ;           }
 ;
-;           vec3 scr0, scr1, scr2; // float screen positions
-;           DoVertex(0, 1, 2,  0, 1, 2,  scr0); // in[0..2] -> out[0..2]
-;           DoVertex(3, 4, 5,  3, 4, 5,  scr1); // in[3..5] -> out[3..5]
-;           DoVertex(6, 7, 8,  6, 7, 8,  scr2); // in[6..8] -> out[6..8]
+;           vec4 clip0, clip1, clip2; // clip-space positions
+;           DoVertex(0, 1, 2,  0, 1, 2,  clip0); // in[0..2] -> out[0..2]
+;           DoVertex(3, 4, 5,  3, 4, 5,  clip1); // in[3..5] -> out[3..5]
+;           DoVertex(6, 7, 8,  6, 7, 8,  clip2); // in[6..8] -> out[6..8]
 ;
 ;           // Whole-triangle guard band reject: if any of the 18 clip
 ;           // flags of the 3 vertices above is set, adc becomes 0x8000,
@@ -307,22 +305,23 @@
 ;           // triangle's drawing kick.
 ;           int adc = 0x7FFF + (clipFlagQueue.last3() != 0 ? 1 : 0);
 ;
-;           // Backface reject: the sign of the triangle's screen-space
-;           // signed area, folded into the same ADC bit. The sign travels
-;           // as data, not flags (openvcl reorders around flag reads):
-;           // clamp the area to [-1, +1] so ftoi4 cannot overflow 16 bits,
-;           // then mtir the low half and mask bit 15. Sub-(1/16)px^2 areas
-;           // truncate to 0 = "positive" - at worst a stray subpixel
-;           // triangle draws. Guard-band-rejected triangles may cross
-;           // garbage positions, but their ADC bit is already set and the
-;           // +1 keeps it (and VU floats cannot produce NaN to trip this).
-;           // The cull sign goes on before the clamp, so the test is
-;           // always just "is it negative". A sign of 0 flattens every
-;           // area to zero, which is not negative, so nothing is culled.
-;           vec2  e1   = scr1.xy - scr0.xy;
-;           vec2  e2   = scr2.xy - scr0.xy;
-;           float area = (e1.x * e2.y - e2.x * e1.y) * cullSign;
-;           if (ftoi4(clamp(area, -1, +1)) < 0)
+;           // Backface reject, folded into the same ADC bit: the sign of
+;           // det[x y w] over the three clip-space corners, which is the
+;           // screen-space signed area times w0*w1*w2. Taken as
+;           // p0 . (e1 x e2) over (x, y, w) triples, e1/e2 the edges from
+;           // corner 0. The sign travels as data, not flags (openvcl
+;           // reorders around flag reads): clamp to [-1, +1] so ftoi4
+;           // cannot overflow 16 bits, then mtir the low half and read
+;           // bit 15. The cull sign goes on before the clamp, so the test
+;           // is always just "is it negative"; a sign of 0 flattens every
+;           // determinant to zero, which is not negative, so nothing is
+;           // culled. Its magnitude is what keeps a small triangle close to
+;           // the eye from truncating to zero - see rs::kCullSignScale.
+;           vec3  p0   = clip0.xyw;
+;           vec3  e1   = clip1.xyw - clip0.xyw;
+;           vec3  e2   = clip2.xyw - clip0.xyw;
+;           float det  = dot(p0, cross(e1, e2)) * cullSign;
+;           if (ftoi4(clamp(det, -1, +1)) < 0)
 ;               adc += 1; // bit 15 stays set either way
 ;
 ;           out[2].w = adc; // .w of each of the 3 vertices
@@ -385,9 +384,9 @@
 
         lWindowHasRoom:
 
-        DoVertex{ 0, 1, 2, 0, 1, 2, fScr0 }
-        DoVertex{ 3, 4, 5, 3, 4, 5, fScr1 }
-        DoVertex{ 6, 7, 8, 6, 7, 8, fScr2 }
+        DoVertex{ 0, 1, 2, 0, 1, 2, fClip0 }
+        DoVertex{ 3, 4, 5, 3, 4, 5, fClip1 }
+        DoVertex{ 6, 7, 8, 6, 7, 8, fClip2 }
 
         ; Judge the whole triangle from the last 3 clipw results: if any
         ; vertex left the guard band, 0x7FFF + flags reaches bit 15 (the
@@ -396,23 +395,43 @@
         fcand  vi01, 0x3FFFF
         iaddiu iADC, vi01, 0x7FFF
 
-        ; Backface reject, folded into the same ADC bit. The area's sign
-        ; travels as data, never flags (openvcl reorders around flag
-        ; reads): clamped to [-1, +1] so the ftoi4 cannot overflow the 16
-        ; bits mtir moves, leaving the sign in bit 15 of the VI register,
-        ; which is exactly what ibgez reads.
-        ; area.x = e1.x*e2.y - e2.x*e1.y, e1/e2 = the two edges from scr0.
+        ; Backface reject, folded into the same ADC bit, from the clip-space
+        ; corners rather than the screen positions: the sign of det[x y w]
+        ; over the three. That is the screen-space signed area times
+        ; w0*w1*w2, so it agrees with the screen test wherever all three
+        ; corners are in front of the eye - and it needs no divide, so it is
+        ; also right where they are not. That is what will let it run ahead
+        ; of a clipper, which the screen test cannot.
         ;
-        ; The batch's cull sign goes on before the clamp, so the test is
-        ; always just "is it negative": +1 rejects negative areas, -1
-        ; rejects positive ones, and 0 flattens every area to zero, which
-        ; is not negative and so never culls. That is one multiply in
-        ; place of a mask register, a compare target and a mode branch -
-        ; VI registers this program has none of to spare.
-        sub.xy  fEdge1, fScr1, fScr0
-        sub.xy  fEdge2, fScr2, fScr0
-        mula.x  acc,   fEdge1, fEdge2[y]
-        msub.x  fArea, fEdge2, fEdge1[y]
+        ; Taken as p0 . (e1 x e2), each (x, y, w) triple with its w moved
+        ; into z for the outer product. Edges rather than the corners
+        ; themselves because a small triangle far away has three nearly equal
+        ; rows, and a determinant of those would cancel away most of its
+        ; precision before the sign came out.
+        sub        fEdge1, fClip1, fClip0
+        sub        fEdge2, fClip2, fClip0
+        add.z      fEdge1, vf00,   fEdge1[w]
+        add.z      fEdge2, vf00,   fEdge2[w]
+        move.xy    fEye,   fClip0
+        add.z      fEye,   vf00,   fClip0[w]
+        opmula.xyz acc,    fEdge1, fEdge2
+        opmsub.xyz fNorm,  fEdge2, fEdge1
+        mul.xyz    fArea,  fNorm,  fEye
+        add.x      fArea,  fArea,  fArea[y]
+        add.x      fArea,  fArea,  fArea[z]
+
+        ; The sign travels as data, never flags (openvcl reorders around flag
+        ; reads): clamped to [-1, +1] so the ftoi4 cannot overflow the 16 bits
+        ; mtir moves, leaving the sign in bit 15 of the VI register, which is
+        ; exactly what ibgez reads.
+        ;
+        ; The draw's cull sign goes on before the clamp, so the test is always
+        ; just "is it negative": positive rejects negative determinants,
+        ; negative rejects positive ones, and 0 flattens every one to zero,
+        ; which is not negative and so never culls. That is one multiply in
+        ; place of a mask register, a compare target and a mode branch - VI
+        ; registers this program has none of to spare. Its magnitude matters
+        ; too: see rs::kCullSignScale.
         mul.x   fArea, fArea, fStScale[x]
         mini.x  fArea, fArea, vf00[w]
         max.x   fArea, fArea, fMinusOne[x]

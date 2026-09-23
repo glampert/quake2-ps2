@@ -9,13 +9,20 @@
  *
  *      Command buffer half (kHalfBytes)
  *      |-- DIRECT block  -- the frame clear
- *      |-- REF unpack    -- FrameConstants + LightConstants (once, not per batch)
- *      |-- CNT unpack    -- batch header + 7 GIF tag qwords     \  one chunk,
- *      |-- CNT unpack    -- 96 x DrawVertex, written in place   |  <= 96 verts
- *      |-- MSCAL         -- run the microprogram                /
- *      |-- ... ~130 more chunks ...
+ *      |-- FLUSH + REF   -- FrameConstants, then the per-draw block: LightConstants, or
+ *      |                    LerpConstants for an MD2 draw (once per draw, not per chunk)
+ *      |-- CNT unpack    -- batch header + parameters + 7 GIF tag qwords   \  one chunk,
+ *      |-- REF unpack    -- <= 90 DrawVertex, gathered into this buffer    |  one VU run
+ *      |                    or referenced where the loader baked them      |
+ *      |-- FLUSH + MSCAL -- run the microprogram                           /
+ *      |-- ... more chunks, then more draws ...
  *      |-- DIRECT block  -- the 2D/HUD overlay
  *      `-- FLUSH + FINISH + END -- the terminator, appended by the one kick at rs::EndFrame
+ *
+ *  An MD2 chunk carries <= 60 vertices in two REF unpacks rather than one - the keyframe bytes,
+ *  gathered here, and the attributes, straight from the model hunk - which the VIF interleaves
+ *  as it writes them (rs::AddLerpBatchChunk). A particle chunk is one REF of billboards. A 3D
+ *  draw's GS packets are never in this buffer: the microprogram builds them in VU memory.
  *
  *  Both halves live inside the world loader's lump scratch (mod::WorldScratchBlock), which is
  *  claimed only while a .bsp is parsed and is dead for the whole of gameplay: no rendering

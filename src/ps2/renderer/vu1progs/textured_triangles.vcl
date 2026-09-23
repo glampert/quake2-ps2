@@ -98,14 +98,21 @@
 ;
 ; C-like pseudo-code ('in' is the qword array at iInPtr):
 ;
-;   void ClipTransform(int offPos, int offStq, vec4& pos, vec4& stq)
+;   void ClipTransform(int offPos, int offStq, vec4& pos, vec4& stq, vec4& col)
 ;   {
 ;       pos = in[offPos];
 ;       stq = in[offStq]; // (rgba, s, t, q); raw packed color in .x
 ;
-;       // Object space to clip space (row-vector MVP):
+;       // Colour mode 1: the four dynamic lights, one per lane, summed at
+;       // the world position - which the transform below overwrites:
+;       col = (0, 0, 0, 128);
+;       if (colorMode == Computed)
+;           col.xyz = min(sum_i(max(colour_i - distSqr_i * colour_i / radius_i^2, 0)), 255);
+;
+;       // Object space to clip space (row-vector MVP); the translation row
+;       // is scaled by a constant 1, since pos.w carries the lightmap S:
 ;       pos = pos.x * mvp[0] + pos.y * mvp[1]
-;           + pos.z * mvp[2] + pos.w * mvp[3];
+;           + pos.z * mvp[2] + 1.0 * mvp[3];
 ;
 ;       // Guard-band clip judgement: compare the scaled position
 ;       // against |w| and push the 6 outside flags (+x,-x,+y,-y,+z,-z)
@@ -280,7 +287,8 @@
 #endmacro
 
 ; Projects one clip-space vertex and writes its three output qwords: ST,
-; RGBAQ (via A+D) and XYZ2, at offST/offAD/offXyz from iOutPtr.
+; RGBAQ and XYZ2, at offST/offAD/offXyz from iOutPtr. The RGBAQ qword is an
+; A+D write of the packed colour, or PACKED RGBAQ of a computed one.
 ;
 ; The packed color is moved with raw copies only (lq/sq.x): FMAC ops
 ; would flush denormal color bit patterns (e.g. 0x800000FF) to zero.
@@ -290,7 +298,8 @@
 ;
 ; C-like pseudo-code:
 ;
-;   void EmitVertex(vec4 pos, vec4 stq, int offST, int offAD, int offXyz)
+;   void EmitVertex(vec4 pos, vec4 stq, vec4 col,
+;                   int offST, int offAD, int offXyz)
 ;   {
 ;       // Perspective divide; the STQ words share the 1/w so the GS
 ;       // gets (s/w, t/w, 1/w) for perspective-correct interpolation.
@@ -303,11 +312,21 @@
 ;       // NDC to GS window coordinates, in 12.4 fixed point:
 ;       proj = ftoi4(gsOffset.xyz + proj * gsScale.xyz);
 ;
-;       out[offST]      = stqScaled.yzwx; // ST (.z carries Q; .w junk)
-;       out[offAD].x    = stq.x;          // native RGBAQ: packed color...
-;       out[offAD].y    = q;              // ...with Q in the word above
-;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
+;       vec4 st = stqScaled.yzwx;         // ST (.w junk)
+;       if (warped) // ref_gl's ripple, on the vertex that really exists
+;           st.xy = Warp(stq.yz) * q;
+;       st.z = q;                         // what PACKED RGBAQ latches Q from
+;
+;       out[offST]      = st;
 ;       out[offXyz].xyz = proj;           // XYZ (.w ADC bit set by caller)
+;       if (colorMode == Computed)
+;           out[offAD]  = ftoi0(col);     // PACKED RGBAQ, one byte per word
+;       else
+;       {
+;           out[offAD].x = stq.x;         // native RGBAQ: packed color...
+;           out[offAD].y = q;             // ...with Q in the word above
+;           out[offAD].z = 0x01;          // A+D destination: RGBAQ register
+;       }
 ;   }
 #macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lblNoWarp, lblPacked, lblDone
 

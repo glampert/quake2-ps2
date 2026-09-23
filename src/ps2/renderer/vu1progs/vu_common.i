@@ -60,8 +60,8 @@
     sqi fTag6, (iOutPtr++)
 #endmacro
 
-; Whole-triangle guard band reject, for the three-vertex programs whose
-; output is 3 qwords a vertex. Judges the last 3 vertices' 18 clip flags
+; Whole-triangle guard band reject, for a triangle whose output is 3
+; qwords a vertex - the clipper's fan. Judges the last 3 vertices' 18 clip flags
 ; together: if any one left the band, 0x7FFF + flags reaches bit 15 - the
 ; ADC bit - and the GS skips this triangle's drawing kick. Written to
 ; every XYZ2 .w so the kicking vertex always carries it.
@@ -75,9 +75,13 @@
 
 ; The same judgement, split, for a program that has to *act* on it as well as
 ; record it. Reading the clip flags twice for one triangle is the thing to
-; avoid: openvcl reorders around flag reads (see the note in the lerp
-; program's backface cull), so the two reads are not guaranteed to see the
-; same flags. Judge once, branch on vi01, and store the ADC afterwards.
+; avoid: openvcl reorders around flag reads (see the note on the backface
+; cull in textured_triangles.vcl), so the two reads are not guaranteed to see
+; the same flags. Judge once, branch on vi01, and store the ADC afterwards.
+;
+; Invoke it in the same basic block as the clipw it reads. The flags land four
+; cycles after a clipw and openvcl pads for that only within a block; across a
+; branch or label it reads them early. check_vu_latency.py enforces this.
 #macro JudgeTriangleAdc
     fcand  vi01, 0x3FFFF
     iaddiu iADC, vi01, 0x7FFF

@@ -177,17 +177,16 @@ constexpr float kGsDepthScale = static_cast<float>(0xFFFF) / 32.0f;
 // ref_gl's glDepthRange(0, 0.3) over the inverted range this projection produces.
 constexpr float kDepthHackScale = 0.15f;
 
-// The NDC guard band the microprogram accepts: a triangle with any vertex beyond it in |x/w| or
-// |y/w|, or outside the exact [-1, +1] z range, is rejected whole rather than clipped. Bounded by
-// the reach of the GS 12.4 window coordinates, so it cannot simply be raised - callers whose
-// geometry can cross these planes must pre-clip on the EE.
+// The NDC guard band the microprogram clips to: a triangle with a corner beyond it in |x/w| or
+// |y/w|, or in front of the near plane, is cut against it on VU1 (vu_clip.i). Bounded by the reach
+// of the GS 12.4 window coordinates, so it cannot simply be raised. The far plane is judged but
+// not cut - measured never to be straddled - so a triangle past it is rejected whole.
 constexpr float kGuardBandNdcLimit = 0.8f;
 
 // The clip judgement multiplies x/y by this before clipw tests them against |w|, so triangles
 // survive out to |ndc| = kGuardBandNdcLimit - about 5x the half-screen (the visible screen ends at
 // ndc 640/4096 = 0.15) while staying inside the representable 12.4 coordinate range. The GS
-// scissor does the actual on-screen cut; only triangles beyond the band (or crossing the near/far
-// planes, z scale 1) are dropped whole via the ADC bit.
+// scissor does the actual on-screen cut; the band is only what the clipper cuts to.
 constexpr float kGuardBandScale = 1.0f / kGuardBandNdcLimit;
 
 // How far inside the clip planes the VU1 clipper actually cuts, as a fraction of w.
@@ -251,15 +250,17 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Generic VU1 triangles (static world geometry)
+// VU1 triangles: the DrawVertex format of textured_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
-// Vertices one VU1 run carries. Two windows' worth exactly, so a full chunk is two kicks.
-// Draws longer than this are split into chunks of this size.
+// Vertices one VU1 run carries: the input region is sized to two windows' worth. A full chunk
+// takes two to four kicks, since a window closes once it can no longer hold a fully clipped
+// triangle (see the room check in the microprogram). Draws longer than this are split into chunks
+// of this size.
 constexpr int kMaxVertsPerBatch = 90;
 
 // Batch layout, relative to the current double buffer (XTOP).
-constexpr int kBatchHeaderAddr = 0; // colour mode .x, warp flag .y, vertex count .w
+constexpr int kBatchHeaderAddr = 0; // colour mode .x, warp flag .y, vertex format .z, count .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 
 // The GS packet is built in one of two fixed output windows rather than immediately after the
@@ -282,7 +283,7 @@ constexpr int kOutputWindowBAddr  = kOutputWindowAAddr + kOutputWindowQwords;
 
 static_assert((kMaxVertsPerWindow % 3) == 0, "A window holds whole triangles");
 static_assert((kMaxVertsPerBatch % 3) == 0, "World chunks are whole triangles");
-static_assert(kMaxVertsPerBatch == 2 * kMaxVertsPerWindow, "A full chunk should be exactly two kicks");
+static_assert(kMaxVertsPerBatch == 2 * kMaxVertsPerWindow, "The input region is sized to two windows' worth");
 static_assert(kOutputWindowBAddr + kOutputWindowQwords <= kDoubleBufferOffset,
               "World batch input + both output windows must fit one double-buffer half");
 
@@ -362,11 +363,10 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // Turbulent (warped) surfaces: the warp block of textured_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
-// The warp program takes the *same* batch layout as the textured one - same header, same GIF tag
-// block, same kMaxVertsPerBatch - so it shares the chunk emitter and the chain budget. It differs
-// only in what it reads: the header's three spare lanes carry this batch's texture size and scroll
-// (AddBatchChunk fills them), FrameConstants::clipScale.w the frame's phase, and the block below
-// the shape of the sine itself.
+// A warped batch is an ordinary DrawVertex batch with BatchWarp::On in its header - same layout,
+// same chunk emitter, same chain budget. What it adds is what the warp block reads: the parameter
+// qword carries this batch's texture size and scroll (AddBatchChunk fills it),
+// FrameConstants::clipScale.w the frame's phase, and the block below the shape of the sine itself.
 
 // ref_gl's r_turbsin amplitude (gl_warp.c, values in warpsin.h): 8*sin(i*2pi/256), halved once at
 // startup by R_Init, so the effective amplitude is 4 texels. Folded into the polynomial terms
@@ -552,7 +552,7 @@ struct alignas(16) ParticleVertex
 static_assert(sizeof(ParticleVertex) == 16, "ParticleVertex must be exactly 1 qword");
 
 // ------------------------------------------------------------------------------------------------
-// Dynamic point lights, must match lit_triangles.vcl
+// Dynamic point lights: BatchColorMode::Computed on a DrawVertex batch
 // ------------------------------------------------------------------------------------------------
 
 // How many lights the microprogram evaluates at once. Four is not arbitrary: the
@@ -571,12 +571,12 @@ constexpr int kLightBlockAddr = 1010;
 // into the GS 0x80.
 constexpr float kLitVertexAlpha = 128.0f;
 
-// The lit program's per-vertex registers. Same three slots as kVertexRegList,
-// but the colour goes through PACKED RGBAQ instead of an A+D write: the lit
-// program *computes* its colour as four floats, and ftoi0 of a float vector
-// lands one byte per word, which is exactly what the PACKED descriptor reads.
-// The A+D route exists for the other programs because their colour arrives as a
-// packed u32 that must be raw-copied; that does not apply here.
+// The per-vertex registers of a batch whose colour is computed - lit, or keyframed.
+// Same three slots as kVertexRegList, but the colour goes through PACKED RGBAQ
+// instead of an A+D write: a computed colour is four floats, and ftoi0 of a float
+// vector lands one byte per word, which is exactly what the PACKED descriptor
+// reads. The A+D route exists for a packed u32 colour, which must be raw-copied;
+// that does not apply here.
 //
 // ST must stay first: PACKED RGBAQ takes Q from the internal register the
 // preceding ST write latches (word 2 of the ST qword carries it).
@@ -598,7 +598,7 @@ struct DynamicLight
 // four lights' X in one quadword, all four Y in the next - so one SIMD lane
 // carries one light and the whole four-light distance calculation is three
 // subtracts and three multiply-accumulates. That transposition is the whole
-// trick; see the header comment in lit_triangles.vcl.
+// trick; see the light sum in textured_triangles.vcl's ClipTransform.
 struct alignas(16) LightConstants
 {
     math::Vec4 posX;

@@ -74,7 +74,7 @@ void Init()
         nextProgramAddr += (program.instructionCount + 1u) & ~1u;
     }
 
-    // The warp program's sine constants. Every value in the block is a compile-time constant, so
+    // The warp block's sine constants. Every value in the block is a compile-time constant, so
     // unlike the light block it goes up once here and is never rewritten - which is why it can be
     // referenced where it lies rather than copied into the buffer first.
     rs::AddVUDataUpload(kWarpConstBlockAddr, &kWarpConstants, sizeof(kWarpConstants) / 16);

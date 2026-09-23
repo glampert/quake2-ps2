@@ -1,7 +1,7 @@
 ;--------------------------------------------------------------------
 ; vu_clip.i
 ;
-; Sutherland-Hodgman clipping on VU1, for the triangle programs.
+; Sutherland-Hodgman clipping on VU1, for textured_triangles.vcl.
 ;
 ; The microprograms used to reject a triangle whole when any corner left
 ; the clip volume, which is why geometry that can cross those planes had
@@ -24,12 +24,12 @@
 ; register. The flag register's six bits per vertex are documented
 ; nowhere in this tree - every existing use is an "any bit set" mask -
 ; and a wrong bit position would mis-render in silence. Clamping the
-; distance and reading the sign of its ftoi4 is the same trick the lerp
-; program's backface cull uses, and openvcl cannot reorder it away
+; distance and reading the sign of its ftoi4 is the same trick the
+; keyframe backface cull uses, and openvcl cannot reorder it away
 ; because the sign travels as data.
 ;
 ; Every macro here is a leaf: vclpp does not re-scan an expanded body,
-; so these are called from a #vuprog body, never from inside DoVertex.
+; so these are called from a #vuprog body, never from inside another macro.
 ; Macros taking label names need one unique set per invocation.
 ;--------------------------------------------------------------------
 
@@ -279,10 +279,12 @@
     lblOut:
 #endmacro
 
-; Guard-band judgement for a vertex the clipper produced. A survivor can
-; still lie outside a plane the clipper does not cut against, so it is
-; judged before it is emitted exactly as an unclipped corner is. Leaves
-; this vertex's flags newest in the clip flag register.
+; Guard-band judgement for a vertex the clipper produced, before it is
+; emitted, exactly as an unclipped corner is judged. What it can still catch
+; is the far plane, which the clipper does not cut against - measured never to
+; be straddled, so in practice this passes every survivor; it stays because a
+; triangle that did cross far would otherwise go out unjudged. Leaves this
+; vertex's flags newest in the clip flag register.
 #macro ClipJudge: vPos
     mul.xyz   fJudge, vPos, fClipScale
     clipw.xyz fJudge, vPos[w]

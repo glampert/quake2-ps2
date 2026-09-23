@@ -1,15 +1,20 @@
 #pragma once
 /* ================================================================================================
  * File: clip.h
- * Brief: Triangle clipping against the clip volume the VU1 microprogram judges.
+ * Brief: Triangle clipping against the clip volume the VU1 microprogram judges, on the EE.
  *
- *  The microprogram does not clip: a triangle with any vertex outside its clip
- *  volume is rejected whole (ADC bit), so geometry that can cross those planes
- *  must be cut here on the EE first. The six planes are the ones the VU judges -
- *  near and far (z is judged exactly) and the four guard-band side planes. The
- *  sides matter just as much as near: a polygon clipped at the near plane right
- *  under the camera lands at tiny w and enormous |x/w|, far outside any band the
- *  GS 12.4 coordinates could hold.
+ *  The microprogram clips for itself now (vu_clip.i), against near and the four
+ *  guard-band sides, and every world and model triangle is cut there. This EE
+ *  clipper remains for sky alone, whose faces are single quads spanning ninety
+ *  degrees - the heaviest possible user of the VU's clipper, which would need
+ *  room reserved for the worst-case fan on every one.
+ *
+ *  It cuts six planes, the ones the VU judges - near and far (z is judged
+ *  exactly) and the four guard-band sides. Far could go: across 606,931 clipped
+ *  triangles in the perf demos it was never once straddled, which is why the VU
+ *  clipper leaves it out. The sides matter just as much as near: a polygon
+ *  clipped at the near plane right under the camera lands at tiny w and enormous
+ *  |x/w|, far outside any band the GS 12.4 coordinates could hold.
  *
  *  Clipping runs in clip space - a vertex is inside while w-z >= 0 (near; also
  *  excludes everything behind the camera), w+z >= 0 (far), and G*w +/- x/y >= 0

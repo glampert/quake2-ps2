@@ -24,9 +24,10 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   entities, MD2 alias models (monsters, items, the view weapon), sprites, the skybox,
   particles, beams, dynamic light flares, translucent surfaces (water/glass/lava), the
   fullscreen damage/powerup blend, and the whole 2D layer (console, HUD, menus, cinematics).
-- **VU1-accelerated rendering.** Vertex transform, guard-band clip judgement and GS packet
-  building all run on VU1 microprograms written in VCL; MD2 keyframe interpolation runs there
-  too. EE-side triangle clipping uses VU0 macro mode for the vector math.
+- **VU1-accelerated rendering.** Vertex transform, triangle clipping, backface culling and
+  GS packet building all run on VU1 microprograms written in VCL, and so do MD2 keyframe
+  interpolation, dynamic lighting, the turbulent water warp and particle billboards. The one
+  EE-side clipper left, for the sky, uses VU0 macro mode for its vector math.
 - **Coloured lightmaps**, including animated light styles and dynamic lights folded in at
   frame time.
 - **Sound.** The stock portable Quake mixer painting into a ring buffer that is streamed to
@@ -329,26 +330,36 @@ barely varies at all.
 
 **VU1 path** ([vu1.h](src/ps2/renderer/vu1.h), [vu1progs/](src/ps2/renderer/vu1progs/)).
 Triangle batches are submitted as VIF1 source chains: frame constants (MVP, GS screen
-mapping, clip scale) unpacked to fixed low VU addresses, then chunks of up to 96 vertices
-unpacked into a double buffer with `MSCAL` to run the microprogram, which transforms,
-judges the clip volume, builds the GS packet in place and `XGKICK`s it over PATH1. `XTOP`
-flips on every kick, so the VIF unpacks the next chunk while VU1 still works on the current
-one. There are two microprograms, written in VCL:
+mapping, clip scale) and a per-draw block (the dynamic lights, or an MD2 draw's lerp
+constants) unpacked to fixed VU addresses, then chunks of up to 90 vertices (60 for MD2)
+unpacked into a double buffer with `MSCAL` to run the microprogram. It transforms, clips,
+builds the GS packet in one of two output windows and `XGKICK`s each window over PATH1 as it
+fills, alternating between them. `XTOP` flips on every `MSCAL`, so the VIF unpacks the next
+chunk while VU1 still works on the current one. There are two microprograms, written in VCL:
 
-- `textured_triangles.vcl` — gouraud-shaded textured triangle lists.
-- `lerped_triangles.vcl` — the same, but positions are interpolated between two
-  byte-quantized MD2 keyframes on the VU, with an optional back-face cull by screen area.
+- `textured_triangles.vcl` — every triangle but the sky's: gouraud-shaded textured triangle
+  lists, with the batch header choosing the per-vertex work. A vertex is either a plain
+  `DrawVertex` or two byte-quantized MD2 keyframes lerped on the VU (with a back-face cull);
+  its colour arrives packed or is computed on the VU, from four dynamic lights or from the
+  model's shade; and turbulent surfaces warp their texture coordinates there too.
+- `particles.vcl` — camera-facing billboards expanded to GS sprites.
 
 Each batch's A+D block programs `TEST`, `ALPHA` and `ZBUF` alongside `TEX0`/`TEX1`, so a
 batch draws with the right z-test, blend equation and depth-write mask regardless of what
 the surrounding 2D packets left behind.
 
-**Clipping** ([clip.h](src/ps2/renderer/clip.h)). The microprogram does not clip — a triangle
-with any vertex outside its guard band is rejected whole via the ADC bit — so geometry that
-can cross those planes is cut on the EE first, against the same six planes the VU judges.
-Because everything a vertex carries is linear under a plane cut, a split is five quadword
-lerps on VU0 rather than scalar float math, and the common whole-triangle-inside case copies
-nothing.
+**Clipping** ([vu_clip.i](src/ps2/renderer/vu1progs/vu_clip.i)). The microprogram clips
+in clip space, Sutherland-Hodgman against the near plane and the four guard-band sides, and
+fans the survivors out as triangles. The guard band is as wide as the GS 12.4 window
+coordinates allow, so only the roughly 2% of triangles that leave it are cut; the GS scissor
+does the on-screen trim. The far plane is judged but not cut, since it was never once
+straddled across the perf demos. The sky is the one thing still cut on the EE
+([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
+
+The VU toolchain fails silently in several ways that only show up on screen, so every VU
+build runs six checks from `src/tools/` over its output: register allocation (by reaching
+definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
+reuse, immediate truncation, and branch reach.
 
 **Frame pass order** ([render_view.cpp](src/ps2/renderer/render_view.cpp)), following
 `ref_gl`'s `R_RenderView`: PVS + frustum culled world surfaces and the skybox, opaque
@@ -544,7 +555,6 @@ against a release ELF you get function names from the symbol table but no file o
 
 - Non-power-of-two wall textures sample incorrectly and need resampling at load time.
 - No texture mipmaps; minification aliasing is visible on distant world geometry.
-- Water/turbulent surface warping is still done on the EE and is a good candidate to move to VU1, as is particle billboard generation.
 - CLUT reloads could be skipped with `CLUT_COMPARE_CBP0`.
 - General performance work — the target is a solid 60 fps "performance mode" in real gameplay.
 

@@ -683,7 +683,7 @@ static float s_warpScrollTexels = 0.0f;
 // than combine, which this asserts.
 //
 // DynamicLights over Modulate is the lit lightmap pass: the modulate scales the framebuffer by the
-// luxel intensity and the D term adds the lit program's colour on top. Cs is exactly that colour,
+// luxel intensity and the D term adds the computed light colour on top. Cs is exactly that colour,
 // because the atlas texel is an alpha-ramp CLUT entry whose RGB sits at the modulate identity
 // (Ct * Cv >> 7 == Cv) with As still the luxel intensity.
 inline gs::BlendMode BlendModeFor(DrawFlags flags)
@@ -823,7 +823,7 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
                               depthOffset, vu1::kVuClipDistScale };
     // .xyz is the constant guard band scale; .w is the turbulent animation phase, which only
-    // the warp program reads. See the note on vu1::kClipScale.
+    // a warped batch reads. See the note on vu1::kClipScale.
     constants->clipScale   = vu1::kClipScale;
     constants->clipScale.w = s_warpPhaseTurns;
     constants->colorClamp  = vu1::kColorClamp;
@@ -875,10 +875,8 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     const bool lit = HasDrawFlag(flags, DrawFlags::DynamicLights);
 
-    // The warp program shares this layout exactly, and only reads the three header lanes the
-    // others leave zeroed: the texel-to-image divide, taken from the texture's size on disk for
-    // the same reason ref_gl's hardcoded 64 works (see DrawAnimatedWaterPolys), and the frame's
-    // SURF_FLOWING drift for the batches that take it.
+    // A warped batch is this same layout with the warp flag set, and reads its parameters from
+    // the qword after the header; see below.
     const bool warped = HasDrawFlag(flags, DrawFlags::Warped);
 
     OpenInlineUnpack(vu1::kBatchHeaderAddr, true);

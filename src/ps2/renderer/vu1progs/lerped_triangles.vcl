@@ -24,44 +24,51 @@
 ; baked - and the EE stopped gathering that stream at all. It is
 ; now the model's own vertexes, referenced where they lie.
 ;
-; VU data memory layout (qwords; must match vu1.cpp):
+; VU data memory layout (qwords; must match vu1.h):
 ;   0-3  MVP matrix rows (row-vector convention; row 3 carries 'move')
 ;   4    GS scale  (2048, 2048, zScale)
 ;   5    GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6    clip-judgement scale (guard band for x/y, 1.0 for z)
 ;   7    colour clamp (255, 255, 255, 255)
 ;   8+   XTOP double buffers (VIF1 BASE/OFFSET)
+;   1010 the draw's lerp constants, in the dynamic light block's place
+;        (vu1::LerpConstants), uploaded once per draw:
+;          +0  frontv: current frame scale * (1 - backlerp), w = 0
+;          +1  backv:  old frame scale * backlerp, w = 0
+;          +2  shadeLight: the entity's light, vertex alpha in .w. Not
+;              in GS units - it carries the 1/128 matching the
+;              quantized shade byte, so light * shade lands back in
+;              the 0-255 the clamp expects
+;          +3  backface cull sign in .x (+1 culls negative screen
+;              areas, -1 culls positive, 0 culls nothing), texture
+;              coordinate scale in .y/.z (the skin's size over its
+;              power-of-two TEX0 extent - applied here so the EE does
+;              not multiply it onto every vertex)
 ;
-; Batch layout at XTOP - fixed offsets sized for the 78-vertex
-; maximum chunk, so short chunks leave gaps rather than move the
-; regions (the EE and this program share compile-time addresses):
-;   +0    header: backface cull sign in .x (+1 culls negative screen
-;         areas, -1 culls positive, 0 culls nothing),
-;         texture coordinate scale in .y/.z (the skin's size over
-;         its power-of-two TEX0 extent - applied here so the EE
-;         does not multiply it onto every vertex), vertex count
-;         in .w. Read both as integers (.x/.w) and as floats
-;         (.y/.z); the lanes never mix in one operation.
-;   +1    frontv: current frame scale * (1 - backlerp), w = 0
-;   +2    backv:  old frame scale * backlerp, w = 0
-;   +3    shadeLight: the entity's light, vertex alpha in .w. Not
-;         in GS units any more - it carries the 1/128 matching the
-;         quantized shade byte, so light * shade lands back in the
-;         0-255 the clamp expects
-;   +4    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
+; Batch layout at XTOP - a world batch's head, and fixed offsets sized
+; for the 72-vertex maximum chunk, so short chunks leave gaps rather
+; than move the regions (the EE and this program share compile-time
+; addresses):
+;   +0    header: vertex count in .w (.x/.y/.z are the colour mode,
+;         warp flag and vertex format, which only matter to a program
+;         that has more than one of each)
+;   +1    parameters: unused
+;   +2    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D,
 ;         prim tag)
-;   +11   positions: 2 qwords per vertex - the current frame's
-;         dtrivertx_t then the old frame's, each unpacked by the
-;         VIF from V4_8 bytes to four *unsigned integers* per qword.
-;         The current frame's 4th lane is its lightnormalindex,
-;         which the EE indexes the shade table with and this program
-;         never reads; the old frame's is the quantized shade term
-;         the EE wrote over it, and is where the colour comes from
-;   +155  attributes: 1 qword per vertex: (unused, s, t, q), handed
-;         to the DMA straight out of the model hunk - .x is the
-;         model's own keyframe index, never a float
-;   +227  output window A: a copy of the 7 tags, then 3 qwords per
-;   +342  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 36 of
+;   +9    vertices, 3 qwords each, interleaved by the VIF as the two
+;         streams unpack:
+;           +0  the current frame's dtrivertx_t, unpacked from V4_8
+;               bytes to four *unsigned integers*. Its 4th lane is
+;               its lightnormalindex, which the EE indexes the shade
+;               table with and this program never reads
+;           +1  the old frame's, the same way. Its 4th lane is the
+;               quantized shade term the EE wrote over it, and is
+;               where the colour comes from
+;           +2  attributes: (unused, s, t, q), handed to the DMA
+;               straight out of the model hunk - .x is the model's
+;               own keyframe index, never a float
+;   +225  output window A: a copy of the 7 tags, then 3 qwords per
+;   +340  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 36 of
 ;         them. Filled, tagged with the count actually written and
 ;         kicked in turn, so a full 72-vertex chunk is two kicks
 ;
@@ -77,25 +84,25 @@
 
 ; Batch offsets, relative to XTOP:
 #define kBatchHeader 0
-#define kFrontV      1
-#define kBackV       2
-#define kShadeLight  3
-#define kGifTags     4
-#define kPositions   11
-#define kAttributes  155
+#define kGifTags     2
+#define kVertexData  9
+
+; The draw's lerp constants, above the double buffers. Must match
+; vu1::kLerpBlockAddr and the field order of vu1::LerpConstants.
+#define kLerpBlock   1010
 
 ; The two output windows: where they start, how far apart they are, how
 ; many vertices each holds, and where the drawing tag sits inside one.
 ; Must match the kLerp*Window* constants in vu1.h.
-#define kWindowA       227
-#define kWindowB       342
+#define kWindowA       225
+#define kWindowB       340
 #define kWindowQwords  115
 #define kWindowVerts   36
 #define kWindowPrimTag 6
 
-; Transforms one vertex: two position qwords at offCur/offOld from
-; iPosPtr (integer byte lanes of the two keyframes) and one attribute
-; qword at offStq from iAttrPtr become the ST, RGBAQ (PACKED) and
+; Transforms one vertex: the three qwords at offCur/offOld/offStq from
+; iInPtr (integer byte lanes of the two keyframes, then the attribute
+; qword) become the ST, RGBAQ (PACKED) and
 ; XYZ2 output qwords at offST/offRGBA/offXyz from iOutPtr. Leaves this
 ; vertex's clipw flags as the newest entry in the clip flag register;
 ; the caller judges whole triangles with fcand after 3 calls and
@@ -107,15 +114,14 @@
 ; The position integers must not reach an FMAC before itof0 - they
 ; look like denormals and would flush to zero.
 ;
-; C-like pseudo-code ('pos'/'attr'/'out' are the qword arrays at
-; iPosPtr/iAttrPtr/iOutPtr):
+; C-like pseudo-code ('in'/'out' are the qword arrays at iInPtr/iOutPtr):
 ;
 ;   void DoVertex(int offCur, int offOld, int offStq,
 ;                 int offST, int offRGBA, int offXyz)
 ;   {
-;       ivec4 curI = pos[offCur];  // (x, y, z, normalindex) ints, 0-255
-;       ivec4 oldI = pos[offOld];
-;       vec4  stq  = attr[offStq]; // (unused, s, t, q)
+;       ivec4 curI = in[offCur];  // (x, y, z, normalindex) ints, 0-255
+;       ivec4 oldI = in[offOld];
+;       vec4  stq  = in[offStq];  // (unused, s, t, q)
 ;
 ;       vec4 cur = itof(curI);
 ;       vec4 old = itof(oldI);
@@ -168,9 +174,9 @@
 ;   }
 #macro DoVertex: offCur, offOld, offStq, offST, offRGBA, offXyz, dstScreen
 
-    lq fCurI, offCur(iPosPtr)
-    lq fOldI, offOld(iPosPtr)
-    lq fStq,  offStq(iAttrPtr)
+    lq fCurI, offCur(iInPtr)
+    lq fOldI, offOld(iInPtr)
+    lq fStq,  offStq(iInPtr)
 
     ; Byte lanes to floats (raw integers until here - no FMAC before this):
     itof0 fCur, fCurI
@@ -257,15 +263,16 @@
 ;       vec4 clipScale  = vuMem[6];
 ;       vec4 colorClamp = vuMem[7];
 ;
+;       // The draw's constants, in the per-draw block:
+;       vec4  frontv     = vuMem[kLerpBlock + 0];
+;       vec4  backv      = vuMem[kLerpBlock + 1];
+;       vec4  shadeLight = vuMem[kLerpBlock + 2];
+;       float cullSign   = vuMem[kLerpBlock + 3].x;
+;
 ;       // This batch, in the current double buffer:
 ;       qword* batch    = &vuMem[XTOP];
 ;       int    numVerts = batch[kBatchHeader].w;
-;       float  cullSign = batch[kBatchHeader].x;
-;       vec4   frontv     = batch[kFrontV];
-;       vec4   backv      = batch[kBackV];
-;       vec4   shadeLight = batch[kShadeLight];
-;       qword* pos        = &batch[kPositions];  // 2 qwords per vertex
-;       qword* attr       = &batch[kAttributes]; // 1 qword per vertex
+;       qword* in       = &batch[kVertexData]; // 3 qwords per vertex
 ;
 ;       // Output goes to a window, opened by copying the 7 GIF tag
 ;       // qwords the EE prepared to its head:
@@ -290,9 +297,9 @@
 ;           }
 ;
 ;           vec3 scr0, scr1, scr2; // float screen positions
-;           DoVertex(0, 1,  0,  0, 1, 2,  scr0); // pos[0..1], attr[0] -> out[0..2]
-;           DoVertex(2, 3,  1,  3, 4, 5,  scr1); // pos[2..3], attr[1] -> out[3..5]
-;           DoVertex(4, 5,  2,  6, 7, 8,  scr2); // pos[4..5], attr[2] -> out[6..8]
+;           DoVertex(0, 1, 2,  0, 1, 2,  scr0); // in[0..2] -> out[0..2]
+;           DoVertex(3, 4, 5,  3, 4, 5,  scr1); // in[3..5] -> out[3..5]
+;           DoVertex(6, 7, 8,  6, 7, 8,  scr2); // in[6..8] -> out[6..8]
 ;
 ;           // Whole-triangle guard band reject: if any of the 18 clip
 ;           // flags of the 3 vertices above is set, adc becomes 0x8000,
@@ -322,8 +329,7 @@
 ;           out[5].w = adc;
 ;           out[8].w = adc;
 ;
-;           pos  += 6;
-;           attr += 3;
+;           in   += 9;
 ;           out  += 9;
 ;           vertsLeft -= 3;
 ;           numVerts  -= 3;
@@ -339,25 +345,24 @@
     LoadFrameConstants{ }
     lq fColorClamp, 7(vi00)
 
-    ; Current double buffer, this batch's counts and lerp constants:
-    xtop   iBase
-    ilw.w  iNumVerts,   kBatchHeader(iBase)
-    lq     fFrontV,     kFrontV(iBase)
-    lq     fBackV,      kBackV(iBase)
-    lq     fShadeLight, kShadeLight(iBase)
+    ; The draw's lerp constants, sent up once with the draw rather than with
+    ; every batch. The last qword carries the backface cull sign in .x and the
+    ; ST scale in .y/.z; its .w is never computed.
+    lq fFrontV,     kLerpBlock + 0(vi00)
+    lq fBackV,      kLerpBlock + 1(vi00)
+    lq fShadeLight, kLerpBlock + 2(vi00)
+    lq fStScale,    kLerpBlock + 3(vi00)
 
-    ; The same header qword as a vector: the ST scale in .y/.z and the
-    ; backface cull sign in .x. A raw load, so .w keeps the integer bit
-    ; pattern read above - it is only ever used through masks that never
-    ; compute that lane.
-    lq     fStScale,  kBatchHeader(iBase)
+    ; Current double buffer and this batch's count:
+    xtop   iBase
+    ilw.w  iNumVerts, kBatchHeader(iBase)
 
     ; -1.0 for the area clamp below (vf00.w is the +1).
     sub.x  fMinusOne, vf00, vf00[w]
 
-    ; The input regions, all at fixed offsets:
-    iaddiu iPosPtr,  iBase, kPositions
-    iaddiu iAttrPtr, iBase, kAttributes
+    ; The vertices: both keyframes and the attribute qword, interleaved, so
+    ; one pointer walks all three.
+    iaddiu iInPtr, iBase, kVertexData
 
     ; The first output window, the step that alternates to the other one,
     ; and where this batch's GIF tags are - all parked in VU memory rather
@@ -380,9 +385,9 @@
 
         lWindowHasRoom:
 
-        DoVertex{ 0, 1, 0, 0, 1, 2, fScr0 }
-        DoVertex{ 2, 3, 1, 3, 4, 5, fScr1 }
-        DoVertex{ 4, 5, 2, 6, 7, 8, fScr2 }
+        DoVertex{ 0, 1, 2, 0, 1, 2, fScr0 }
+        DoVertex{ 3, 4, 5, 3, 4, 5, fScr1 }
+        DoVertex{ 6, 7, 8, 6, 7, 8, fScr2 }
 
         ; Judge the whole triangle from the last 3 clipw results: if any
         ; vertex left the guard band, 0x7FFF + flags reaches bit 15 (the
@@ -421,8 +426,7 @@
         isw.w  iADC, 5(iOutPtr)
         isw.w  iADC, 8(iOutPtr)
 
-        iaddiu iPosPtr,    iPosPtr,     6
-        iaddiu iAttrPtr,   iAttrPtr,    3
+        iaddiu iInPtr,     iInPtr,      9
         iaddiu iOutPtr,    iOutPtr,     9
         iaddi  iVertsLeft, iVertsLeft, -3
         iaddi  iNumVerts,  iNumVerts,  -3

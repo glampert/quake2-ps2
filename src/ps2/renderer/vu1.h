@@ -72,7 +72,7 @@ void Init();
 //      0-7       the frame constants below
 //      8-955     the two XTOP double buffers (VIF1 BASE=8, OFFSET=474)
 //      956-1009  the clipper's ping-pong scratch
-//      1010-1021 the dynamic light block
+//      1010-1021 the per-draw block: the dynamic lights, or a lerp draw's constants
 //      1022-1023 the turbulent surface constants
 //
 // The regions tile the address space exactly - see the static_asserts below. Anything new has to
@@ -141,13 +141,15 @@ constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy lo
 
 // Batch header .x: where a vertex's colour comes from.
 //
-// This and BatchWarp below are separate fields rather than one mode enum so the microprogram can
-// test each with a bare compare against zero - no scratch register, no arithmetic. They are
-// independent in principle; no caller currently sets both.
+// This, BatchWarp and BatchVertexFormat below are separate fields rather than one mode enum so the
+// microprogram can test each with a bare compare against zero - no scratch register, no
+// arithmetic. They are independent in principle; no caller currently sets two.
 enum class BatchColorMode : u32
 {
     PackedU32 = 0, // A+D write to RGBAQ, straight out of the vertex - world diffuse, sprites, beams
-    DynamicLights, // four point lights summed on the VU, emitted as PACKED RGBAQ - the lightmap pass
+    Computed,      // computed on the VU and emitted as PACKED RGBAQ. What computes it follows the
+                   // vertex format: the four point lights for a DrawVertex (the lightmap pass), the
+                   // entity's light times the shade term for a keyframe (MD2 models)
 };
 
 // Batch header .y: whether the texture coordinates animate.
@@ -159,6 +161,13 @@ enum class BatchWarp : u32
 {
     Off = 0,
     On,            // reads the parameters at kBatchParamsAddr
+};
+
+// Batch header .z: what one input vertex is. See the keyframe layout further down.
+enum class BatchVertexFormat : u32
+{
+    DrawVertex = 0, // 2 qwords, a vu1::DrawVertex
+    Keyframes,      // 3 qwords: two keyframes' bytes and the model's attribute qword
 };
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
@@ -410,38 +419,59 @@ constexpr WarpConstants kWarpConstants = {
 // Keyframe-lerped triangles (MD2 alias models), must match lerped_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
-// Vertices one lerped VU run carries: the 3-qword-per-vertex batch (2 position qwords + 1
-// attribute) fits fewer than the world path's 93. Whole triangles, and even - so every full
-// chunk's slice of the 8-byte position stream is whole source qwords starting 16-byte aligned,
-// which together make it a multiple of six.
+// Vertices one lerped VU run carries: three qwords each against the world path's two, so fewer
+// fit. Whole triangles, and even - so every full chunk's slice of the 8-byte position stream is
+// whole source qwords starting 16-byte aligned, which together make it a multiple of six.
 constexpr int kMaxLerpVertsPerBatch = 72;
 
-// Fixed offsets sized for the maximum chunk (short chunks leave gaps), so the microprogram
-// addresses them with immediates.
-constexpr int kLerpBatchHeaderAddr = 0; // vertex count in .w
-constexpr int kLerpFrontVAddr      = 1; // current frame scale * (1 - backlerp)
-constexpr int kLerpBackVAddr       = 2; // old frame scale * backlerp
-constexpr int kLerpShadeLightAddr  = 3; // entity light in GS units, vertex alpha in .w
-constexpr int kLerpGifTagsAddr     = 4; // the same 7-qword block as the world path
-constexpr int kLerpPositionsAddr   = kLerpGifTagsAddr + kNumGifTagQwords;              // 2 qwords per vertex
-constexpr int kLerpAttribsAddr     = kLerpPositionsAddr + (2 * kMaxLerpVertsPerBatch); // 1 qword per vertex
-constexpr int kLerpOutputAddr      = kLerpAttribsAddr + kMaxLerpVertsPerBatch;         // window A
+// A lerp batch opens exactly as a world batch does - header (BatchVertexFormat::Keyframes in .z),
+// parameter qword, GIF tags - and its vertices start at the same kVertexDataAddr. What differs is
+// the vertex, three qwords:
+//
+//   +0  the current keyframe's dtrivertx_t, widened by the VIF to four unsigned integers
+//   +1  the old keyframe's, its 4th byte the quantized shade term (see LerpVertexBytes)
+//   +2  the model's own attribute qword (LerpDrawAttrib), referenced where it lies
+//
+// The two streams arrive separately - positions gathered into the chain, attributes straight out
+// of the model hunk - and the VIF interleaves them as it unpacks: a STCYCL write cycle shorter than
+// its cycle length writes that many qwords and then skips the rest. Every unpack carries a STCYCL
+// anyway, so the interleave is free, and the microprogram walks one pointer rather than two.
+constexpr int kLerpVertexQwords = 3;
+constexpr int kLerpCurOffset    = 0;
+constexpr int kLerpOldOffset    = 1;
+constexpr int kLerpAttribOffset = 2;
+static_assert(kLerpOldOffset == kLerpCurOffset + 1, "One position unpack writes cur then old, back to back");
 
-// The lerp path's own pair of output windows, working exactly as the world path's above: a full
-// chunk is two kicks. The capacity is lower only because the input regions ahead of them are
-// bigger - two position qwords and an attribute qword per vertex, against the world's two.
+// The lerp path's own pair of output windows, straight after the input, working exactly as the
+// world path's above: a full chunk is two kicks.
 constexpr int kLerpMaxVertsPerWindow  = 36;
 constexpr int kLerpOutputWindowQwords = kNumGifTagQwords + (3 * kLerpMaxVertsPerWindow);
-constexpr int kLerpWindowAAddr        = kLerpOutputAddr;
+constexpr int kLerpWindowAAddr        = kVertexDataAddr + (kLerpVertexQwords * kMaxLerpVertsPerBatch);
 constexpr int kLerpWindowBAddr        = kLerpWindowAAddr + kLerpOutputWindowQwords;
 
-static_assert(kLerpFrontVAddr == 1 && kLerpBackVAddr == 2 && kLerpShadeLightAddr == 3 && kLerpPositionsAddr == 11 && kLerpAttribsAddr == 155 && kLerpOutputAddr == 227, "Batch layout must match the #defines in lerped_triangles.vcl");
-static_assert(kLerpWindowAAddr == 227 && kLerpWindowBAddr == 342 && kLerpOutputWindowQwords == 115, "Window layout must match the #defines in lerped_triangles.vcl");
+static_assert(kLerpWindowAAddr == 225 && kLerpWindowBAddr == 340 && kLerpOutputWindowQwords == 115, "Window layout must match the #defines in lerped_triangles.vcl");
 static_assert(kLerpWindowBAddr + kLerpOutputWindowQwords <= kDoubleBufferOffset, "Lerp batch input + both output windows must fit one double-buffer half");
 static_assert((kLerpMaxVertsPerWindow % 3) == 0, "A window holds whole triangles");
 static_assert(kMaxLerpVertsPerBatch == 2 * kLerpMaxVertsPerWindow, "A full lerp chunk should be exactly two kicks");
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
+
+// A lerp draw's per-entity constants. Every one of them holds for the whole draw - one entity,
+// one pose, one skin - so they go up once with the draw's opening (see rs::BeginDrawChain) rather
+// than in every chunk's header, which is also what lets a lerp batch share the world's layout.
+//
+// They take the dynamic light block's place, at the same address. A lerp draw never reads the
+// lights, and every draw uploads one block or the other, so the two never need to coexist.
+constexpr int kLerpBlockAddr = 1010;
+
+struct alignas(16) LerpConstants
+{
+    math::Vec4 frontv;      // current frame scale * (1 - backlerp); .w 0, which rides through the lerp
+    math::Vec4 backv;       // old frame scale * backlerp; .w 0
+    math::Vec4 shadeLight;  // the entity's light over 128 (it meets a quantized shade), alpha in .w
+    math::Vec4 cullStScale; // .x the backface cull sign (rs::CullSignFor), .yz the skin's ST scale
+};
+static_assert(sizeof(LerpConstants) == 4 * 16, "Must match the VU memory layout");
 
 // The two keyframes' quantized positions of one vertex, interleaved: the current frame's
 // dtrivertx_t bytes then the old frame's, copied verbatim from the MD2 frame data (the VIF widens
@@ -587,5 +617,7 @@ struct alignas(16) LightConstants
 };
 static_assert(sizeof(LightConstants) == 12 * 16, "Must match the VU memory layout");
 static_assert(kLightBlockAddr + 12 == kWarpConstBlockAddr, "Light block must sit between the clip scratch and the warp constants");
+static_assert(kLerpBlockAddr == kLightBlockAddr && sizeof(LerpConstants) <= sizeof(LightConstants),
+              "A lerp draw's constants take the light block's place, and must fit in it");
 
 } // namespace ps2::vu1

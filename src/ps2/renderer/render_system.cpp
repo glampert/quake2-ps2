@@ -126,16 +126,23 @@ Q_ALWAYS_INLINE void AddStartProgram(const vu1::ProgramAddr prog)
 // The transfer must hold exactly the payload the unpack consumes - a V4_8 element eats one source
 // word, so numElements must be 4 * srcQwords. Spare words decode as VIFcodes, and a short transfer
 // stalls the VIF waiting for payload that never comes.
+//
+// 'writeLen'/'cycleLen' are STCYCL's WL and CL. Equal, the elements land in consecutive qwords;
+// WL < CL writes WL of them and then skips CL - WL qwords, which is how a lerp chunk's two streams
+// interleave into one vertex (see AddLerpBatchChunk). NUM counts only what is written in that
+// mode, so 'numElements' means the same either way.
 void AddUnpackDataFmt(const u32 vuAddr, const void * data, const u32 srcQwords,
-                      const u32 numElements, const enum UnpackMode format, const bool useTop)
+                      const u32 numElements, const enum UnpackMode format, const bool useTop,
+                      const u32 writeLen = 1, const u32 cycleLen = 1)
 {
     PS2_AssertMsg(numElements <= 256, "VIF unpacks are limited to 256 elements!");
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(data) & 15u) == 0,
                   "Unpack data must be 16-byte aligned!");
+    PS2_AssertMsg(writeLen > 0 && writeLen <= cycleLen, "Filling write is not supported here!");
 
     packet2_t * const pkt = Packet();
     packet2_chain_ref(pkt, data, srcQwords, 0, 0, 0);
-    packet2_vif_stcycl(pkt, 1, 1, 0);
+    packet2_vif_stcycl(pkt, writeLen, cycleLen, 0);
     packet2_vif_open_unpack(pkt, format, vuAddr, useTop, /*masked=*/0, /*usigned=*/1, 0);
     packet2_vif_close_unpack_manual(pkt, numElements);
 }
@@ -776,9 +783,12 @@ void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
              packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList);
 }
 
-// Builds the draw's transform and light blocks into the buffer and unpacks them to the fixed low
-// VU addresses. kDrawSetupQwords is exactly what this appends; ReserveChunk has reserved it.
-void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
+// Builds the draw's transform and per-draw blocks into the buffer and unpacks them to their fixed
+// VU addresses. kDrawSetupQwords is at least what this appends; ReserveChunk has reserved it.
+//
+// The per-draw block is the frame's dynamic lights, or 'lerp' for a lerp draw, which reads its
+// constants from the same address and never reads the lights (see vu1::kLerpBlockAddr).
+void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpConstants * lerp)
 {
     // One flags value per draw, so the depth range is a property of the whole chain.
     float depthScale, depthOffset;
@@ -786,11 +796,15 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
 
     constexpr int kFrameConstantsQwords = sizeof(vu1::FrameConstants) / 16;
     constexpr int kLightConstantsQwords = sizeof(vu1::LightConstants) / 16;
+    constexpr int kLerpConstantsQwords  = sizeof(vu1::LerpConstants) / 16;
     // Each block costs what cmdbuf::CalcAllocCost says - its payload plus the skip tag - and the
-    // REF tag that sends it, and the FLUSH below is the one qword on top.
+    // REF tag that sends it, and the FLUSH below is the one qword on top. Sized for the lights,
+    // the larger of the two per-draw blocks.
     static_assert(kDrawSetupQwords == 1 + cmdbuf::CalcAllocCost<vu1::FrameConstants>(1)
                                         + cmdbuf::CalcAllocCost<vu1::LightConstants>(1) + 2,
                   "kDrawSetupQwords must match what BeginDrawChain appends");
+    static_assert(cmdbuf::CalcAllocCost<vu1::LerpConstants>(1) <= cmdbuf::CalcAllocCost<vu1::LightConstants>(1),
+                  "The lerp block must cost no more than the light block it stands in for");
 
     // Both unpacks below write absolute VU addresses, which the double buffer does not
     // protect, and the previous draw's last chunk is very likely still running: wait for it.
@@ -816,12 +830,23 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
 
     AddUnpackData(vu1::kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
 
-    // s_lightConstants is the source of truth; the buffer gets a copy, for the same lifetime
-    // reason as the transform block.
-    vu1::LightConstants * const lights = cmdbuf::Alloc<vu1::LightConstants>(1);
-    *lights = s_lightConstants;
+    if (lerp != nullptr)
+    {
+        // A copy in the buffer, like everything else here: the caller's is a local.
+        vu1::LerpConstants * const block = cmdbuf::Alloc<vu1::LerpConstants>(1);
+        *block = *lerp;
 
-    AddUnpackData(vu1::kLightBlockAddr, lights, kLightConstantsQwords, false);
+        AddUnpackData(vu1::kLerpBlockAddr, block, kLerpConstantsQwords, false);
+    }
+    else
+    {
+        // s_lightConstants is the source of truth; the buffer gets a copy, for the same lifetime
+        // reason as the transform block.
+        vu1::LightConstants * const lights = cmdbuf::Alloc<vu1::LightConstants>(1);
+        *lights = s_lightConstants;
+
+        AddUnpackData(vu1::kLightBlockAddr, lights, kLightConstantsQwords, false);
+    }
 }
 
 // Makes room for one chunk and (re)opens the draw's chain when it has to - the bookkeeping all
@@ -830,12 +855,13 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags)
 // The constants are reserved with every chunk rather than once because a reservation that
 // overflows rewinds the buffer, taking them with it; the next chunk would then transform against
 // whatever the previous draw left in VU memory. 'firstChunk' emits them at the top of a call.
-void ReserveChunk(const int chunkQwords, const math::Mat4 & mvp,
-                  const DrawFlags flags, const bool firstChunk)
+// 'lerp' is a lerp draw's per-draw block, and null for everything else; see BeginDrawChain.
+void ReserveChunk(const int chunkQwords, const math::Mat4 & mvp, const DrawFlags flags,
+                  const bool firstChunk, const vu1::LerpConstants * lerp = nullptr)
 {
     if (cmdbuf::Reserve(kDrawSetupQwords + chunkQwords) || firstChunk)
     {
-        BeginDrawChain(mvp, flags);
+        BeginDrawChain(mvp, flags, lerp);
     }
 }
 
@@ -857,13 +883,12 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
     {
-        // Header: what the microprogram should do per vertex. The two mode fields are separate
-        // lanes so it can test each against zero directly. .z is spare - the lerp path's hook
-        // for when it merges in.
-        AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::DynamicLights
+        // Header: what the microprogram should do per vertex. The mode fields are separate lanes
+        // so it can test each against zero directly.
+        AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::Computed
                                     : vu1::BatchColorMode::PackedU32));
         AddU32(static_cast<u32>(warped ? vu1::BatchWarp::On : vu1::BatchWarp::Off));
-        AddU32(0);
+        AddU32(static_cast<u32>(vu1::BatchVertexFormat::DrawVertex));
         AddU32(static_cast<u32>(vertCount));
 
         // Parameters for whatever that asked for. The warp wants the texel-to-image divide -
@@ -893,61 +918,54 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
 }
 
-// The lerped equivalent: header (count + the two lerp scale vectors) and GIF tags inline, then the
-// two vertex streams, then the MSCAL. The byte-position DMA must be whole source qwords, so an odd
-// count transfers one pad vertex the VU never reads.
+// The lerped equivalent: the same head as a world batch, then the two vertex streams interleaved
+// into the input as they unpack, then the MSCAL. Everything per-entity - the pose scales, the
+// light, the cull sign - went up once with the draw (vu1::LerpConstants), so the header carries
+// only what the batch is. The byte-position DMA must be whole source qwords, so an odd count
+// transfers one pad vertex the VU never reads.
 void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
-                       const math::Vec3 & frontv, const math::Vec3 & backv,
-                       const math::Vec4 & shadeLight, float stScaleS, float stScaleT,
                        const vu1::LerpPosChunk & posChunk, const vu1::LerpDrawAttrib * attribs,
-                       int vertCount,
-                       FaceCull faceCull, DrawFlags flags)
+                       int vertCount, DrawFlags flags)
 {
     PS2_Assert(vertCount > 0 && vertCount <= vu1::kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
     EnsureSpace(kLerpChunkChainQwords);
 
-    OpenInlineUnpack(vu1::kLerpBatchHeaderAddr, true);
+    OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
     {
-        AddFloat(CullSignFor(faceCull)); // backface cull sign in .x
-        // The skin's size over its power-of-two TEX0 extent, multiplied onto every vertex's ST
-        // by the microprogram: the VU has the multiply slot free and the EE does not.
-        AddFloat(stScaleS); // .y
-        AddFloat(stScaleT); // .z
+        // The colour is computed, from the shade term; no warp; keyframe vertices.
+        AddU32(static_cast<u32>(vu1::BatchColorMode::Computed));
+        AddU32(static_cast<u32>(vu1::BatchWarp::Off));
+        AddU32(static_cast<u32>(vu1::BatchVertexFormat::Keyframes));
         AddU32(static_cast<u32>(vertCount));
 
-        AddFloat(frontv.x);
-        AddFloat(frontv.y);
-        AddFloat(frontv.z);
-        AddFloat(0.0f); // .w rides through the lerp; keep it finite
-
-        AddFloat(backv.x);
-        AddFloat(backv.y);
-        AddFloat(backv.z);
-        AddFloat(0.0f);
-
-        // The entity's light, multiplied by each vertex's shade term on the VU. The shade
-        // arrives quantized (shade * 128), so .xyz carry the light pre-divided by 128 - see
-        // VertexShadeLight.
-        AddFloat(shadeLight.x);
-        AddFloat(shadeLight.y);
-        AddFloat(shadeLight.z);
-        AddFloat(shadeLight.w); // vertex alpha, GS units
+        // No per-batch parameters. The qword is still sent, so the tags land where a world
+        // batch's do and one open inline unpack covers the lot.
+        AddU32(0);
+        AddU32(0);
+        AddU32(0);
+        AddU32(0);
 
         AddBatchGifTags(texture, drawCtx, flags, /*packedRgbaOut=*/true);
     }
     CloseInlineUnpack();
 
-    // The keyframe bytes: V4_8 elements, one source word and two destination qwords per vertex,
-    // padded to an even count so the transfer is whole qwords.
+    // The keyframe bytes: V4_8 elements, one source word and so one destination qword each, cur
+    // then old, padded to an even count so the transfer is whole qwords. Two written, one skipped:
+    // the skipped qword is where the attribute lands below. The pad vertex, when there is one,
+    // lands in the slot after the last vertex, which a short chunk never reads.
     const int srcVerts = vertCount + (vertCount & 1);
-    AddUnpackDataFmt(vu1::kLerpPositionsAddr, posChunk.pos,
+    AddUnpackDataFmt(vu1::kVertexDataAddr + vu1::kLerpCurOffset, posChunk.pos,
                      static_cast<u32>(srcVerts / 2), // qwords: 8 bytes per vertex
                      static_cast<u32>(srcVerts * 2), // elements: 2 per vertex
-                     P2_UNPACK_V4_8, true);
+                     P2_UNPACK_V4_8, true,
+                     /*writeLen=*/2, /*cycleLen=*/vu1::kLerpVertexQwords);
 
     // Referenced in the model hunk rather than copied into the buffer: one REF tag either way,
-    // and nothing rewrites a model mid-frame.
-    AddUnpackData(vu1::kLerpAttribsAddr, attribs, static_cast<u32>(vertCount), true);
+    // and nothing rewrites a model mid-frame. One written, two skipped - the positions' slots.
+    AddUnpackDataFmt(vu1::kVertexDataAddr + vu1::kLerpAttribOffset, attribs,
+                     static_cast<u32>(vertCount), static_cast<u32>(vertCount),
+                     P2_UNPACK_V4_32, true,
+                     /*writeLen=*/1, /*cycleLen=*/vu1::kLerpVertexQwords);
 
     AddStartProgram(vu1::ProgramAddress(vu1::Program::Lerped));
 }
@@ -1045,18 +1063,28 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     float stScaleS, stScaleT;
     tex::StScaleFor(texture, &stScaleS, &stScaleT);
 
+    // The draw's per-entity block, which BeginDrawChain sends up in place of the lights. The ST
+    // scale is the skin's size over its power-of-two TEX0 extent, multiplied onto every vertex by
+    // the microprogram: the VU has the multiply slot free and the EE does not. The light arrives
+    // pre-divided by 128, to meet the quantized shade term - see VertexShadeLight.
+    const vu1::LerpConstants lerp = {
+        { frontv.x, frontv.y, frontv.z, 0.0f },
+        { backv.x,  backv.y,  backv.z,  0.0f },
+        shadeLight,
+        { CullSignFor(faceCull), stScaleS, stScaleT, 1.0f }
+    };
+
     // Chunking as in DrawTriangles. The positions are already grouped one LerpPosChunk per VU
     // run, and the attributes slice at the same boundary because the caller gathered them in
     // order. Only a final odd chunk pads its position transfer.
     for (int firstVert = 0, c = 0; firstVert < vertCount; firstVert += vu1::kMaxLerpVertsPerBatch, ++c)
     {
-        ReserveChunk(kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0);
+        ReserveChunk(kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0, &lerp);
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < vu1::kMaxLerpVertsPerBatch) ? remaining : vu1::kMaxLerpVertsPerBatch;
 
-        AddLerpBatchChunk(texture, s_drawCtx, frontv, backv, shadeLight, stScaleS, stScaleT,
-                          posChunks[c], attribs + firstVert, chunkVerts, faceCull, flags);
+        AddLerpBatchChunk(texture, s_drawCtx, posChunks[c], attribs + firstVert, chunkVerts, flags);
     }
 }
 

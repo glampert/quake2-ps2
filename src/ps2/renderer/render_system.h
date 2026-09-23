@@ -274,9 +274,10 @@ void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp
 // Nothing outside this module reserves anything - the streams and the particle path do it for
 // themselves. It is in the header only because the stream constructors size their claim from it.
 
-// Chain qwords one chunk appends. 11 in practice for the world path (inline header/GIF tags,
-// vertex REF unpack, FLUSH + MSCAL), 15 lerped, 14 particles; declared with room to spare, since
-// over-declaring only reserves a little more of the buffer than a chunk needs.
+// Chain qwords one chunk appends. 12 in practice for the world path (inline header/parameters/GIF
+// tags, vertex REF unpack, FLUSH + MSCAL), 13 lerped (two REF unpacks), 14 particles; declared
+// with room to spare, since over-declaring only reserves a little more of the buffer than a chunk
+// needs.
 constexpr int kChunkChainQwords     = 17;
 constexpr int kLerpChunkChainQwords = 22;
 constexpr int kParticleChunkQwords  = 22;
@@ -699,7 +700,7 @@ public:
     }
 
     // The keyframe interpolation the contents draw under: the two frame scales and the entity's
-    // light (vertex alpha in .w). See vu1::kLerpFrontVAddr. No equality test - these change per
+    // light (vertex alpha in .w). See vu1::LerpConstants. No equality test - these change per
     // entity, and comparing seven floats costs more than the flush it would save.
     void SetLerpParams(const math::Vec3 & frontv, const math::Vec3 & backv, const math::Vec4 & shadeLight)
     {

@@ -24,7 +24,6 @@ struct DrawStats
     int surfaces;       // Opaque world surfaces drawn.
     int surfacesAlpha;  // Translucent surfaces deferred to the final alpha pass.
     int surfacesTurb;   // Turbulent/flowing animated surfaces drawn.
-    int surfsUnclipped; // World surface gathers that skipped the clipper, counted once per pass.
     int skyFaces;       // Skybox cube faces submitted (0-6).
     int boxesCulled;    // Whole meshes culled via bounding box checks.
     int entities;       // Entity models drawn (after frustum culling).

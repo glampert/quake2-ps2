@@ -183,27 +183,12 @@ struct ModelSurface
     SurfaceFlags flags; // u8-backed; see the enum.
     u8 styles[kMaxLightmaps];
 
-    // Memo of the clip-volume test below, because the two world passes walk
-    // different chains (textureChain and lightmapChain) and so cannot see each
-    // other's answer - without it every visible surface is judged against six
-    // planes twice a frame. Mutable for the same reason ModelNode::visFrame is:
-    // the draw passes hold the surface by const pointer. The bool sits here to
-    // land in the byte of padding that followed styles[].
-    mutable bool clipVolumeInside;
 
     ModelPoly * polys; // multiple if warped.
     const ModelSurface * textureChain;
     const ModelSurface * lightmapChain; // next surface sharing this one's lightmap atlas.
     ModelTexInfo * texInfo;
 
-    // World-space bounding sphere over every vertex of every polygon, computed
-    // once at load - world geometry never moves. Lets the world passes prove a
-    // whole surface sits inside the VU1 clip volume and skip the per-triangle
-    // clip judgement for all of its triangles at once; see
-    // view::SurfaceInsideClipVolume. Costs 16 bytes on a struct there are over
-    // 11,000 of, which the judgement it skips pays back many times over.
-    Vec3  boundsCenter;
-    float boundsRadius;
 
     // dynamic lighting info:
     int dlightFrame;
@@ -212,8 +197,6 @@ struct ModelSurface
     float cachedLight[kMaxLightmaps]; // values currently used in lightmap.
     u8 * samples; // [numstyles * surfsize]
 
-    // s_frameCount when clipVolumeInside above was last computed.
-    mutable int clipVolumeFrame;
 
     // Frame whose dynamic-light contribution is currently baked into this
     // surface's block of the atlas. Non-zero means the atlas holds dlit luxels
@@ -225,7 +208,7 @@ struct ModelSurface
 // include this header (it is a host build, 64-bit pointers). Asserted here so a
 // layout change breaks the build rather than silently invalidating the world
 // arena reservation.
-static_assert(sizeof(ModelSurface) == 96, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
+static_assert(sizeof(ModelSurface) == 76, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
 
 //
 // BSP world node.

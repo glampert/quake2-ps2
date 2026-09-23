@@ -70,7 +70,6 @@ static const cvar_t * s_skipParticles     = nullptr;
 static const cvar_t * s_forceNullModels   = nullptr;
 static const cvar_t * s_skipWeaponModel   = nullptr;
 static const cvar_t * s_dynamicLightmaps  = nullptr;
-static const cvar_t * s_vuClip            = nullptr;
 static const cvar_t * s_dlightScale       = nullptr;
 static const cvar_t * s_lightmaps         = nullptr;
 static const cvar_t * s_lightmapOnly      = nullptr;
@@ -118,21 +117,6 @@ static cplane_t s_frustum[4] = {};
 // The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
 static math::Mat4 s_frustumMatrix = {};
 
-// The six half-spaces the VU1 microprogram judges vertices against, expressed as
-// world-space planes. Each of the microprogram's tests - w-z, w+z, G*w+-x,
-// G*w+-y - is a linear function of the world position, so each is a plane; the
-// coefficients fall straight out of the view-projection's columns. See
-// SetUpClipVolume.
-//
-// Kept unnormalised: 'gradientLength' carries |(x,y,z)| separately so a sphere
-// test can scale the radius by it, which lets clip::kClipEpsilon stay in the
-// same units the microprogram and clip.h use it in.
-struct ClipVolumePlane
-{
-    math::Vec4 plane;     // ax + by + cz + d; >= 0 is inside
-    float gradientLength; // |(a,b,c)|
-};
-static ClipVolumePlane s_clipVolume[6] = {};
 
 // Wall texture animation frame (viewDef.time * 2, as in ref_gl).
 static int s_textureAnimFrame = 0;
@@ -337,112 +321,6 @@ void SetUpDynamicLights(const refdef_t & viewDef)
 
 // Extracts the six planes bounding the VU1 clip volume from a view-projection.
 //
-// The microprogram judges a vertex in clip space: inside while w - z >= 0
-// (near), w + z >= 0 (far) and G*w +- x >= 0, G*w +- y >= 0 (the guard band
-// sides, G = vu1::kGuardBandNdcLimit). Under the row-vector convention each
-// clip component is a dot of the world position with one of the matrix's
-// columns, so every one of those tests is a plane in world space and its
-// coefficients are just a combination of two columns.
-//
-// That is what lets a whole surface be judged at once: the six half-spaces
-// intersect to a convex volume, so a bounding sphere inside all six contains
-// no vertex the microprogram could reject.
-void SetUpClipVolume(const math::Mat4 & viewProj)
-{
-    // Column k of the matrix, i.e. the coefficients of clip component k.
-    const auto column = [&viewProj](int k) -> math::Vec4
-    {
-        return { viewProj.m[0][k], viewProj.m[1][k], viewProj.m[2][k], viewProj.m[3][k] };
-    };
-
-    const math::Vec4 cx = column(0);
-    const math::Vec4 cy = column(1);
-    const math::Vec4 cz = column(2);
-    const math::Vec4 cw = column(3);
-
-    constexpr float kG = vu1::kGuardBandNdcLimit;
-
-    const math::Vec4 planes[6] = {
-        { cw.x - cz.x, cw.y - cz.y, cw.z - cz.z, cw.w - cz.w },                     // near:  w - z
-        { cw.x + cz.x, cw.y + cz.y, cw.z + cz.z, cw.w + cz.w },                     // far:   w + z
-        { kG * cw.x + cx.x, kG * cw.y + cx.y, kG * cw.z + cx.z, kG * cw.w + cx.w }, // left:  G*w + x
-        { kG * cw.x - cx.x, kG * cw.y - cx.y, kG * cw.z - cx.z, kG * cw.w - cx.w }, // right: G*w - x
-        { kG * cw.x + cy.x, kG * cw.y + cy.y, kG * cw.z + cy.z, kG * cw.w + cy.w }, // bottom:G*w + y
-        { kG * cw.x - cy.x, kG * cw.y - cy.y, kG * cw.z - cy.z, kG * cw.w - cy.w }, // top:   G*w - y
-    };
-
-    for (int i = 0; i < 6; ++i)
-    {
-        s_clipVolume[i].plane = planes[i];
-        s_clipVolume[i].gradientLength =
-            math::Sqrtf((planes[i].x * planes[i].x) +
-                        (planes[i].y * planes[i].y) +
-                        (planes[i].z * planes[i].z));
-    }
-}
-
-// True when every vertex of the surface is inside the VU1 clip volume, so the
-// whole surface can skip the per-triangle clip judgement.
-//
-// Conservative by construction: a surface that straddles any plane - or that
-// merely comes within kClipEpsilon of one, the same hair's breadth clip.h backs
-// off by - falls through to the clipper as before. The radius is scaled by the
-// plane's gradient length because the planes are left unnormalised, which keeps
-// the epsilon in the units the microprogram uses.
-Q_ALWAYS_INLINE bool SurfaceInsideClipVolume(const mod::ModelSurface & surf)
-{
-    for (const ClipVolumePlane & p : s_clipVolume)
-    {
-        const float centerDist = (p.plane.x * surf.boundsCenter.x) +
-                                 (p.plane.y * surf.boundsCenter.y) +
-                                 (p.plane.z * surf.boundsCenter.z) + p.plane.w;
-
-        if (centerDist - (surf.boundsRadius * p.gradientLength) < clip::kClipEpsilon)
-        {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Memoised for the frame: the diffuse and lightmap passes ask the same question
-// about the same surface, and walk separate chains, so without this every visible
-// surface pays for six planes twice. Only valid for the world's own matrix - see
-// the worldTransform guards at the call sites.
-Q_ALWAYS_INLINE bool SurfaceInsideClipVolumeCached(const mod::ModelSurface & surf)
-{
-    if (surf.clipVolumeFrame != s_frameCount)
-    {
-        surf.clipVolumeFrame  = s_frameCount;
-        surf.clipVolumeInside = SurfaceInsideClipVolume(surf);
-    }
-    return surf.clipVolumeInside;
-}
-
-// Whether a surface's triangles can go to VU1 uncut.
-//
-// With ps2_vu_clip on, always. The microprogram clips in clip space, after the
-// MVP, so it needs no proof and does not care whose transform this is - which is
-// the whole point of the cvar: nothing else routes geometry into the VU clipper,
-// so without it that code is never executed and never tested.
-//
-// Off, only the world passes can answer at all, and only for surfaces the clip
-// volume test proves are wholly inside. Everything else clips on the EE.
-// True while VU1 is doing the clipping rather than the EE.
-Q_ALWAYS_INLINE bool VuClippingEnabled()
-{
-    return s_vuClip->value != 0.0f;
-}
-
-Q_ALWAYS_INLINE bool SurfaceSkipsEeClipping(const mod::ModelSurface & surf, const bool worldTransform)
-{
-    if (VuClippingEnabled())
-    {
-        return true;
-    }
-    return worldTransform && SurfaceInsideClipVolumeCached(surf);
-}
-
 // True when the box is completely outside the frustum and must not draw.
 Q_ALWAYS_INLINE bool ShouldCullBBox(float * mins, float * maxs)
 {
@@ -506,7 +384,6 @@ void SetupFrame(const refdef_t & viewDef)
     s_weaponViewProjMatrix = view * weaponProj;
 
     SetUpFrustum(viewDef);
-    SetUpClipVolume(s_viewProjMatrix);
     SetUpDynamicLights(viewDef);
 }
 
@@ -819,10 +696,8 @@ struct SurfaceDrawState
     // buffer can represent (see rs::TriangleStream).
     rs::TriangleStream * stream = nullptr;
 
-    // Clips and draws with this; the world's is the plain view-projection. Kept
-    // here as well as on the stream because the passes below test it - only
-    // geometry drawn through the world's own transform can use s_clipVolume -
-    // and because ApplyDrawState is what hands it over.
+    // Draws with this; the world's is the plain view-projection. Kept here as
+    // well as on the stream because ApplyDrawState is what hands it over.
     const math::Mat4 * mvp = nullptr;
 
     // Packed vertex colour (GS modulate: 128 = unchanged, alpha 0x80 = 1.0).
@@ -860,13 +735,6 @@ struct SurfaceDrawState
     // models, which carry the entity's alpha rather than the surface's, fall back
     // to BuildPolyVertexCache.
     bool bakedVertices = false;
-
-    // The surface being gathered was proven wholly inside the VU clip volume, so
-    // GatherPolyTriangles may emit its triangles verbatim and skip the clipper
-    // entirely. Set per surface by the world passes, which are the only ones
-    // that can prove it (SurfaceInsideClipVolume judges against the world's
-    // view-projection); everything else leaves it false and clips as before.
-    bool skipClipping = false;
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -1107,44 +975,13 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly,
     }
 }
 
+// Every surface the world draws is now cut on VU1, so this is the only gather
+// there is - the clipped twin it used to pick between is gone with the EE
+// clipper. Kept as a name rather than folded into the callers because sky still
+// has its own path and the passes read better calling one thing.
 void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
-    if (state.skipClipping)
-    {
-        EmitPolyTrianglesUnclipped(poly, state);
-        return;
-    }
-
-    const int numTriangles = poly.numVerts - 2;
-    for (int t = 0; t < numTriangles; ++t)
-    {
-        const mod::ModelTriangle & tri = poly.triangles[t];
-
-        // Polygons the triangulation couldn't complete leave zeroed
-        // (degenerate) triangles behind; skip them.
-        if (tri.vertexes[0] == tri.vertexes[1]) [[unlikely]]
-        {
-            continue;
-        }
-
-        ClipVertex corners[3];
-        for (int v = 0; v < 3; ++v)
-        {
-            const mod::PolyVertex & src = poly.vertexes[tri.vertexes[v]];
-            const float uvS = state.lightmapUVs ? src.lightmap_s : src.s;
-            const float uvT = state.lightmapUVs ? src.lightmap_t : src.t;
-
-            corners[v].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
-            corners[v].st  = { uvS, uvT, 0.0f, 0.0f };
-
-            if (state.lightmapTint)
-            {
-                corners[v].color = UnpackCachedLightmapColor(src.rgba);
-            }
-        }
-
-        GatherTriangle(corners, state);
-    }
+    EmitPolyTrianglesUnclipped(poly, state);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1183,52 +1020,30 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawSta
     {
         PS2_AssertMsg(poly->numVerts <= kMaxWarpPolyVerts, "Warp polygon larger than a subdivision leaf!");
 
-        // Same fan either way - vertex 0, then each adjacent pair round the ring.
-        const int numTriangles = poly->numVerts - 2;
-
-        if (state.skipClipping)
-        {
-            // The loader's vertices, straight into the batch. The warp program
-            // reads neither .w nor .q - it scales the MVP's translation row by a
-            // hardwired 1.0 and synthesises Q from the divide - so the lightmap
-            // coordinates PolyVertex parks in those two lanes ride along unread,
-            // and the colour the bake left is already the one this pass draws.
-            const mod::PolyVertex * const src = poly->vertexes;
-
-            for (int t = 0; t < numTriangles; ++t)
-            {
-                state.stream->BeginVerts(3);
-
-                mod::PolyVertex * const dst = state.stream->PushTriangle();
-                vu1::CopyDrawVertex(dst[0], src[0]);
-                vu1::CopyDrawVertex(dst[1], src[t + 1]);
-                vu1::CopyDrawVertex(dst[2], src[t + 2]);
-            }
-            continue;
-        }
-
-        // Clipped, for a surface that straddles the volume the VU judges - which
-        // water routinely does, since the camera is often inside it and the VU
-        // drops a triangle crossing the near plane whole rather than cutting it.
+        // Vertex 0, then each adjacent pair round the ring.
         //
-        // The clipper carries the raw texel coordinates untouched and the VU
-        // warps whatever survives. That is not merely equivalent to warping
-        // first: the coordinates are linear in clip space, so a cut interpolates
-        // them exactly, and the ripple is then evaluated at the vertex that is
-        // really there instead of being lerped after the fact.
+        // The loader's vertices go straight into the batch. The warp reads neither
+        // .w nor .q - it scales the MVP's translation row by a hardwired 1.0 and
+        // synthesises Q from the divide - so the lightmap coordinates PolyVertex
+        // parks in those two lanes ride along unread, and the colour the bake left
+        // is already the one this pass draws.
+        //
+        // VU1 cuts what straddles, which water routinely does with the camera
+        // inside it. It carries the raw texel coordinates through the cut and warps
+        // whatever survives, and that is not merely equivalent to warping first:
+        // the coordinates are linear in clip space, so a cut interpolates them
+        // exactly, and the ripple is evaluated at the vertex that is really there.
+        const int numTriangles = poly->numVerts - 2;
+        const mod::PolyVertex * const src = poly->vertexes;
+
         for (int t = 0; t < numTriangles; ++t)
         {
-            const int fan[3] = { 0, t + 1, t + 2 };
+            state.stream->BeginVerts(3);
 
-            ClipVertex corners[3];
-            for (int c = 0; c < 3; ++c)
-            {
-                const mod::PolyVertex & src = poly->vertexes[fan[c]];
-                corners[c].pos = { src.position.x, src.position.y, src.position.z, 1.0f };
-                corners[c].st  = { src.s, src.t, 0.0f, 0.0f };
-            }
-
-            GatherTriangle(corners, state);
+            mod::PolyVertex * const dst = state.stream->PushTriangle();
+            vu1::CopyDrawVertex(dst[0], src[0]);
+            vu1::CopyDrawVertex(dst[1], src[t + 1]);
+            vu1::CopyDrawVertex(dst[2], src[t + 2]);
         }
     }
 }
@@ -1280,11 +1095,6 @@ void DrawTextureChains(const SurfaceDrawState & base)
     // or the chroma switched off - wants a colour the vertex does not hold.
     state.bakedVertices = tinted && (state.rgba == kFullBright);
 
-    // s_clipVolume is built from the world's view-projection, so the surface
-    // test only speaks for surfaces drawn through it. A brush model entity
-    // carries its own transform and keeps clipping per triangle.
-    const bool worldTransform = (state.mvp == &s_viewProjMatrix);
-
     for (int i = 0; i < s_chainTextureCount; ++i)
     {
         const tex::Texture * texture = s_chainTextures[i];
@@ -1297,8 +1107,6 @@ void DrawTextureChains(const SurfaceDrawState & base)
             // Unlightmapped here means sky: RecursiveWorldNode sends turbulent
             // and translucent faces down the alpha pass instead.
             state.lightmapTint = tinted && (surf->lightmapTextureNum != mod::kNotLightmapped);
-            state.skipClipping = SurfaceSkipsEeClipping(*surf, worldTransform);
-            s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
@@ -1368,10 +1176,6 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     // flattens the colour as it copies.
     state.bakedVertices = true;
 
-    // As in DrawTextureChains: only the world's own transform is the one
-    // s_clipVolume was built for.
-    const bool worldTransform = (state.mvp == &s_viewProjMatrix);
-
     const int numLightmaps = lm::NumAtlases();
     for (int i = 0; i < numLightmaps; ++i)
     {
@@ -1386,8 +1190,6 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
         {
-            state.skipClipping = SurfaceSkipsEeClipping(*surf, worldTransform);
-            s_drawStats.surfsUnclipped += state.skipClipping;
 
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
@@ -1574,12 +1376,6 @@ void RenderAlphaSurfaces()
             ApplyDrawState(state, *batchTexture);
         }
 
-        // s_clipVolume is built from the world's view-projection, so the surface
-        // test only speaks for entries drawn through it. A brush model entity
-        // carries its own transform and keeps clipping per triangle.
-        const bool worldTransform = (entry.mvp == &s_viewProjMatrix);
-        state.skipClipping = SurfaceSkipsEeClipping(*entry.surf, worldTransform);
-        s_drawStats.surfsUnclipped += state.skipClipping;
 
         if (texFlags & SURF_WARP)
         {
@@ -2142,8 +1938,6 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         // Brush models have never been able to skip the EE clipper - the clip
         // volume is judged in world space and this is not the world's matrix -
         // so this is false unless the VU clipper is on, which does not care.
-        state.skipClipping = SurfaceSkipsEeClipping(*surf, /*worldTransform=*/false);
-        s_drawStats.surfsUnclipped += state.skipClipping;
 
         ++s_drawStats.surfaces;
         for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
@@ -2574,7 +2368,6 @@ void Init()
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
     s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
     s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   0); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
-    s_vuClip            = Cvar_Get("ps2_vu_clip",             "0",   0); // 1 = world surfaces go to VU1 uncut and the microprogram clips them; 0 = the EE clipper, as before.
     s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", 0); // Brightness of the VU1 point lights.
     s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
     s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.

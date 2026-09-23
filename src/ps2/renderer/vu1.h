@@ -44,14 +44,19 @@ enum struct ProgramAddr : u32 {};
 
 enum class Program
 {
-    Textured,  // world geometry: transform, clip, gouraud triangles. Its batch header picks the
-               // per-vertex work: how the colour arrives, and whether the texture coordinates
-               // animate. The lit and warped programs used to be their own; they share this
-               // one's clipper now, which is the only way a second copy would ever have fit.
-    Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
-    Particles, // camera-facing billboards expanded to GS sprites
+    // World geometry: transform, clip, gouraud triangles. Its batch header picks the
+    // per-vertex work: how the colour arrives, and whether the texture coordinates
+    // animate (for wrap/turbulent surfaces). Clips and splits triangles fully in the VU.
+    Textured,
 
-    Count      // Number of VU1 programs - not valid for ProgramAddress.
+    // MD2 alias models: two keyframes lerped on the VU ahead of the transform.
+    Lerped,
+
+    // Camera-facing billboards expanded to GS sprites.
+    Particles,
+
+    // Number of VU1 programs - not valid for ProgramAddress.
+    Count
 };
 
 // Where 'prog' was uploaded. Init must have run.

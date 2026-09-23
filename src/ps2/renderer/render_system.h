@@ -84,9 +84,13 @@ constexpr float CullSignFor(const FaceCull cull)
 // Counted by the streams and the draws below, so no caller adds to it. Cleared by BeginFrame.
 struct DrawStats
 {
-    int trisDrawn;   // Triangles handed to VU1, after EE clipping.
-    int trisClipped; // Triangles re-cut against the VU clip volume.
-    int trisCulled;  // Triangles dropped whole, entirely outside it.
+    // VU1 clips, so what it cuts and drops is invisible from here: trisDrawn counts
+    // what was *handed* to it, and the three below now describe only the two paths
+    // that still cut on the EE - sky, and MD2 until the lerp program merges into
+    // the textured one. They were the whole world's numbers before that moved.
+    int trisDrawn;   // Triangles handed to VU1.
+    int trisClipped; // Of those, re-cut on the EE first.
+    int trisCulled;  // Dropped whole on the EE, entirely outside the volume.
 
     // How 'trisClipped' splits by which planes the triangle straddled; the three
     // partition it. See CountClippedTriangle for what the split is for.

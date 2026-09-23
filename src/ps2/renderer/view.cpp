@@ -24,7 +24,6 @@
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
 #include "ps2/renderer/lightmap.h"
-#include "ps2/renderer/clip.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/vu1.h"
@@ -706,7 +705,7 @@ struct SurfaceDrawState
     // Batch flags, i.e. whether the submission blends.
     rs::DrawFlags flags = rs::DrawFlags::None;
 
-    // Gouraud alpha: take each vertex's alpha from its own ClipVertex::st.z
+    // Gouraud alpha: take each vertex's alpha from its own corner's st.z
     // (0..1) instead of from 'rgba', whose RGB is still used for all three
     // corners. The gather path is otherwise flat-shaded - one colour per
     // batch - and this is the cheapest way out of that, since st is already
@@ -741,15 +740,21 @@ struct SurfaceDrawState
 // Triangle gathering through the clipper
 //
 // The VU rejects a straddling triangle whole rather than cutting it, so world
-// geometry is pre-clipped on the EE against the six planes it judges. The
-// clipper (clip.h) and the stream it feeds (rs::TriangleStream) are shared with the
-// sky and alias model paths; what follows is this file's use of them, which is
-// the per-vertex colour and nothing else. ClipVertex::st carries the vertex
-// alpha in .z under SurfaceDrawState::vertexAlpha, and ClipVertex::color the
-// luxel chroma as a 0..1 tint under SurfaceDrawState::lightmapTint.
+// Sprites, beams, null models and the dlight flares build their corners here
+// and hand them to GatherTriangle, which turns them into batch vertices. VU1
+// cuts whatever straddles; nothing on this path meets the EE clipper any more.
 // ------------------------------------------------------------------------------------------------
 
-using clip::ClipVertex;
+// A corner as those gathers build one. clip::ClipVertex used to serve, at 80
+// bytes for the six floats they actually set - the rest was the clip distances
+// the EE clipper filled in, and the flares' rim[16] alone was 1280 bytes of
+// stack. .z of the UVs is the per-vertex alpha, which only the flares vary.
+struct GatherCorner
+{
+    math::Vec4 pos;
+    math::Vec4 st;
+};
+static_assert(sizeof(GatherCorner) == 32, "Two qwords, like the vertex it becomes");
 
 // Scales one 0-255 colour channel by a 0..1 factor, rounded so a factor of 1
 // leaves it exactly where it was.
@@ -762,22 +767,6 @@ using clip::ClipVertex;
 // re-sampling the atlas: the cached channel is the chroma times 128, so
 // (base * cached) >> 7 recovers base times chroma, with no float conversions and
 // no 128 KB mirror read.
-// The same cached chroma as a 0..1 tint, for the clipper - which interpolates
-// ClipVertex::color across a cut and so needs it as floats rather than packed.
-//
-// No precision is lost going through the cache: it holds the chroma scaled by
-// 128, where the atlas mirror it was sampled from is only 5:6:5. Both gather
-// paths now derive the tint from the same bytes, so a surface that straddles the
-// clip volume shades identically to one that does not.
-Q_ALWAYS_INLINE math::Vec4 UnpackCachedLightmapColor(const u32 cached)
-{
-    constexpr float kInv = 1.0f / 128.0f;
-    return { static_cast<float>( cached        & 0xFFu) * kInv,
-             static_cast<float>((cached >>  8) & 0xFFu) * kInv,
-             static_cast<float>((cached >> 16) & 0xFFu) * kInv,
-             1.0f };
-}
-
 Q_ALWAYS_INLINE u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
 {
     if (base == kFullBright)
@@ -797,25 +786,6 @@ Q_ALWAYS_INLINE u32 ApplyCachedLightmapColor(const u32 base, const u32 cached)
         | (base & 0xFF000000u); // The batch keeps its own alpha.
 }
 
-Q_ALWAYS_INLINE u32 ScaleChannel(u32 channel, float scale)
-{
-    const float scaled = (static_cast<float>(channel) * scale) + 0.5f;
-    return (scaled <= 0.0f)   ? 0u
-         : (scaled >= 255.0f) ? 255u
-                              : static_cast<u32>(scaled);
-}
-
-// Tints the batch colour by this vertex's own, leaving the alpha byte alone -
-// the diffuse pass is opaque, and the lightmap pass that follows needs the
-// modulate identity there.
-Q_ALWAYS_INLINE u32 WithVertexColor(u32 rgba, const math::Vec4 & tint)
-{
-    return ScaleChannel( rgba        & 0xFF, tint.x)
-        | (ScaleChannel((rgba >>  8) & 0xFF, tint.y) <<  8)
-        | (ScaleChannel((rgba >> 16) & 0xFF, tint.z) << 16)
-        | (rgba & 0xFF000000u);
-}
-
 // Swaps the batch colour's alpha for this vertex's own, clamped onto the GS's
 // 0..0x80 = 0..1.0 alpha scale.
 Q_ALWAYS_INLINE u32 WithVertexAlpha(u32 rgba, float alpha)
@@ -827,22 +797,31 @@ Q_ALWAYS_INLINE u32 WithVertexAlpha(u32 rgba, float alpha)
     return (rgba & 0x00FFFFFFu) | (packed << 24);
 }
 
-// The colour one gathered vertex draws with: the batch colour, tinted by the
-// luxel chroma or wearing this vertex's own alpha, per the draw state.
-Q_ALWAYS_INLINE u32 VertexColor(const ClipVertex & v, const SurfaceDrawState & state)
+// One triangle from the gathers that are not surfaces - sprites, beams, null
+// models and the dlight flares - straight into the batch. VU1 cuts it.
+//
+// The corners arrive carrying a position and UVs, and for the flares an alpha
+// per vertex in st.z, which is the one thing the batch colour cannot express;
+// it folds into rgba here, which is where the clipper's extra lanes used to go.
+// The two free lanes DrawVertex keeps for the world's second UV set are zeroed:
+// no microprogram reads them, the translation row being scaled by a hardwired
+// 1.0 and Q synthesised from the divide.
+Q_ALWAYS_INLINE void GatherTriangle(const GatherCorner (&corners)[3], const SurfaceDrawState & state)
 {
-    return state.lightmapTint ? WithVertexColor(state.rgba, v.color)
-         : state.vertexAlpha  ? WithVertexAlpha(state.rgba, v.st.z)
-                              : state.rgba;
-}
+    state.stream->BeginVerts(3);
 
-// Clips one triangle against the VU clip volume and appends the survivors to
-// the gather buffer, flushing it when full. The corners arrive with their
-// position and UVs set; their clip distances are computed by the clipper.
-Q_ALWAYS_INLINE void GatherTriangle(ClipVertex (&corners)[3], const SurfaceDrawState & state)
-{
-    state.stream->PushClippedTriangle(corners,
-                                      [&state](const ClipVertex & v) { return VertexColor(v, state); });
+    vu1::DrawVertex * const dst = state.stream->PushTriangle();
+    for (int i = 0; i < 3; ++i)
+    {
+        const GatherCorner & src = corners[i];
+
+        dst[i].position   = { src.pos.x, src.pos.y, src.pos.z };
+        dst[i].rgba       = state.vertexAlpha ? WithVertexAlpha(state.rgba, src.st.z) : state.rgba;
+        dst[i].s          = src.st.x;
+        dst[i].t          = src.st.y;
+        dst[i].lightmap_s = 0.0f;
+        dst[i].lightmap_t = 0.0f;
+    }
 }
 
 // Hands the pass's transform, flags and texture to its stream, which flushes whatever it gathered
@@ -858,7 +837,7 @@ Q_ALWAYS_INLINE void ApplyDrawState(const SurfaceDrawState & state, const tex::T
 // batch wants. Filled by EmitPolyTrianglesUnclipped, and bounded by
 // mod::kTriangulationMaxVerts as it is. File level rather than a local because
 // 128 entries is 4 KB of stack, and gathers never interleave - the same
-// single-caller-at-a-time discipline clip::Scratch relies on.
+// single-caller-at-a-time discipline the sky path's clip::Scratch relies on.
 static mod::PolyVertex s_polyVertexCache[mod::kTriangulationMaxVerts];
 
 // Fills s_polyVertexCache with the polygon's vertices as the batch wants them.
@@ -877,7 +856,7 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
     const u32  baseRgba    = state.rgba;
 
     // The untinted colour is the same for every vertex of every polygon: this
-    // path leaves ClipVertex::st.z zero, so VertexColor's alpha branch reads a
+    // path leaves the alpha lane zero, so the alpha branch reads a
     // constant 0.0f here. Fold it once rather than per vertex.
     const u32 flatRgba = (!tinted && state.vertexAlpha) ? WithVertexAlpha(baseRgba, 0.0f) : baseRgba;
 
@@ -1478,7 +1457,7 @@ void RenderDLights(const refdef_t & viewDef)
                                         FlareChannel(light->color[2]), 0x80);
 
         // The cone apex, at full alpha.
-        ClipVertex centre;
+        GatherCorner centre;
         centre.pos = { light->origin[0] - (s_forwardVec[0] * radius),
                        light->origin[1] - (s_forwardVec[1] * radius),
                        light->origin[2] - (s_forwardVec[2] * radius), 1.0f };
@@ -1487,7 +1466,7 @@ void RenderDLights(const refdef_t & viewDef)
         // The rim, at zero alpha. ref_gl's descending loop is the same ring
         // walked the other way round, which is why the sine is negated -
         // keeping that preserves its winding.
-        ClipVertex rim[kNumFlareSegs];
+        GatherCorner rim[kNumFlareSegs];
         for (int i = 0; i < kNumFlareSegs; ++i)
         {
             const float angle = (static_cast<float>(i) / kNumFlareSegs) * (math::kPI * 2.0f);
@@ -1503,7 +1482,7 @@ void RenderDLights(const refdef_t & viewDef)
         // Fan to triangle list, the only topology the VU path takes.
         for (int i = 0; i < kNumFlareSegs; ++i)
         {
-            ClipVertex wedge[3] = { centre, rim[i], rim[(i + 1) % kNumFlareSegs] };
+            GatherCorner wedge[3] = { centre, rim[i], rim[(i + 1) % kNumFlareSegs] };
             GatherTriangle(wedge, state);
         }
 
@@ -2029,7 +2008,7 @@ void DrawSpriteEntity(const entity_t & entity)
         { rightOffset, bottomOffset, 1.0f, 1.0f },
     };
 
-    ClipVertex quad[4];
+    GatherCorner quad[4];
     for (int i = 0; i < 4; ++i)
     {
         quad[i].pos = {
@@ -2043,7 +2022,7 @@ void DrawSpriteEntity(const entity_t & entity)
 
     ApplyDrawState(state, *skin);
 
-    ClipVertex triangle[3] = { quad[0], quad[1], quad[2] };
+    GatherCorner triangle[3] = { quad[0], quad[1], quad[2] };
     GatherTriangle(triangle, state);
 
     triangle[0] = quad[0];
@@ -2122,17 +2101,17 @@ void DrawBeamEntity(const entity_t & entity)
     {
         const int next = (i + 1) % kNumBeamSegs;
 
-        ClipVertex quad[4];
+        GatherCorner quad[4];
         quad[0].pos = startPoints[i];
         quad[1].pos = endPoints[i];
         quad[2].pos = startPoints[next];
         quad[3].pos = endPoints[next];
-        for (ClipVertex & c : quad)
+        for (GatherCorner & c : quad)
         {
             c.st = zero;
         }
 
-        ClipVertex triangle[3] = { quad[0], quad[1], quad[2] };
+        GatherCorner triangle[3] = { quad[0], quad[1], quad[2] };
         GatherTriangle(triangle, state);
 
         triangle[0] = quad[2];
@@ -2199,7 +2178,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 
     for (int half = 0; half < 2; ++half)
     {
-        ClipVertex apex;
+        GatherCorner apex;
         apex.pos = { 0.0f, 0.0f, (half == 0) ? -kApex : kApex, 1.0f };
         apex.st  = { 0.5f, 0.5f, 0.0f, 0.0f };
 
@@ -2210,7 +2189,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
             const int a = (half == 0) ? i : (4 - i);
             const int b = (half == 0) ? (i + 1) : (3 - i);
 
-            ClipVertex triangle[3];
+            GatherCorner triangle[3];
             triangle[0] = apex;
             triangle[1].pos = ring[a];
             triangle[1].st  = { 0.0f, 1.0f, 0.0f, 0.0f };

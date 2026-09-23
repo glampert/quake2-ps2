@@ -1355,23 +1355,7 @@ void DrawLightmapChains(const SurfaceDrawState & base)
     // that matters: clipping one pass on the EE and the other on the VU leaves the
     // polygons disagreeing at the seam, and clipping only the diffuse one left the
     // lightmap rejected whole and the surface fullbright.
-    //
-    // Withheld for now, because that colour mode does not render: this pass comes
-    // out black over each triangle's interior with a rim of unmodulated diffuse at
-    // the edges, on every ps2_vu_clip setting. The fault is open. What has been
-    // eliminated, each by experiment rather than by reading: the PACKED RGBAQ
-    // register list, the light block (its RGB renders correctly as a colour), the
-    // vertex alpha (128, rendered and read back), and Q in four separate forms
-    // including pinned to a constant with affine mapping. The source alpha is
-    // near zero in triangle interiors and right at their edges, and nothing
-    // found so far explains that.
-    //
-    // While this stands, mode 2 lights the world exactly as mode 1 does and its
-    // point lights do not draw. That is a hole, not a preference, and it closes
-    // by deleting this constant.
-    constexpr bool kDynamicLightColorModeBroken = true;
-
-    if (!kDynamicLightColorModeBroken && VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
+    if (VuDynamicLightsEnabled() && base.mvp == &s_viewProjMatrix)
     {
         state.flags = state.flags | rs::DrawFlags::DynamicLights;
     }

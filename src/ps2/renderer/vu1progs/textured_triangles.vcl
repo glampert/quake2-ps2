@@ -97,7 +97,19 @@
     ; Defined on both paths before it is read: openvcl checks that statically and
     ; nothing below this branch writes it in mode 0. One instruction, and the
     ; alternative is a register the emit could read as whatever was left in it.
-    move vCol, vf00
+    ; Black, with the alpha the lightmap pass needs, before the branch rather than
+    ; inside it. The alpha is a constant - it does not depend on the lights - and
+    ; setting it here makes it independent of how this branch resolves. Left on the
+    ; lit side it came out as vf00's 1.0 instead of 128, measured by reading the
+    ; emitted quadword back out of VU memory, and an alpha of 1 scales the
+    ; framebuffer by 1/128: black, yet non-zero, so it still passes the
+    ; NOTEQUAL-0 alpha test instead of being skipped.
+    ;
+    ; Mode 0 pays two instructions for an alpha it never reads. The program this
+    ; was merged from had no branch here at all, which is why it never showed.
+    move.xyz vCol, vf00
+    move.w   vCol, fLightClamp
+
     ibeq iColorMode, vi00, lblNoLight
 
     ; Four light vectors at once, one lane per light, then squared distances.
@@ -107,11 +119,6 @@
     mul  acc,   fLx, fLx
     madd acc,   fLy, fLy
     madd fDist, fLz, fLz
-
-    ; Start at black, with the alpha the lightmap pass needs already in place:
-    ; .w stays untouched by the .xyz lighting below and converts to the GS 1.0.
-    move.xyz vCol, vf00
-    move.w   vCol, fLightClamp
 
     ; light += max(distSqr.i * -(colour_i / radius_i^2) + colour_i, 0)
     mula.xyz acc,   fNegDiv0, fDist[x]

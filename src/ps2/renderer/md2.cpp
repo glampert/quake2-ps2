@@ -18,11 +18,11 @@
  *  with the pose's uniform 'move' translation folded into the MVP's row 3 so
  *  only the two scale vectors ride with each draw.
  *  A scalar EE path (ref_gl's shape: lerp into s_lerpedPositions[], draw
- *  through the plain textured program) is kept behind ps2_md2_vu_lerp=0 as
- *  the A/B debug path, and carries the powersuit-shell models, whose
- *  per-vertex normal extrusion needs an EE-side table lookup. It also carries
- *  the view weapon, which is the one model the camera sits inside and so has
- *  to be clipped on the EE rather than whole-triangle rejected by the VU.
+ *  DrawVertex batches) is kept behind ps2_md2_vu_lerp=0 as the A/B debug path,
+ *  and carries the powersuit-shell models, whose per-vertex normal extrusion
+ *  needs an EE-side table lookup. Both end in the same microprogram, so both
+ *  are clipped on VU1 - the view weapon included, the one model the camera
+ *  sits inside, which used to be forced onto the EE path to be clipped there.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -31,7 +31,6 @@
 #include "ps2/renderer/view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
-#include "ps2/renderer/clip.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/vu1.h"
@@ -47,7 +46,6 @@ static const cvar_t * s_lerpModels = nullptr;
 static const cvar_t * s_vuLerp     = nullptr;
 static const cvar_t * s_cullFace   = nullptr;
 static const cvar_t * s_shadows    = nullptr;
-static const cvar_t * s_clipWeapon = nullptr;
 
 // ------------------------------------------------------------------------------------------------
 // Vertex lighting tables
@@ -572,31 +570,6 @@ const math::Vec3 * LerpVertsEE(const dtrivertx_t * verts, const dtrivertx_t * ol
 }
 
 // ------------------------------------------------------------------------------------------------
-// EE-side clipping (the view weapon)
-// ------------------------------------------------------------------------------------------------
-
-// MD2 shades per vertex, so the colour has to survive a cut: it rides through
-// the clipper as unpacked 0..255 floats in ClipVertex::color, which interpolate
-// linearly like everything else there, and pack back on the way out.
-Q_ALWAYS_INLINE math::Vec4 UnpackClipColor(u32 rgba)
-{
-    return { static_cast<float>( rgba        & 0xFF),
-             static_cast<float>((rgba >>  8) & 0xFF),
-             static_cast<float>((rgba >> 16) & 0xFF),
-             static_cast<float>((rgba >> 24) & 0xFF) };
-}
-
-Q_ALWAYS_INLINE u32 PackClipColor(const clip::ClipVertex & v)
-{
-    const auto channel = [](float f) -> u32
-    {
-        return (f <= 0.0f) ? 0u : (f >= 255.0f) ? 255u : static_cast<u32>(f + 0.5f);
-    };
-    const math::Vec4 & c = v.color;
-    return channel(c.x) | (channel(c.y) << 8) | (channel(c.z) << 16) | (channel(c.w) << 24);
-}
-
-// ------------------------------------------------------------------------------------------------
 // Projected shadow
 // ------------------------------------------------------------------------------------------------
 
@@ -754,7 +727,6 @@ void Init()
     s_vuLerp     = Cvar_Get("ps2_md2_vu_lerp",     "1", 0);
     s_cullFace   = Cvar_Get("ps2_md2_cullface",    "1", 0);
     s_shadows    = Cvar_Get("ps2_md2_shadows",     "1", 0);
-    s_clipWeapon = Cvar_Get("ps2_md2_clip_weapon", "1", 0);
 
     for (u32 & color : s_colorLUT)
     {
@@ -834,23 +806,18 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     const tex::Texture & skin = SkinForEntity(entity, *model);
     math::Mat4 mvp = MakeAliasMatrix(entity) * viewProj;
 
-    // The view weapon is clipped here on the EE instead of being left to the
-    // VU's whole-triangle reject. It is the one model the camera sits inside:
-    // parts of it pass behind the eye - the chaingun's spinning barrels most of
-    // all - and dropping those triangles whole punches visible holes in it. No
-    // other alias model needs this, and clipping every monster would not be
-    // worth the EE time. Clipping needs the pose on the EE, so the weapon takes
-    // the scalar lerp path; the VU's back-face cull goes with it, which costs
-    // only some overdraw, since the gun is opaque and the z-buffer sorts it.
-    const bool clipOnEE = (entity.flags & RF_WEAPONMODEL) && (s_clipWeapon->value != 0.0f);
-    const bool vuLerp   = (s_vuLerp->value != 0.0f) && !(entity.flags & kShellFlags) && !clipOnEE;
+    // The view weapon takes the VU path like every other model. It is the one
+    // the camera sits inside - parts of it pass behind the eye, the chaingun's
+    // spinning barrels most of all - and it used to take the scalar EE path so
+    // those could be clipped there. The microprogram clips them now.
+    const bool vuLerp   = (s_vuLerp->value != 0.0f) && !(entity.flags & kShellFlags);
     const auto faceCull = static_cast<rs::FaceCull>(static_cast<u32>(s_cullFace->value) % 3u);
 
-    // The VU path shades on the VU: it takes the entity's light as a batch
+    // The VU path shades on the VU: it takes the entity's light as a draw
     // constant and each vertex's raw shade dot, so there is no table to build.
-    // The EE paths draw through the shared textured program, which the world
-    // also uses and which therefore wants a color already packed - they still
-    // need the 162-entry LUT, but they are one or two entities a frame.
+    // The EE path draws DrawVertex batches, which want a colour already packed -
+    // it still needs the 162-entry LUT, but it only carries the powersuit
+    // shells, one or two entities a frame.
     const u32 * colorLUT = nullptr;
     if (!vuLerp)
     {
@@ -875,15 +842,11 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
         batchFlags = batchFlags | rs::DrawFlags::DepthHack;
     }
 
-    // Expand the glcmds over the pose. Note MD2 triangles are not near-plane
-    // clipped like the world's: the VU rejects straddlers whole (guard band).
-    // The view weapon draws against a much closer near plane than the rest of
-    // the scene (see kZNearWeapon) so it has almost nothing left to straddle.
+    // Expand the glcmds over the pose. Either path is clipped on VU1, against
+    // the near plane and the guard band, like the world.
     //
-    // 'emittedVerts' tallies what was submitted, for the frame's triangle count
-    // below. Only the two paths that gather verbatim count here; the EE clipping
-    // path's triangles are counted by the gather buffer itself, since the
-    // clipper is what decides how many of them there are.
+    // 'emittedVerts' tallies what was submitted, which is how the shadow below
+    // tells whether the whole model went out in a single flush.
     int emittedVerts = 0;
 
     // Scoped to the whole entity rather than to the VU lerp branch that fills it:
@@ -1016,51 +979,26 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
             const mod::AliasVertex * src = mesh.vertexes;
             const int numTris = mesh.numTris;
 
-            if (clipOnEE)
+            for (int t = 0; t < numTris; ++t, src += 3)
             {
-                for (int t = 0; t < numTris; ++t, src += 3)
+                trisStream.BeginVerts(3);
+
+                vu1::DrawVertex * const dst = trisStream.PushTriangle();
+                for (int i = 0; i < 3; ++i)
                 {
-                    clip::ClipVertex corners[3];
-                    for (int i = 0; i < 3; ++i)
-                    {
-                        // All three read up front; see the note in the VU path.
-                        const u32 index  = src[i].index;
-                        const float texS = src[i].s;
-                        const float texT = src[i].t;
+                    // All three read up front; see the note in the VU path.
+                    const u32 index  = src[i].index;
+                    const float texS = src[i].s;
+                    const float texT = src[i].t;
 
-                        const math::Vec3 & pos = lerpedPositions[index];
+                    const math::Vec3 & pos = lerpedPositions[index];
 
-                        corners[i].pos   = { pos.x, pos.y, pos.z, 1.0f };
-                        corners[i].st    = { texS * scaleS, texT * scaleT, 0.0f, 0.0f };
-                        corners[i].color = UnpackClipColor(colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)]);
-                    }
-
-                    trisStream.PushClippedTriangle(corners, PackClipColor);
+                    dst[i].position = pos;
+                    dst[i].rgba     = colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)];
+                    dst[i].s        = texS * scaleS;
+                    dst[i].t        = texT * scaleT;
                 }
-            }
-            else
-            {
-                for (int t = 0; t < numTris; ++t, src += 3)
-                {
-                    trisStream.BeginVerts(3);
-
-                    vu1::DrawVertex * const dst = trisStream.PushTriangle();
-                    for (int i = 0; i < 3; ++i)
-                    {
-                        // All three read up front; see the note in the VU path.
-                        const u32 index  = src[i].index;
-                        const float texS = src[i].s;
-                        const float texT = src[i].t;
-
-                        const math::Vec3 & pos = lerpedPositions[index];
-
-                        dst[i].position = pos;
-                        dst[i].rgba     = colorLUT[curVerts[index] >> (DTRIVERTX_LNI * 8)];
-                        dst[i].s        = texS * scaleS;
-                        dst[i].t        = texT * scaleT;
-                    }
-                    emittedVerts += 3;
-                }
+                emittedVerts += 3;
             }
 
             rs::Submit(trisStream);

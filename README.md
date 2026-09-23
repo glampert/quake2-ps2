@@ -451,8 +451,7 @@ triangles drawn/clipped/culled, batches, entities, particles, dlights).
 **Renderer toggles:** `ps2_fb_16bit`, `ps2_fb_dither`, `ps2_lightmaps`, `ps2_lightmap_only`,
 `ps2_lightmap_color`, `ps2_lightmap_modulate`, `ps2_dynamic_lightmaps`, `ps2_backface_cull`,
 `ps2_md2_lerp_on`, `ps2_md2_vu_lerp`, `ps2_md2_cullface`, `ps2_md2_shadows`,
-`ps2_md2_clip_weapon`, `ps2_hd_particles`, `ps2_polyblend`, `ps2_skymip`,
-`ps2_sky_full_bounds`.
+`ps2_hd_particles`, `ps2_polyblend`, `ps2_skymip`, `ps2_sky_full_bounds`.
 
 **Bring-up scenes:** `ps2_testcube 1` (VU1 path smoke test, with `ps2_testcube_tess`,
 `ps2_testcube_vulerp`, `ps2_testcube_vram_tex_eviction`), `ps2_testcin 1` (cinematic

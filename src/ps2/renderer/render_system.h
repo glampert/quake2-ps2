@@ -95,9 +95,9 @@ constexpr float CullSignFor(const FaceCull cull)
 struct DrawStats
 {
     // VU1 clips, so what it cuts and drops is invisible from here: trisDrawn counts
-    // what was *handed* to it, and the three below now describe only the two paths
-    // that still cut on the EE - sky, and MD2 until the lerp program merges into
-    // the textured one. They were the whole world's numbers before that moved.
+    // what was *handed* to it, and the three below now describe only sky, the one
+    // path that still cuts on the EE. They were every draw's numbers before the
+    // clipper moved.
     int trisDrawn;   // Triangles handed to VU1.
     int trisClipped; // Of those, re-cut on the EE first.
     int trisCulled;  // Dropped whole on the EE, entirely outside the volume.

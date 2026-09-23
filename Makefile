@@ -349,16 +349,17 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # VU1 microprograms.
 # TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
-# The five checks are not optional, and every one of them exists because the
+# The six checks are not optional, and every one of them exists because the
 # toolchain fails silently. openvcl allocates VI registers by liveness and gets
 # it wrong on control flow past a single counted loop - it hands a live register
 # to a temporary, with no diagnostic, and the microprogram then runs away or
 # reads garbage. check_vu_regalloc.py is the general check for that, and needs a
 # second openvcl run with -c for the source names; the two older ones cover
-# particular shapes of it. dvp-as truncates an immediate that does not fit its
-# field and says nothing, so a constant one larger than the instruction can hold
-# becomes a different constant. All of them reach the screen rather than the
-# build log. The branch check runs on the object, so a failure deletes it -
+# particular shapes of it. openvcl pads a clip flag or Q read for latency only
+# within a basic block, so check_vu_latency.py checks it across branches.
+# dvp-as truncates an immediate that does not fit its field and says nothing, so
+# a constant one larger than the instruction can hold becomes a different
+# constant. All of them reach the screen rather than the build log. The branch check runs on the object, so a failure deletes it -
 # otherwise the next make would take the bad object as up to date. Its 'operand
 # out of range' warnings from dvp-as are expected; see the check for why they
 # are harmless.
@@ -371,6 +372,7 @@ $(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS)
 	@python3 $(SRC_DIR)/tools/check_vu_regalloc.py $(basename $@).c.vsm $(basename $@).vsm
 	@python3 $(SRC_DIR)/tools/check_vu_loopvar.py $(basename $@).vsm
 	@python3 $(SRC_DIR)/tools/check_vu_immediates.py $(basename $@).vsm
+	@python3 -B $(SRC_DIR)/tools/check_vu_latency.py $(basename $@).vsm
 	dvp-as $(basename $@).vsm -o $@
 	@python3 $(SRC_DIR)/tools/check_vu_branches.py $(basename $@).vsm $@ || { rm -f $@; exit 1; }
 

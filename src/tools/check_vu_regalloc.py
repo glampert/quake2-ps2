@@ -143,17 +143,11 @@ def source_name(comments, text):
                     return sops[0].split('[')[0].strip()
     return None
 
-def main(cpath, realpath):
-    prog = parse(cpath)
-    name = realpath.split('/')[-1]
-    if not same_instructions(prog, parse(realpath)):
-        print(f"FAIL {name}: openvcl -c scheduled it differently beyond nops - cannot verify")
-        return 1
-
+def successors(prog):
+    """Each pair's successors, delay slots included: the pair after a branch runs before it
+    lands, so it is the delay slot whose successors are the branch's targets."""
     labels = {lab: i for i, p in enumerate(prog) for lab in p[0]}
     n = len(prog)
-
-    # Successors, delay slots included: the instruction after a branch runs before it lands.
     succ = [[i + 1] if i + 1 < n else [] for i in range(n)]
     for i, (_, _, _, lower, ebit) in enumerate(prog):
         op, _, ops = split_op(lower)
@@ -165,6 +159,17 @@ def main(cpath, realpath):
             if op not in UNCONDITIONAL and i + 2 < n:
                 after.append(i + 2)
             succ[i + 1] = after
+    return succ
+
+def main(cpath, realpath):
+    prog = parse(cpath)
+    name = realpath.split('/')[-1]
+    if not same_instructions(prog, parse(realpath)):
+        print(f"FAIL {name}: openvcl -c scheduled it differently beyond nops - cannot verify")
+        return 1
+
+    n = len(prog)
+    succ = successors(prog)
 
     # Definitions: (pair, register, lane) -> name. A self-update with no source line
     # (iCount += 1 in a delay slot) carries its value on rather than starting one.

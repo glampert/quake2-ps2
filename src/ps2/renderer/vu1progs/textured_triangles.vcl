@@ -622,6 +622,14 @@
         ClipTransform{ fPos0, fStq0, fCol0, 0, 1, lLight0Done }
         ClipTransform{ fPos1, fStq1, fCol1, 2, 3, lLight1Done }
         ClipTransform{ fPos2, fStq2, fCol2, 4, 5, lLight2Done }
+
+        ; Did any corner leave the volume? Judged here, in the same block as the
+        ; clipw it reads, and not after the join below: the clip flags land four
+        ; cycles after a clipw, and openvcl pads for that only within a block. Put
+        ; across the branch, the fcand ran two cycles after the third corner's
+        ; clipw and judged every world triangle without it, so a triangle whose
+        ; third corner was behind the eye went out unclipped, across the screen.
+        JudgeTriangleAdc{ }
         b lTransformed
 
     lKeyframes:
@@ -638,6 +646,9 @@
         LerpTransform{ fPos0, fStq0, fCol0, 0, 1, 2 }
         LerpTransform{ fPos1, fStq1, fCol1, 3, 4, 5 }
         LerpTransform{ fPos2, fStq2, fCol2, 6, 7, 8 }
+
+        ; Judged here for the same reason as on the DrawVertex side.
+        JudgeTriangleAdc{ }
 
         ; Backface cull, ahead of the clipper, which is where it has to be: a
         ; cut does not change a triangle's facing, and a back face should cost
@@ -684,9 +695,8 @@
 
     lTransformed:
 
-        ; Did any corner leave the volume? About one triangle in fifty
-        ; does; the rest go straight out below.
-        JudgeTriangleAdc{ }
+        ; Did any corner leave the volume, as judged above? About one triangle
+        ; in fifty does; the rest go straight out below.
         ibne  vi01, vi00, lClipTriangle
 
         ; --- every corner inside: emit the triangle as it stands ---

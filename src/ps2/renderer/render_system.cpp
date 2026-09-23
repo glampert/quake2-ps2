@@ -557,7 +557,7 @@ Q_COLD_FUNC void DumpVuWorkInProgress()
     // Which half XTOP handed the microprograms this run.
     const int tops = static_cast<int>(VIF1_TOPS);
 
-    debug::DumpVu1DataMemory("batch header and GIF tags", tops + vu1::kBatchHeaderAddr, 8);
+    debug::DumpVu1DataMemory("batch header, params and GIF tags", tops + vu1::kBatchHeaderAddr, 9);
     debug::DumpVu1DataMemory("output window A", tops + vu1::kOutputWindowAAddr, vu1::kNumGifTagQwords);
     debug::DumpVu1DataMemory("output window B", tops + vu1::kOutputWindowBAddr, vu1::kNumGifTagQwords);
 }
@@ -857,23 +857,32 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
     {
+        // Header: what the microprogram should do per vertex. The two mode fields are separate
+        // lanes so it can test each against zero directly. .z is spare - the lerp path's hook
+        // for when it merges in.
+        AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::DynamicLights
+                                    : vu1::BatchColorMode::PackedU32));
+        AddU32(static_cast<u32>(warped ? vu1::BatchWarp::On : vu1::BatchWarp::Off));
+        AddU32(0);
+        AddU32(static_cast<u32>(vertCount));
+
+        // Parameters for whatever that asked for. The warp wants the texel-to-image divide -
+        // taken from the texture's size on disk, for the same reason ref_gl's hardcoded 64
+        // works (see DrawAnimatedWaterPolys) - and the frame's SURF_FLOWING drift.
         if (warped)
         {
             AddFloat(1.0f / static_cast<float>(texture.srcWidth));
             AddFloat(1.0f / static_cast<float>(texture.srcHeight));
             AddFloat(HasDrawFlag(flags, DrawFlags::WarpFlowing) ? s_warpScrollTexels : 0.0f);
+            AddFloat(0.0f);
         }
         else
         {
-            // .x tells the textured program where the colour comes from; see BatchColorMode.
-            // The warp program reads its own three values here instead and has no second form
-            // of colour, so the two never collide.
-            AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::DynamicLights
-                                        : vu1::BatchColorMode::PackedU32));
+            AddU32(0);
+            AddU32(0);
             AddU32(0);
             AddU32(0);
         }
-        AddU32(static_cast<u32>(vertCount));
 
         AddBatchGifTags(texture, drawCtx, flags);
     }
@@ -881,8 +890,7 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    AddStartProgram(vu1::ProgramAddress(warped ? vu1::Program::Warped
-                                               : vu1::Program::Textured));
+    AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
 }
 
 // The lerped equivalent: header (count + the two lerp scale vectors) and GIF tags inline, then the

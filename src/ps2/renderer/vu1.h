@@ -44,12 +44,12 @@ enum struct ProgramAddr : u32 {};
 
 enum class Program
 {
-    Textured,  // world geometry: transform, clip, gouraud triangles. Its batch header picks how
-               // the colour arrives - a packed u32, or summed from the frame's dynamic lights,
-               // which used to be a program of its own. See kBatchColorMode.
+    Textured,  // world geometry: transform, clip, gouraud triangles. Its batch header picks the
+               // per-vertex work: how the colour arrives, and whether the texture coordinates
+               // animate. The lit and warped programs used to be their own; they share this
+               // one's clipper now, which is the only way a second copy would ever have fit.
     Lerped,    // MD2 alias models: two keyframes lerped on the VU ahead of the transform
     Particles, // camera-facing billboards expanded to GS sprites
-    Warped,    // turbulent surfaces: the textured path with ref_gl's warp animation on the VU
 
     Count      // Number of VU1 programs - not valid for ProgramAddress.
 };
@@ -125,16 +125,35 @@ static_assert(kWindowSpillAddr >= kClipScratchAddr &&
               kClipSpillAddr < kClipScratchAddr + kClipScratchQwords,
               "The spill qwords live at the top of the clip scratch");
 
-constexpr int kGifTagsAddr     = 1; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
+// Per-batch work parameters, whatever the header's mode fields called for: the warp path's
+// texel-to-image divide in .xy and its SURF_FLOWING scroll in .z. Zero otherwise. It is a
+// quadword of its own because the header's four lanes were already spoken for, and because the
+// lerp path will want somewhere to put its keyframe scales when it merges in too.
+constexpr int kBatchParamsAddr = 1;
+
+constexpr int kGifTagsAddr     = 2; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
 
-// Batch header .x, which tells the textured program where a vertex's colour comes from. It
-// carries two programs' worth of emit since the lit one was folded into it: one clipper, one
-// window scheme and one transform serving both, which is what made room for the clipper at all.
+// Batch header .x: where a vertex's colour comes from.
+//
+// This and BatchWarp below are separate fields rather than one mode enum so the microprogram can
+// test each with a bare compare against zero - no scratch register, no arithmetic. They are
+// independent in principle; no caller currently sets both.
 enum class BatchColorMode : u32
 {
     PackedU32 = 0, // A+D write to RGBAQ, straight out of the vertex - world diffuse, sprites, beams
     DynamicLights, // four point lights summed on the VU, emitted as PACKED RGBAQ - the lightmap pass
+};
+
+// Batch header .y: whether the texture coordinates animate.
+//
+// Warped surfaces arrive in raw texel units and ref_gl's ripple is evaluated on the VU, at the
+// emit rather than the transform - so a vertex the clipper cut is interpolated raw and warped
+// afterwards, which is the vertex that actually exists. See the note in DrawAnimatedWaterPolys.
+enum class BatchWarp : u32
+{
+    Off = 0,
+    On,            // reads the parameters at kBatchParamsAddr
 };
 
 // Depth scale: the microprogram's ftoi4 multiplies by 16, so scale + offset of
@@ -198,7 +217,7 @@ struct alignas(16) FrameConstants
     math::Vec4 gsOffset;
 
     // .xyz is the guard band scale (kClipScale); .w is the frame's turbulent animation phase,
-    // in turns, which only warped_triangles.vcl reads. A spare lane rather than a ninth qword
+    // in turns, which only a warped batch reads. A spare lane rather than a ninth qword
     // because this block cannot grow without moving the double buffers.
     math::Vec4 clipScale;
 
@@ -227,7 +246,7 @@ constexpr u32 PackColorRGBA(u32 r, u32 g, u32 b, u32 a)
 constexpr int kMaxVertsPerBatch = 90;
 
 // Batch layout, relative to the current double buffer (XTOP).
-constexpr int kBatchHeaderAddr = 0; // vertex count in .w
+constexpr int kBatchHeaderAddr = 0; // colour mode .x, warp flag .y, vertex count .w
 constexpr int kVertexDataAddr  = kGifTagsAddr + kNumGifTagQwords;
 
 // The GS packet is built in one of two fixed output windows rather than immediately after the
@@ -253,6 +272,15 @@ static_assert((kMaxVertsPerBatch % 3) == 0, "World chunks are whole triangles");
 static_assert(kMaxVertsPerBatch == 2 * kMaxVertsPerWindow, "A full chunk should be exactly two kicks");
 static_assert(kOutputWindowBAddr + kOutputWindowQwords <= kDoubleBufferOffset,
               "World batch input + both output windows must fit one double-buffer half");
+
+// The microprogram addresses all of these with immediates, so they are #defines over there and
+// nothing but this line ties the two together. The lerp and particle layouts have had their
+// equivalent since they were written; this path went without one until the warp merge moved
+// every address in it at once.
+static_assert(kBatchHeaderAddr == 0 && kBatchParamsAddr == 1 && kGifTagsAddr == 2 &&
+              kVertexDataAddr == 9 && kOutputWindowAAddr == 189 && kOutputWindowBAddr == 331 &&
+              kOutputWindowQwords == 142 && kMaxVertsPerWindow == 45,
+              "Batch layout must match the #defines in textured_triangles.vcl");
 
 // Per-vertex GIF registers the microprogram outputs. RGBAQ goes through an A+D qword so the VU
 // can raw-copy the packed colour instead of spreading one byte per word as the PACKED RGBAQ
@@ -318,7 +346,7 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 }
 
 // ------------------------------------------------------------------------------------------------
-// Turbulent (warped) surfaces, must match warped_triangles.vcl
+// Turbulent (warped) surfaces: the warp block of textured_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
 // The warp program takes the *same* batch layout as the textured one - same header, same GIF tag

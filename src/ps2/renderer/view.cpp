@@ -473,7 +473,7 @@ void SetupFrame(const refdef_t & viewDef)
     s_frameTime        = viewDef.time;
     s_textureAnimFrame = static_cast<int>(viewDef.time * 2.0f);
 
-    // Turbulent surfaces animate on the VU (warped_triangles.vcl), so the frame's two animation
+    // Turbulent surfaces animate on the VU (the warp block of textured_triangles.vcl), so the frame's two animation
     // terms go over once here rather than being folded into every vertex.
     //
     // The phase travels in turns and pre-wrapped, which keeps it precise however long the session
@@ -1159,7 +1159,7 @@ constexpr int kMaxWarpPolyVerts = 64 + 2;
 // Gathers a turbulent surface. The warp animation itself - ref_gl's
 // EmitWaterPolys, where every vertex's texture coordinates are pushed around by
 // a sine of the *other* axis plus time, which is what makes the surface ripple
-// while the geometry stays put - happens on the VU, in warped_triangles.vcl.
+// while the geometry stays put - happens on the VU, at the emit (see BatchWarp).
 // What is left here is the fan walk.
 //
 // These polygons are shaped differently from ordinary ones, so this cannot go

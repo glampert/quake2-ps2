@@ -273,7 +273,7 @@ void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp
 // Chain qwords one chunk appends. 11 in practice for the world path (inline header/GIF tags,
 // vertex REF unpack, FLUSH + MSCAL), 15 lerped, 14 particles; declared with room to spare, since
 // over-declaring only reserves a little more of the buffer than a chunk needs.
-constexpr int kChunkChainQwords     = 16;
+constexpr int kChunkChainQwords     = 17;
 constexpr int kLerpChunkChainQwords = 22;
 constexpr int kParticleChunkQwords  = 22;
 

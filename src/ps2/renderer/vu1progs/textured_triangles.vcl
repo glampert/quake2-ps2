@@ -42,13 +42,14 @@
 ; Batch offsets, relative to XTOP. The window values must match the
 ; kOutputWindow* / kMaxVertsPerWindow constants in vu1.h.
 #define kBatchHeader 0
-#define kGifTags     1
-#define kVertexData  8
+#define kBatchParams 1
+#define kGifTags     2
+#define kVertexData  9
 
 ; The two output windows: where they start, how far apart they are, how
 ; many vertices each holds, and where the drawing tag sits inside one.
-#define kWindowA       188
-#define kWindowB       330
+#define kWindowA       189
+#define kWindowB       331
 #define kWindowQwords  142
 #define kWindowVerts   45
 #define kWindowPrimTag 6
@@ -56,6 +57,10 @@
 ; The dynamic light block, uploaded once per draw chain. Only colour mode 1
 ; reads it. Must match vu1::kLightBlockAddr.
 #define kLightBlock  1010
+
+; The turbulent surface constants, uploaded once by vu1::Init and never
+; rewritten. Only a warped batch reads them. Must match vu1::kWarpConstBlockAddr.
+#define kWarpConsts  1022
 
 ; Reads one vertex and leaves it in clip space, in vPos/vStq, without
 ; touching the output. Splitting the transform from the emission is what
@@ -193,7 +198,7 @@
 ;       out[offAD].z    = 0x01;           // A+D destination: RGBAQ register
 ;       out[offXyz].xyz = proj;           // XYZ (.w ADC bit set by caller)
 ;   }
-#macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lblPacked, lblDone
+#macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lblNoWarp, lblPacked, lblDone
 
     div        q,          vf00[w], vPos[w]
     mul.xyz    fProj,      vPos,    q
@@ -207,6 +212,74 @@
 
     ; Rotate (junk, sq, tq, q) into ST order (sq, tq, q, junk):
     mr32 fST, fStqScaled
+
+    ilw.w iWarp, kWindowSpill(vi00)
+    ibeq  iWarp, vi00, lblNoWarp
+
+    ; --- turbulent: ref_gl's EmitWaterPolys, on the vertex that really exists ---
+    ;
+    ; Here rather than in the transform, deliberately. A vertex the clipper cut has
+    ; no ripple of its own - it is interpolated with the raw texel coordinates its
+    ; endpoints carried, and warped afterwards - which is what the EE clipper did
+    ; for the same reason. Warping first and interpolating the result would ripple
+    ; a vertex that is not there.
+    ;
+    ; The constants load here too, not at the top of the loop: read once per warped
+    ; vertex they are live inside this branch only, so they cost the clipper no
+    ; registers. The sine is computed rather than looked up - a table wants VU
+    ; memory there is none of, and the VU is not the bottleneck this moves work off.
+    lq fWarpFold, kWarpConsts + 0(vi00)
+    lq fWarpPoly, kWarpConsts + 1(vi00)
+    lq fBatch,    kBatchParams(iBase)
+
+    ; VU1 has no float immediates; the fold's two need splatting out of the block.
+    add fHalf,    vf00, fWarpFold[y]
+    sub fNegHalf, vf00, fHalf
+
+    ; (rgba, s, t, unused) -> (s, t, unused, rgba). Both of the vertex's sines ride
+    ; lanes .x/.y the whole way: .x from its S, .y from its T.
+    mr32 fRaw, vStq
+
+    ; Phase in turns - the per-vertex part plus the frame's, which the EE pre-wrapped
+    ; into [0, 1) so this stays precise however long the session has run.
+    mul.xy fPhase, fRaw,   fWarpFold[z]
+    add.xy fPhase, fPhase, fClipScale[w]
+
+    ; Reduce to u - round(u) in [-0.5, 0.5). ftoi0 truncates toward zero, so the
+    ; bias makes it a floor and a round-to-nearest at once.
+    add.xy   fBias,  fPhase, fWarpFold[x]
+    ftoi0.xy fTrunc, fBias
+    itof0.xy fTrunc, fTrunc
+    sub.xy   fFrac,  fBias,  fTrunc
+    sub.xy   fFrac,  fFrac,  fWarpFold[y]
+
+    ; Fold onto [-0.25, 0.25], the triangle wave sin() is symmetric under.
+    sub.xy  fFoldA, fHalf,    fFrac
+    mini.xy fT,     fFrac,    fFoldA
+    sub.xy  fFoldB, fNegHalf, fFrac
+    max.xy  fT,     fT,       fFoldB
+
+    ; Odd polynomial of degree 7, Horner, 4-texel amplitude folded into the terms.
+    mul.xy fTSqr, fT,    fT
+    mul.xy fPoly, fTSqr, fWarpPoly[w]
+    add.xy fPoly, fPoly, fWarpPoly[z]
+    mul.xy fPoly, fPoly, fTSqr
+    add.xy fPoly, fPoly, fWarpPoly[y]
+    mul.xy fPoly, fPoly, fTSqr
+    add.xy fPoly, fPoly, fWarpPoly[x]
+    mul.xy fWarp, fPoly, fT
+
+    ; Crossed - S takes the sine of T and vice versa, which is what ripples rather
+    ; than merely drifts - then SURF_FLOWING's scroll and the texel-to-image divide.
+    add.x  fUV, fRaw, fWarp[y]
+    add.y  fUV, fRaw, fWarp[x]
+    add.x  fUV, fUV,  fBatch[z]
+    mul.xy fUV, fUV,  fBatch
+
+    ; Perspective-correct, overwriting what the plain path rotated in above.
+    mulq.xy fST, fUV, q
+
+    lblNoWarp:
 
     ; Word 2 of a PACKED ST write latches Q for an RGBAQ that follows it, which
     ; is where colour mode 1 gets its Q from - it cannot ride in from the vertex
@@ -321,6 +394,16 @@
     ; than held in VI registers. See vu_common.i.
     InitOutputWindows{ }
 
+    ; The warp flag goes to the spill's spare lane rather than a register of its
+    ; own. Read once per vertex and live across the whole program otherwise, it
+    ; cost the thirteenth allocatable VI and openvcl refused the program - INTEGER
+    ; is what this runs out of first, with the clipper holding what it holds.
+    ; Reloaded at each use it is live for two instructions.
+    ilw.y  iWarp, kBatchHeader(iBase)
+    isw.w  iWarp, kWindowSpill(vi00)
+
+    --barrier
+
     OpenOutputWindow{ }
 
     ; One triangle per iteration:
@@ -389,9 +472,9 @@
         ibne  vi01, vi00, lClipTriangle
 
         ; --- every corner inside: emit the triangle as it stands ---
-        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0Packed, lEmitUn0Done }
-        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1Packed, lEmitUn1Done }
-        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2Packed, lEmitUn2Done }
+        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0NoWarp, lEmitUn0Packed, lEmitUn0Done }
+        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1NoWarp, lEmitUn1Packed, lEmitUn1Done }
+        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2NoWarp, lEmitUn2Packed, lEmitUn2Done }
         StoreTriangleAdc{ }
 
         iaddiu iOutPtr,    iOutPtr,     9
@@ -453,9 +536,9 @@
             ClipJudge{ fPos1 }
             ClipJudge{ fPos2 }
 
-            EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitFan0Packed, lEmitFan0Done }
-            EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitFan1Packed, lEmitFan1Done }
-            EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2Packed, lEmitFan2Done }
+            EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitFan0NoWarp, lEmitFan0Packed, lEmitFan0Done }
+            EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitFan1NoWarp, lEmitFan1Packed, lEmitFan1Done }
+            EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2NoWarp, lEmitFan2Packed, lEmitFan2Done }
             WholeTriangleReject{ }
 
             iaddiu iOutPtr,    iOutPtr,     9

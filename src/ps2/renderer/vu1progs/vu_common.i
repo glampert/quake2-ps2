@@ -114,6 +114,9 @@
 ;   .x  iWin     the current window's address
 ;   .y  iDelta   +/- the step to the other window; flips on every kick
 ;   .z  iTagPtr  this batch's GIF tag block, iBase + kGifTags
+;   .w  free for the including program's own batch state, for the same reason:
+;       a flag read once per vertex is cheaper reloaded than held, and VI is
+;       what the clipper runs out of first (see the warp flag in textured)
 ; ---------------------------------------------------------------------
 #define kWindowSpill 1008
 

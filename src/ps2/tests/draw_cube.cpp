@@ -134,7 +134,7 @@ void EmitFace(rs::TriangleStream & trisStream, const int corners[4], const int t
     });
 }
 
-// One vertex's position, quantized into the two keyframe byte streams the lerped program reads:
+// One vertex's position, quantized into the two keyframe byte streams the keyframe format reads:
 // byte = (coord + H) * 255 / (2H), the exact inverse of the frontv/backv scale and the row-3
 // offset DrawRotatingCube sets up, both keyframes carrying the same bytes.
 void QuantizeVertex(vu1::LerpVertexBytes & dst, const int corners[4], const float u, const float v)

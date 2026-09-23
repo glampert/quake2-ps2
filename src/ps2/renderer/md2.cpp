@@ -12,10 +12,11 @@
  *  in it was validated and clamped there rather than here. The keyframes are the
  *  one part of the file the hunk still holds verbatim.
  *
- *  The interpolation itself runs on VU1 (lerped_triangles.vcl): the expansion
- *  streams the two keyframes' dtrivertx_t bytes verbatim and the microprogram
- *  converts and lerps them, with the pose's uniform 'move' translation folded
- *  into the MVP's row 3 so only the two scale vectors ride with each batch.
+ *  The interpolation itself runs on VU1 (the keyframe format of
+ *  textured_triangles.vcl): the expansion streams the two keyframes'
+ *  dtrivertx_t bytes verbatim and the microprogram converts and lerps them,
+ *  with the pose's uniform 'move' translation folded into the MVP's row 3 so
+ *  only the two scale vectors ride with each draw.
  *  A scalar EE path (ref_gl's shape: lerp into s_lerpedPositions[], draw
  *  through the plain textured program) is kept behind ps2_md2_vu_lerp=0 as
  *  the A/B debug path, and carries the powersuit-shell models, whose

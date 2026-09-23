@@ -918,11 +918,11 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
     AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
 }
 
-// The lerped equivalent: the same head as a world batch, then the two vertex streams interleaved
-// into the input as they unpack, then the MSCAL. Everything per-entity - the pose scales, the
-// light, the cull sign - went up once with the draw (vu1::LerpConstants), so the header carries
-// only what the batch is. The byte-position DMA must be whole source qwords, so an odd count
-// transfers one pad vertex the VU never reads.
+// The lerped equivalent, for the same microprogram: the same head as a world batch, then the two
+// vertex streams interleaved into the input as they unpack, then the MSCAL. Everything
+// per-entity - the pose scales, the light, the cull sign - went up once with the draw
+// (vu1::LerpConstants), so the header carries only what the batch is. The byte-position DMA must
+// be whole source qwords, so an odd count transfers one pad vertex the VU never reads.
 void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
                        const vu1::LerpPosChunk & posChunk, const vu1::LerpDrawAttrib * attribs,
                        int vertCount, DrawFlags flags)
@@ -967,7 +967,7 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
                      P2_UNPACK_V4_32, true,
                      /*writeLen=*/1, /*cycleLen=*/vu1::kLerpVertexQwords);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::Lerped));
+    AddStartProgram(vu1::ProgramAddress(vu1::Program::Textured));
 }
 
 // One particle chunk: header, batch constants and GIF tags unpacked inline, the particles

@@ -2,38 +2,54 @@
 ; textured_triangles.vcl
 ;
 ; A VU1 microprogram to draw a batch of gouraud-shaded, textured
-; triangles (triangle list). Preprocessed with vclpp; the -j flag
-; injects the VCL boilerplate (.init_*, --enter/--exit blocks).
+; triangles (triangle list), clipped against the near plane and the
+; guard band. Every triangle the renderer draws comes through here but
+; particles and sky - world surfaces, their lightmap pass, turbulent
+; water and MD2 models - and the batch header says which work applies.
+; Preprocessed with vclpp; the -j flag injects the VCL boilerplate
+; (.init_*, --enter/--exit blocks).
 ;
-; VU data memory layout (qwords; must match vu1.cpp):
-;   0-3  MVP matrix rows (row-vector convention)
+; VU data memory layout (qwords; must match vu1.h):
+;   0-3  MVP matrix rows (row-vector convention; for keyframes, row 3
+;        carries the MD2 lerp's 'move')
 ;   4    GS scale  (2048, 2048, zScale)
 ;   5    GS offset (2048 + width/2, 2048 + height/2, zScale)
 ;   6    clip-judgement scale (guard band for x/y, 1.0 for z)
+;   7    colour clamp (255, 255, 255, 255), for keyframes
 ;   8+   XTOP double buffers (VIF1 BASE/OFFSET)
+;   1010 the per-draw block: the dynamic lights, or the lerp constants
 ;
 ; Batch layout at XTOP:
-;   +0    header: vertex count in .w
-;   +1    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
-;   +8    vertices, 2 qwords each: position, then (rgba, s, t, q)
-;   +188  output window A: a copy of the 7 tags, then 3 qwords per
-;   +330  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 45 of them
+;   +0    header: colour mode .x, warp flag .y, vertex format .z,
+;         vertex count .w
+;   +1    parameters for the warp
+;   +2    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
+;   +9    vertices, in one of two formats:
+;           DrawVertex  2 qwords: position, then (rgba, s, t, q)
+;           keyframes   3 qwords: two keyframes' bytes, then the
+;                       model's (index, s, t, q) - see LerpTransform
+;   +189  output window A: a copy of the 7 tags, then 3 qwords per
+;   +331  output window B:   vertex - ST, RGBAQ, XYZ2 - up to 45 of them
 ;
 ; The GS packet goes to one of the two output windows rather than to
-; the space after the input vertices. The program fills a window, patches
-; its drawing tag with the vertex count it actually wrote, sends it with
-; XGKICK and carries on in the other one, so a full 90-vertex batch is
-; two kicks. That indirection buys nothing yet - the count is known up
-; front here - but it is what lets a clipping program, whose output count
-; is not known until it has run, place its packet at all.
+; the space after the input vertices, because how many vertices a batch
+; produces is not known until the clipper has run. The program fills a
+; window, patches its drawing tag with the vertex count it actually
+; wrote, sends it with XGKICK and carries on in the other one.
 ;
-; The color arrives packed in the .x word of the second input qword and
-; is raw-copied into an A+D qword: the native RGBAQ register layout is
-; exactly that u32 with Q in the word above, so the bytes never need
-; spreading apart (and Q rides inline, independent of the GIF's
-; ST-latched Q). Clipping is a whole-triangle guard band reject: clipw
-; flags outside the scaled |w| range set the ADC bit on all 3 vertices so
-; the GS skips the drawing kick.
+; A vertex is transformed to clip space first, in one of two forms picked
+; by the vertex format - a DrawVertex read as it lies, or two MD2
+; keyframes lerped - and from there on the two are the same vertex:
+; judged, clipped, fanned and emitted by the same code. A keyframe
+; triangle is also backface culled, and dropped outright rather than
+; sent with its ADC bit set.
+;
+; The colour comes in one of two forms too. Packed, it arrives in the .x
+; word of the vertex's second qword and is raw-copied into an A+D qword:
+; the native RGBAQ register layout is exactly that u32 with Q in the word
+; above, so the bytes never need spreading apart. Computed - from the
+; dynamic lights, or from the entity's light and the shade term - it is
+; four floats, emitted through ftoi0 as PACKED RGBAQ.
 ;--------------------------------------------------------------------
 
 #include "vu_common.i"
@@ -54,9 +70,18 @@
 #define kWindowVerts   45
 #define kWindowPrimTag 6
 
-; The dynamic light block, uploaded once per draw chain. Only colour mode 1
-; reads it. Must match vu1::kLightBlockAddr.
+; The per-draw block, uploaded once per draw chain: the dynamic lights for a
+; DrawVertex batch, which only colour mode 1 reads, or the lerp constants for
+; a keyframe batch. Must match vu1::kLightBlockAddr and vu1::kLerpBlockAddr.
 #define kLightBlock  1010
+#define kLerpBlock   1010
+
+; The keyframe colour's ceiling, a frame constant. See vu1::kColorClamp.
+#define kColorClamp  7
+
+; Where the input stride is parked, in .y - the clipper's spill qword, whose
+; .x is the survivor count. Must match vu1::kClipSpillAddr.
+#define kInputStride 1009
 
 ; The turbulent surface constants, uploaded once by vu1::Init and never
 ; rewritten. Only a warped batch reads them. Must match vu1::kWarpConstBlockAddr.
@@ -158,8 +183,94 @@
     madd acc,  fMVP2, vPos[z]
     ; The MVP's translation row is scaled by a hardwired 1.0, not by the vertex's
     ; own .w: PolyVertex parks its lightmap S there, and every other DrawVertex
-    ; producer writes a 1.0 that this no longer needs. Same reason
-    ; lerped_triangles.vcl does it - see the note on mod::PolyVertex.
+    ; producer writes a 1.0 that this no longer needs. LerpTransform does the
+    ; same, for its own reason - see the note on mod::PolyVertex.
+    madd vPos, fMVP3, vf00[w]
+
+    ; Guard-band clip judgement against |w|: scaled x/y, exact z.
+    mul.xyz   fJudge, vPos, fClipScale
+    clipw.xyz fJudge, vPos[w]
+
+#endmacro
+
+; ClipTransform's counterpart for keyframe batches (MD2 models): reads one
+; vertex as two keyframes' bytes plus the model's attribute qword, and
+; leaves the same three registers as ClipTransform does, in the same form -
+; so from here on a model's vertex is a world vertex, clipped, fanned and
+; emitted by the same code. Expects the lerp constants in fFrontV, fBackV,
+; fShadeLight and fStScale, and the colour ceiling in fColorClamp.
+;
+; The keyframe qwords hold integer bit patterns until itof0 converts them -
+; they must only ever be touched by raw loads and itof0, never an FMAC op
+; (integers look like denormals and would flush to zero). The attribute's
+; .x is one too, the model's own keyframe index; it rides into vStq
+; untouched, and is only ever lerped by the clipper and discarded by the
+; emit, both of which read it as the zero the VU makes of a denormal.
+;
+; Every register written here is also written by ClipTransform, which runs
+; instead of this on the other side of a branch, so each is first written
+; the way it is there - vPos and vStq whole, vCol as .xyz and .w apart - and
+; nothing ahead of the branch writes any of them. A masked write and an
+; unmasked one to the same register with a branch between them is where
+; openvcl has silently gone wrong before; within one block it is ordered.
+;
+; C-like pseudo-code ('in' is the qword array at iInPtr):
+;
+;   void LerpTransform(int offCur, int offOld, int offAttr,
+;                      vec4& pos, vec4& stq, vec4& col)
+;   {
+;       vec4 cur = itof(in[offCur]); // (x, y, z, normalindex), 0-255
+;       vec4 old = itof(in[offOld]); // (x, y, z, shade * 128)
+;       stq      = in[offAttr];      // (index, s, t, q)
+;
+;       // The skin's power-of-two correction. Linear, so it commutes with
+;       // the clipper's interpolation and the perspective divide after it:
+;       stq.yz *= stScale.yz;
+;
+;       // The shade term broadcast across the entity's light, which carries
+;       // the matching 1/128; alpha is the draw's, not the vertex's:
+;       col.xyz = clamp(shadeLight.xyz * old.w, 0, 255);
+;       col.w   = shadeLight.w;
+;
+;       // The two-keyframe pose lerp. The uniform 'move' term waits in mvp
+;       // row 3, and w comes from vf00's hardwired 1, not from the lerped
+;       // normal-index junk in .w:
+;       vec4 lerped = cur * frontv + old * backv;
+;       pos = lerped.x * mvp[0] + lerped.y * mvp[1]
+;           + lerped.z * mvp[2] + 1.0 * mvp[3];
+;
+;       clipFlagQueue.push(pos.xyz * clipScale.xyz, abs(pos.w));
+;   }
+#macro LerpTransform: vPos, vStq, vCol, offCur, offOld, offAttr
+
+    lq fCurI, offCur(iInPtr)
+    lq fOldI, offOld(iInPtr)
+    lq vStq,  offAttr(iInPtr)
+
+    ; Byte lanes to floats (raw integers until here - no FMAC before this):
+    itof0 fCur, fCurI
+    itof0 fOld, fOldI
+
+    ; Masked to .yz: .x is the model's index and .w is q, and neither is
+    ; this multiply's business.
+    mul.yz vStq, vStq, fStScale
+
+    ; The colour, from the byte the EE packed the quantized shade into - the
+    ; *old* keyframe's 4th, which held a normal index nothing here reads.
+    mul.xyz  vCol, fShadeLight, fOld[w]
+    move.w   vCol, fShadeLight
+    max.xyz  vCol, vCol, vf00
+    mini.xyz vCol, vCol, fColorClamp
+
+    ; The two-keyframe pose lerp (componentwise, not broadcast):
+    mul  acc,   fFrontV, fCur
+    madd fLerp, fBackV,  fOld
+
+    ; Position to clip space (row-vector MVP); w = 1 from vf00, never from
+    ; fLerp.w, which holds lerped normal-index junk:
+    mul  acc,  fMVP0, fLerp[x]
+    madd acc,  fMVP1, fLerp[y]
+    madd acc,  fMVP2, fLerp[z]
     madd vPos, fMVP3, vf00[w]
 
     ; Guard-band clip judgement against |w|: scaled x/y, exact z.
@@ -323,9 +434,10 @@
 ;       vec4 clipScale = vuMem[6];
 ;
 ;       // This batch, in the current double buffer:
-;       qword* batch    = &vuMem[XTOP];
-;       int    numVerts = batch[kBatchHeader].w;
-;       qword* in       = &batch[kVertexData]; // 2 qwords per vertex
+;       qword* batch     = &vuMem[XTOP];
+;       int    numVerts  = batch[kBatchHeader].w;
+;       int    colorMode = batch[kBatchHeader].x;
+;       qword* in        = &batch[kVertexData];
 ;
 ;       // Output goes to a window, which is opened by copying the 7
 ;       // GIF tag qwords the EE prepared to its head:
@@ -336,7 +448,9 @@
 ;
 ;       do // One triangle per iteration:
 ;       {
-;           if (vertsLeft < 3) // No room: send this window, start the other.
+;           // Room for the most a clipped triangle can fan out to - see
+;           // the note at the test. Never asked again inside the clipper.
+;           if (vertsLeft < 18)
 ;           {
 ;               win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
 ;               XGKICK(win);
@@ -344,29 +458,49 @@
 ;               out = OpenWindow(win); vertsLeft = kWindowVerts;
 ;           }
 ;
-;           DoVertex(0, 1,  0, 1, 2); // in[0..1] -> out[0..2]
-;           DoVertex(2, 3,  3, 4, 5); // in[2..3] -> out[3..5]
-;           DoVertex(4, 5,  6, 7, 8); // in[4..5] -> out[6..8]
+;           // Three corners to clip space, with position, (colour or
+;           // index, s, t, q) and computed colour each:
+;           vec4 p[3], stq[3], col[3];
+;           if (batch[kBatchHeader].z == DrawVertex)
+;           {
+;               for (i = 0..2) ClipTransform(in[2i], in[2i + 1], ...);
+;               in += 6;
+;           }
+;           else // Keyframes
+;           {
+;               for (i = 0..2) LerpTransform(in[3i], in[3i + 1], in[3i + 2], ...);
+;               in += 9;
+;               if (BackFacing(p[0], p[1], p[2])) continue; // no emit at all
+;           }
 ;
-;           // Whole-triangle guard band reject: if any of the 18 clip
-;           // flags of the 3 vertices above is set, adc becomes 0x8000,
-;           // i.e. bit 15 - the ADC bit - and the GS skips this
-;           // triangle's drawing kick.
-;           int adc = 0x7FFF + (clipFlagQueue.last3() != 0 ? 1 : 0);
-;           out[2].w = adc; // .w of each of the 3 vertices
-;           out[5].w = adc;
-;           out[8].w = adc;
-;
-;           in  += 6;
-;           out += 9;
-;           vertsLeft -= 3;
-;           numVerts  -= 3;
+;           if (clipFlagQueue.last3() == 0) // about 49 triangles in 50
+;           {
+;               for (i = 0..2) EmitVertex(p[i], stq[i], col[i], &out[3i]);
+;               out[2].w = out[5].w = out[8].w = 0x7FFF; // ADC clear: draw
+;               out += 9; vertsLeft -= 3;
+;           }
+;           else
+;           {
+;               // Sutherland-Hodgman against near and the four guard-band
+;               // sides (vu_clip.i), then fan the survivors from corner 0:
+;               int n = ClipPolygon(p, stq, col); // 0, or 3 to 8 corners
+;               for (i = 1; i < n - 1; ++i)
+;               {
+;                   EmitVertex(corner 0, i and i + 1, &out[0..8]);
+;                   out[2].w = out[5].w = out[8].w = Adc(judged again);
+;                   out += 9; vertsLeft -= 3;
+;               }
+;           }
+;           numVerts -= 3;
 ;       }
 ;       while (numVerts != 0);
 ;
-;       // The last window always holds at least one triangle.
-;       win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
-;       XGKICK(win);
+;       // Skipped if the last triangles were all culled or clipped away.
+;       if (vertsLeft != kWindowVerts)
+;       {
+;           win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;           XGKICK(win);
+;       }
 ;   }
 #vuprog VU1Prog_TexturedTriangles
 
@@ -401,6 +535,17 @@
     ; Reloaded at each use it is live for two instructions.
     ilw.y  iWarp, kBatchHeader(iBase)
     isw.w  iWarp, kWindowSpill(vi00)
+
+    ; Input qwords per triangle, for the advance at the bottom of the loop: three
+    ; DrawVertex of 2 qwords, or three keyframe vertices of 3. Parked rather than
+    ; held, for the same reason as the warp flag; see the advance for why it is
+    ; not simply a constant in each format's block.
+    ilw.z  iFormat, kBatchHeader(iBase)
+    iaddiu iStride, vi00, 6
+    ibeq   iFormat, vi00, lStrideSet
+    iaddiu iStride, vi00, 9
+    lStrideSet:
+    isw.y  iStride, kInputStride(vi00)
 
     --barrier
 
@@ -462,9 +607,82 @@
         OpenOutputWindow{ }
         lWindowHasRoom:
 
+        ; Which vertex format this batch carries, re-read from the header rather
+        ; than held: VI is what the clipper runs out of, and iBase is live anyway.
+        ;
+        ; Branched on once a triangle rather than once a vertex, so each side is
+        ; one block the scheduler can interleave three corners through. The
+        ; keyframe side comes *second* in the source, and that matters: openvcl
+        ; allocates registers by source-order interval, so the light block loaded
+        ; above - twelve registers, last read in the DrawVertex side - is over
+        ; before the keyframe side begins, and the two never compete.
+        ilw.z iFormat, kBatchHeader(iBase)
+        ibne  iFormat, vi00, lKeyframes
+
         ClipTransform{ fPos0, fStq0, fCol0, 0, 1, lLight0Done }
         ClipTransform{ fPos1, fStq1, fCol1, 2, 3, lLight1Done }
         ClipTransform{ fPos2, fStq2, fCol2, 4, 5, lLight2Done }
+        b lTransformed
+
+    lKeyframes:
+
+        ; The draw's lerp constants - sent up once per draw in the light block's
+        ; place, and read once per triangle for the same reason the lights are.
+        ; The last carries the backface cull sign in .x and the ST scale in .yz.
+        lq fFrontV,     kLerpBlock + 0(vi00)
+        lq fBackV,      kLerpBlock + 1(vi00)
+        lq fShadeLight, kLerpBlock + 2(vi00)
+        lq fStScale,    kLerpBlock + 3(vi00)
+        lq fColorClamp, kColorClamp(vi00)
+
+        LerpTransform{ fPos0, fStq0, fCol0, 0, 1, 2 }
+        LerpTransform{ fPos1, fStq1, fCol1, 3, 4, 5 }
+        LerpTransform{ fPos2, fStq2, fCol2, 6, 7, 8 }
+
+        ; Backface cull, ahead of the clipper, which is where it has to be: a
+        ; cut does not change a triangle's facing, and a back face should cost
+        ; nothing past this point. So it is dropped outright - no clip, no
+        ; emit, no GIF traffic - where it used to go to the GS with its ADC bit
+        ; set, which for a closed model is about half of every one sent.
+        ;
+        ; The sign of det[x y w] over the three clip-space corners: the
+        ; screen-space signed area times w0*w1*w2. It agrees with the screen
+        ; test wherever all three corners are in front of the eye and, needing
+        ; no divide, is also right where they are not - which the screen test,
+        ; ahead of a clipper, never could be. Taken as p0 . (e1 x e2), each
+        ; (x, y, w) triple with its w moved into z for the outer product; edges
+        ; rather than the corners themselves, since a small distant triangle has
+        ; three nearly equal rows whose determinant would cancel its precision
+        ; away before the sign came out.
+        sub        fEdge1, fPos1,  fPos0
+        sub        fEdge2, fPos2,  fPos0
+        add.z      fEdge1, vf00,   fEdge1[w]
+        add.z      fEdge2, vf00,   fEdge2[w]
+        move.xy    fEye,   fPos0
+        add.z      fEye,   vf00,   fPos0[w]
+        opmula.xyz acc,    fEdge1, fEdge2
+        opmsub.xyz fNorm,  fEdge2, fEdge1
+        mul.xyz    fArea,  fNorm,  fEye
+        add.x      fArea,  fArea,  fArea[y]
+        add.x      fArea,  fArea,  fArea[z]
+
+        ; The sign travels as data, never flags (openvcl reorders around flag
+        ; reads): clamped to [-1, +1] so the ftoi4 cannot overflow the 16 bits
+        ; mtir moves, leaving the sign in bit 15, which is what ibltz reads.
+        ;
+        ; The draw's cull sign goes on first, so the test is always just "is it
+        ; negative": a positive sign culls negative determinants, a negative one
+        ; positive ones, and zero flattens them all to zero, which is not
+        ; negative, so nothing is culled. Its magnitude matters as much as its
+        ; sign - see rs::kCullSignScale.
+        mul.x      fArea,  fArea,  fStScale[x]
+        mini.x     fArea,  fArea,  vf00[w]
+        max.x      fArea,  fArea,  fMinusOne[x]
+        ftoi4.x    fArea,  fArea
+        mtir       iCull,  fArea[x]
+        ibltz      iCull,  lTriangleAdvance
+
+    lTransformed:
 
         ; Did any corner leave the volume? About one triangle in fifty
         ; does; the rest go straight out below.
@@ -552,13 +770,21 @@
 
     lTriangleAdvance:
 
-        iaddiu iInPtr,    iInPtr,     6
+        ; The input advances here, at the bottom, and nowhere else - by the stride
+        ; the prologue parked. It is tempting to advance inside each format's block,
+        ; where the stride is a constant, and that is exactly what openvcl gets
+        ; wrong: it sizes a register's life by source order, so a pointer whose last
+        ; write sits mid-loop looks dead from there to the bottom, and it handed
+        ; iInPtr's register to the cull verdict, the ADC word and the clipper's
+        ; walk pointer - with the loop's back edge still to read it. Written last,
+        ; its life spans the whole loop.
+        ilw.y  iStride,   kInputStride(vi00)
+        iadd   iInPtr,    iInPtr,    iStride
         iaddi  iNumVerts, iNumVerts, -3
         ibgtz  iNumVerts, lTriangleLoop
 
-    ; The last window always holds at least one triangle: a window is
-    ; closed only when a triangle will not fit, and that triangle goes
-    ; straight into the fresh one. So this never kicks an empty packet.
+    ; The last window can be empty - its triangles all culled or clipped
+    ; away - and the macro sends nothing then. See its note.
     CloseOutputWindowAndKick{ lKicked3 }
 
 #endvuprog

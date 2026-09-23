@@ -20,7 +20,6 @@
 namespace ps2::vu1 {
 
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_TexturedTriangles);
-PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_LerpedTriangles);
 PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_Particles);
 
 namespace {
@@ -54,7 +53,6 @@ void Init()
     // count up to even, so each program's base rounds up too.
     const struct { VUCode code; u32 instructionCount; } programs[] = {
         { VU1Prog_TexturedTriangles_Code(), VU1Prog_TexturedTriangles_InstructionCount() },
-        { VU1Prog_LerpedTriangles_Code(),   VU1Prog_LerpedTriangles_InstructionCount()   },
         { VU1Prog_Particles_Code(),         VU1Prog_Particles_InstructionCount()         },
     };
     static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");

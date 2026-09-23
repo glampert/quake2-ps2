@@ -44,13 +44,11 @@ enum struct ProgramAddr : u32 {};
 
 enum class Program
 {
-    // World geometry: transform, clip, gouraud triangles. Its batch header picks the
-    // per-vertex work: how the colour arrives, and whether the texture coordinates
-    // animate (for wrap/turbulent surfaces). Clips and splits triangles fully in the VU.
+    // Every triangle but sky: transform, clip, gouraud triangles. Its batch header picks the
+    // per-vertex work: the vertex format (a DrawVertex, or two MD2 keyframes lerped on the VU),
+    // how the colour arrives, and whether the texture coordinates animate (for wrap/turbulent
+    // surfaces). Clips and splits triangles fully in the VU.
     Textured,
-
-    // MD2 alias models: two keyframes lerped on the VU ahead of the transform.
-    Lerped,
 
     // Camera-facing billboards expanded to GS sprites.
     Particles,
@@ -117,7 +115,8 @@ static_assert(kClipScratchAddr + kClipScratchQwords == 1010, "...and ends where 
 
 // The top two qwords of that scratch are not buffer space. They are a spill area for integer
 // state the microprograms deliberately do not keep in VI registers: 1008 the output window's own
-// address and step (see vu_common.i), 1009 the clipper's survivor pointer (see vu_clip.i).
+// address and step (see vu_common.i) with the warp flag in .w, 1009 the clipper's survivor count
+// in .x (see vu_clip.i) and the input stride per triangle in .y (see textured_triangles.vcl).
 //
 // openvcl allocates the 13 usable VI registers by live interval, so a value that is live across
 // a whole loop but read in only one place is dearer held than parked - it holds a register for
@@ -416,13 +415,14 @@ constexpr WarpConstants kWarpConstants = {
 };
 
 // ------------------------------------------------------------------------------------------------
-// Keyframe-lerped triangles (MD2 alias models), must match lerped_triangles.vcl
+// Keyframe-lerped triangles (MD2 alias models): the keyframe format of textured_triangles.vcl
 // ------------------------------------------------------------------------------------------------
 
 // Vertices one lerped VU run carries: three qwords each against the world path's two, so fewer
-// fit. Whole triangles, and even - so every full chunk's slice of the 8-byte position stream is
-// whole source qwords starting 16-byte aligned, which together make it a multiple of six.
-constexpr int kMaxLerpVertsPerBatch = 72;
+// fit ahead of the same output windows. Whole triangles, and even - so every full chunk's slice of
+// the 8-byte position stream is whole source qwords starting 16-byte aligned, which together make
+// it a multiple of six.
+constexpr int kMaxLerpVertsPerBatch = 60;
 
 // A lerp batch opens exactly as a world batch does - header (BatchVertexFormat::Keyframes in .z),
 // parameter qword, GIF tags - and its vertices start at the same kVertexDataAddr. What differs is
@@ -442,17 +442,10 @@ constexpr int kLerpOldOffset    = 1;
 constexpr int kLerpAttribOffset = 2;
 static_assert(kLerpOldOffset == kLerpCurOffset + 1, "One position unpack writes cur then old, back to back");
 
-// The lerp path's own pair of output windows, straight after the input, working exactly as the
-// world path's above: a full chunk is two kicks.
-constexpr int kLerpMaxVertsPerWindow  = 36;
-constexpr int kLerpOutputWindowQwords = kNumGifTagQwords + (3 * kLerpMaxVertsPerWindow);
-constexpr int kLerpWindowAAddr        = kVertexDataAddr + (kLerpVertexQwords * kMaxLerpVertsPerBatch);
-constexpr int kLerpWindowBAddr        = kLerpWindowAAddr + kLerpOutputWindowQwords;
-
-static_assert(kLerpWindowAAddr == 225 && kLerpWindowBAddr == 340 && kLerpOutputWindowQwords == 115, "Window layout must match the #defines in lerped_triangles.vcl");
-static_assert(kLerpWindowBAddr + kLerpOutputWindowQwords <= kDoubleBufferOffset, "Lerp batch input + both output windows must fit one double-buffer half");
-static_assert((kLerpMaxVertsPerWindow % 3) == 0, "A window holds whole triangles");
-static_assert(kMaxLerpVertsPerBatch == 2 * kLerpMaxVertsPerWindow, "A full lerp chunk should be exactly two kicks");
+// The output windows are the world's own. So the keyframe input has to fit in the space the world's
+// DrawVertex input does - which it fills exactly, and is what sets kMaxLerpVertsPerBatch.
+static_assert(kVertexDataAddr + (kLerpVertexQwords * kMaxLerpVertsPerBatch) <= kOutputWindowAAddr,
+              "Keyframe input must fit below the output windows it shares with the world path");
 static_assert((kMaxLerpVertsPerBatch % 3) == 0, "Lerp chunks are whole triangles");
 static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must be whole qwords");
 

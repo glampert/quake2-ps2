@@ -40,6 +40,13 @@
                         "2": { "name": "variable.other.constant.vcl" }
                     }
                 },
+                {
+                    "match": "^\\s*(#\\s*include)\\s+(\"[^\"]*\")",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.vcl" },
+                        "2": { "name": "string.quoted.double.include.vcl" }
+                    }
+                },
                 { "name": "keyword.control.directive.vcl", "match": "^\\s*#\\s*\\w+" }
             ]
         },

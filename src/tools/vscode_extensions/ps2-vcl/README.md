@@ -2,7 +2,15 @@
 
 Syntax highlighting for the PS2 VU microprograms in this repository:
 `.vcl` sources (openvcl/vclpp dialect, including the `#macro`/`#vuprog`
-preprocessor directives) and the assembled `.vsm` output.
+preprocessor directives), the `.i` files they `#include`, and the assembled
+`.vsm` output.
+
+The includes are matched by path, as `**/vu1progs/*.i`, rather than by
+extension: `.i` is also preprocessed C, which VSCode's built-in C support
+claims, and this extension is installed for every workspace. A path pattern
+outranks an extension match, so it wins here and nowhere else. An include
+kept anywhere other than a `vu1progs/` directory needs adding to
+`filenamePatterns` in `package.json`.
 
 ## Installing
 

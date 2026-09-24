@@ -1,7 +1,7 @@
 {
     "name": "ps2-vcl",
     "displayName": "PS2 VCL/VU Assembly",
-    "description": "Syntax highlighting for PlayStation 2 VU microprograms written in VCL (openvcl/vclpp) and raw VU assembly (.vsm).",
+    "description": "Syntax highlighting for PlayStation 2 VU microprograms written in VCL (openvcl/vclpp), their shared .i includes, and raw VU assembly (.vsm).",
     "version": "0.1.0",
     "publisher": "PS2_QUAKE",
     "engines": {
@@ -21,6 +21,9 @@
                 "extensions": [
                     ".vcl",
                     ".vsm"
+                ],
+                "filenamePatterns": [
+                    "**/vu1progs/*.i"
                 ],
                 "configuration": "./language-configuration.json"
             }

@@ -14,13 +14,20 @@ kept anywhere other than a `vu1progs/` directory needs adding to
 
 ## Installing
 
-Symlink this folder into your local VSCode extensions directory and
-reload the editor:
+Run `Developer: Install Extension from Location...` from the command palette
+and point it at this folder. VSCode registers it where it lies, so edits here
+are what it loads.
 
-```bash
-ln -s "$(pwd)/src/tools/vscode_extensions/ps2-vcl" ~/.vscode/extensions/<user_name>.ps2-vcl-0.1.0
-```
+A symlink into `~/.vscode/extensions` also works, but its name has to be the
+extension's id - `<publisher>.<name>-<version>`, lowercased, which is
+`ps2_quake.ps2-vcl-0.1.0` - and VSCode has to have registered it. One named
+after anything else loads under an id VSCode's registry does not know, and it
+marks the extension removed at every start (`Marked extension as removed` in
+the shared process log).
 
-Then run `Developer: Reload Window` from the command palette. If the
-language doesn't switch, run `Developer: Install Extension from Location...`
-and point it at this folder instead. Restart VSCode.
+## After editing it
+
+VSCode caches extension manifests. The first reload after changing
+`package.json` still runs the cached copy, notices it is stale a moment later
+and drops it (`Invalidating Cache` in the window's log) - so it takes a second
+`Developer: Reload Window` before a change there shows.

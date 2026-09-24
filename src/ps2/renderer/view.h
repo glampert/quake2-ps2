@@ -13,6 +13,7 @@ namespace ps2::view {
 
 void Init();
 
+#if PS2_QUAKE_PROFILE
 // What the view decided to submit this frame - what it walked, culled and chained. What the
 // renderer then did with it is rs::DrawStats; the two were one struct until the submission half
 // became the streams' business to count.
@@ -32,6 +33,7 @@ struct DrawStats
 
 // Stats of the most recent RenderFrame; all zeros before the first 3D frame.
 DrawStats & GetStats();
+#endif // PS2_QUAKE_PROFILE
 
 // Entity angles + origin as a world transform, in the row-vector convention
 // (rotations apply first, then the translation). 'flipPitchAngle' picks the sign

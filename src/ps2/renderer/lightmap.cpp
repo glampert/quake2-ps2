@@ -112,7 +112,9 @@ public:
         return m_chains[index];
     }
 
+#if PS2_QUAKE_PROFILE
     const Stats & GetStats() const { return m_stats; }
+#endif // PS2_QUAKE_PROFILE
 
 private:
     void NextAtlas();
@@ -151,7 +153,9 @@ private:
     // luxel past full brightness and the store step can rescale it in one go.
     float m_blockLights[kMaxSurfaceLuxels * 3] = {};
 
+#if PS2_QUAKE_PROFILE
     Stats m_stats = {};
+#endif // PS2_QUAKE_PROFILE
 
     // ref_gl's gl_modulate: scales every luxel as it is accumulated.
     const cvar_t * m_modulate = nullptr;
@@ -258,14 +262,15 @@ void LightmapManager::BeginBuilding()
 {
     ReleaseAtlases();
     NextAtlas();
-    m_stats    = {};
+
+    PS2_PROFILE_ONLY(m_stats = {});
     m_building = true;
 }
 
 void LightmapManager::EndBuilding()
 {
     m_building = false;
-    m_stats.atlases = m_atlasCount;
+    PS2_PROFILE_ONLY(m_stats.atlases = m_atlasCount);
 
     Com_DPrintf("Lightmaps: %d atlas(es) of %dx%d, %d KB of EE RAM.\n",
                 m_atlasCount, kLightmapTextureWidth, kLightmapTextureHeight,
@@ -615,9 +620,11 @@ void LightmapManager::CreateSurfaceLightmap(mod::ModelSurface & surf)
 
 void LightmapManager::BeginFrame()
 {
+#if PS2_QUAKE_PROFILE
     const int atlases = m_stats.atlases;
     m_stats = {};
     m_stats.atlases = atlases;
+#endif // PS2_QUAKE_PROFILE
 }
 
 void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & viewDef, const int frameCount)
@@ -641,7 +648,7 @@ void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & vi
 
         surf.lightmapDynamicFrame = frameCount;
         m_atlases[atlas].MarkPixelsDirty();
-        ++m_stats.dynamicUpdates;
+        PS2_PROFILE_ONLY(++m_stats.dynamicUpdates);
     }
     else
     {
@@ -693,8 +700,10 @@ void LightmapManager::ChainSurface(mod::ModelSurface & surf, const refdef_t & vi
             surf.lightmapDynamicFrame = kNoDynamicFrame;
             m_atlases[atlas].MarkPixelsDirty();
 
+#if PS2_QUAKE_PROFILE
             if (stale) { ++m_stats.restoreUpdates; }
             else       { ++m_stats.styleUpdates;   }
+#endif // PS2_QUAKE_PROFILE
         }
     }
 
@@ -780,9 +789,11 @@ void ClearChains()
     s_manager.ClearChains();
 }
 
+#if PS2_QUAKE_PROFILE
 const Stats & GetStats()
 {
     return s_manager.GetStats();
 }
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::lm

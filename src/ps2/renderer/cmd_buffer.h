@@ -33,6 +33,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/debug/profile.h"
 
 #include <cstdint>
 #include <packet2.h>
@@ -273,6 +274,7 @@ void DrainBeforeWorldLoad();
 // Debug counters
 // --------------------------------------------------------------------------------------------
 
+#if PS2_QUAKE_PROFILE
 // Most bytes either half has ever held, against kHalfBytes. The two together are what
 // says whether the capacity is right.
 u32 PeakBytes();
@@ -286,5 +288,6 @@ u32 BytesLastFrame();
 // emergency drains is the good case; the drain firing every frame means the capacity is too small.
 int KicksLastFrame();
 int EmergencyDrainsLastFrame();
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::cmdbuf

@@ -436,7 +436,9 @@ void PresentFrameInFlight()
 
 } // namespace
 
+#if PS2_QUAKE_PROFILE
 DrawStats detail::g_drawStats = {};
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // 2D primitives
@@ -598,9 +600,9 @@ void BeginFrame(const bool dither)
     PS2_AssertMsg(!s_frameStarted, "BeginFrame: frame already started!");
     s_frameStarted = true;
 
-    // Safe here rather than a frame late: PS2_BeginFrame runs debug::FrameLogCapture, which reads
-    // the finished frame's counters, before it calls this.
-    GetStats() = {};
+    // Reset. Safe here rather than a frame late: PS2_BeginFrame runs debug::FrameLogCapture,
+    // which reads the finished frame's counters, before it calls this.
+    PS2_PROFILE_ONLY(GetStats() = {});
 
     // Retires and shows the previous frame when EndFrame left it drawing; a no-op when EndFrame
     // presented it immediately, which is what lets the two paths share everything below.
@@ -655,6 +657,7 @@ void KickAndWait()
     cmdbuf::Drain();
 }
 
+#if PS2_QUAKE_PROFILE
 int Gif2DPeakQwords()
 {
     // Folds in the block still open, so a mid-frame reader (the overlay draws during the 2D pass)
@@ -662,6 +665,7 @@ int Gif2DPeakQwords()
     const int used = s_gifBlock.has_value() ? s_gifBlock->QwordCount() : 0;
     return (used > s_gifBlockPeakQwords) ? used : s_gifBlockPeakQwords;
 }
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // 3D draws
@@ -1204,9 +1208,11 @@ void Submit(vu1::ParticleVertex * __restrict & particles, const math::Mat4 & mvp
     PS2_AssertMsg(s_particles != nullptr, "rs::Submit of particles without an rs::Begin!");
     PS2_AssertMsg(particles == s_particles, "rs::Submit of particles given a pointer rs::Begin did not return!");
 
+#if PS2_QUAKE_PROFILE
     DrawStats & stats = GetStats();
     ++stats.drawBatches;
     stats.particles += s_particleCount;
+#endif // PS2_QUAKE_PROFILE
 
     DrawParticles(mvp, texture, quadOffset, s_particles, s_particleCount, flags);
 

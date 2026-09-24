@@ -782,13 +782,13 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     {
         if (ShouldCullEntity(entity, frame, oldFrame))
         {
-            ++view::GetStats().boxesCulled;
+            PS2_PROFILE_ONLY(++view::GetStats().boxesCulled);
             return;
         }
     }
 
     PS2_Assert(mesh.numXyz > 0 && mesh.numXyz <= MAX_VERTS);
-    ++view::GetStats().entities;
+    PS2_PROFILE_ONLY(++view::GetStats().entities);
 
     // The entity's shade colour. The normal index is read from the *current*
     // frame only - the pose interpolates, the lighting does not (ref_gl

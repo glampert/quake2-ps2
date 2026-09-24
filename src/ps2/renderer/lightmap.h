@@ -152,6 +152,7 @@ const mod::ModelSurface * AtlasChain(int index);
 // caller (a brush model entity, or the next frame's world) starts clean.
 void ClearChains();
 
+#if PS2_QUAKE_PROFILE
 // Per-frame counters for the ps2_show_drawstats overlay. Cleared by BeginFrame.
 struct Stats
 {
@@ -160,7 +161,7 @@ struct Stats
     int dynamicUpdates; // Surfaces rebuilt with a dynamic light folded in.
     int restoreUpdates; // Surfaces rebuilt back to their static lighting.
 };
-
 const Stats & GetStats();
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::lm

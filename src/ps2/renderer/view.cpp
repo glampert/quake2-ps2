@@ -163,7 +163,9 @@ constexpr int kBatchMaxVerts = 3 * 768; // 768 whole triangles per batch
 
 // Performance counters for the frame, reset by RenderFrame and read through
 // GetStats() by the ps2_show_drawstats overlay.
+#if PS2_QUAKE_PROFILE
 static DrawStats s_drawStats = {};
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // Translucent surface collection
@@ -186,7 +188,7 @@ void PushAlphaSurface(const mod::ModelSurface & surf, const tex::Texture & textu
     entry.texture = &texture;
     entry.mvp     = &mvp;
 
-    ++s_drawStats.surfacesAlpha;
+    PS2_PROFILE_ONLY(++s_drawStats.surfacesAlpha);
 }
 
 // Parks a brush model entity's transform where the deferred pass can still
@@ -327,7 +329,7 @@ Q_ALWAYS_INLINE bool ShouldCullBBox(float * mins, float * maxs)
     {
         if (BOX_ON_PLANE_SIDE(mins, maxs, &plane) == 2)
         {
-            ++s_drawStats.boxesCulled;
+            PS2_PROFILE_ONLY(++s_drawStats.boxesCulled);
             return true;
         }
     }
@@ -340,7 +342,7 @@ void SetupFrame(const refdef_t & viewDef)
 
     lm::BeginFrame();
 
-    s_drawStats = {};
+    PS2_PROFILE_ONLY(s_drawStats = {});
     s_alphaSurfaceCount = 0;
     s_alphaEntityMatrixCount = 0;
 
@@ -574,7 +576,7 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
         return; // Entirely outside the view frustum.
     }
 
-    ++s_drawStats.nodesWalked;
+    PS2_PROFILE_ONLY(++s_drawStats.nodesWalked);
 
     // Leaf: stamp its surfaces as drawable this frame.
     if (node->contents != -1)
@@ -655,7 +657,7 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
         }
 
         // Opaque: thread onto its texture's draw chain.
-        ++s_drawStats.surfaces;
+        PS2_PROFILE_ONLY(++s_drawStats.surfaces);
         const tex::Texture * texture = TextureAnimation(surf->texInfo, s_textureAnimFrame);
         if (texture->textureChain == nullptr)
         {
@@ -987,7 +989,7 @@ constexpr int kMaxWarpPolyVerts = 64 + 2;
 void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawState & state)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::TurbSurfs);
-    ++s_drawStats.surfacesTurb;
+    PS2_PROFILE_ONLY(++s_drawStats.surfacesTurb);
 
     for (const mod::ModelPoly * poly = surf.polys; poly != nullptr; poly = poly->next)
     {
@@ -1480,7 +1482,7 @@ void RenderDLights(const refdef_t & viewDef)
             GatherTriangle(wedge, state);
         }
 
-        ++s_drawStats.dlights;
+        PS2_PROFILE_ONLY(++s_drawStats.dlights);
     }
 
     rs::Submit(*state.stream);
@@ -1789,7 +1791,7 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         return;
     }
 
-    ++s_drawStats.entities;
+    PS2_PROFILE_ONLY(++s_drawStats.entities);
 
     // The per-surface side test runs in model space, so the camera goes there
     // rather than every surface plane coming out - one transform instead of N.
@@ -1912,7 +1914,8 @@ void DrawBrushModelEntity(const refdef_t & viewDef, const entity_t & entity)
         // volume is judged in world space and this is not the world's matrix -
         // so this is false unless the VU clipper is on, which does not care.
 
-        ++s_drawStats.surfaces;
+        PS2_PROFILE_ONLY(++s_drawStats.surfaces);
+
         for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
         {
             GatherPolyTriangles(*poly, state);
@@ -1965,7 +1968,7 @@ void DrawSpriteEntity(const entity_t & entity)
         skin = &tex::DebugTexture(); // Frame's .pcx failed to load.
     }
 
-    ++s_drawStats.entities;
+    PS2_PROFILE_ONLY(++s_drawStats.entities);
 
     // Sprite images are rarely power-of-two (48x48, 144x144), and normalized
     // ST spans the power-of-two TEX0 extent, not the image.
@@ -2053,7 +2056,7 @@ void DrawBeamEntity(const entity_t & entity)
     PerpendicularVector(perpVec, normalizedDirection);
     VectorScale(perpVec, static_cast<float>(entity.frame) / 2.0f, perpVec);
 
-    ++s_drawStats.entities;
+    PS2_PROFILE_ONLY(++s_drawStats.entities);
 
     const float alpha = (entity.alpha > 0.0f && entity.alpha <= 1.0f) ? entity.alpha : 1.0f;
 
@@ -2133,7 +2136,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
         CalcPointLightColor(viewDef, entity.origin, color, lightSpot);
     }
 
-    ++s_drawStats.entities;
+    PS2_PROFILE_ONLY(++s_drawStats.entities);
 
     const auto channel = [](float c) -> u32
     {
@@ -2360,7 +2363,7 @@ void Init()
 
 void BeginRegistration()
 {
-    s_drawStats = {};
+    PS2_PROFILE_ONLY(s_drawStats = {});
 
     // New map: forget the previous map's clusters so the first frame re-marks.
     s_viewCluster     = kInvalidCluster;
@@ -2369,10 +2372,12 @@ void BeginRegistration()
     s_oldViewCluster2 = kInvalidCluster;
 }
 
+#if PS2_QUAKE_PROFILE
 DrawStats & GetStats()
 {
     return s_drawStats;
 }
+#endif // PS2_QUAKE_PROFILE
 
 math::Mat4 MakeEntityMatrix(const entity_t & entity, const bool flipPitchAngle)
 {

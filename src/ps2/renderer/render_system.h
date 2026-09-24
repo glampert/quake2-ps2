@@ -9,6 +9,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/debug/profile.h"
 #include "ps2/math/vec_mat.h"
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/gs.h"
@@ -90,6 +91,7 @@ constexpr float CullSignFor(const FaceCull cull)
 // Debug draw stats trackers
 // ------------------------------------------------------------------------------------------------
 
+#if PS2_QUAKE_PROFILE
 // What the renderer submitted this frame; what the view decided to submit is view::DrawStats.
 // Counted by the streams and the draws below, so no caller adds to it. Cleared by BeginFrame.
 struct DrawStats
@@ -174,6 +176,7 @@ Q_ALWAYS_INLINE void CountClippedTriangle(const u32 planesCrossed, const int sur
 // High-water of one GIF block, in qwords. Measured against the command buffer half it must fit
 // inside (cmdbuf::kHalfBytes); shown as "Gif2DPk" in the draw-stats overlay.
 int Gif2DPeakQwords();
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // Initialization / frame lifecycle
@@ -532,14 +535,16 @@ public:
 
         if (count == 0)
         {
-            ++GetStats().trisCulled;
+            PS2_PROFILE_ONLY(++GetStats().trisCulled);
             return;
         }
 
+#if PS2_QUAKE_PROFILE
         if (planesCrossed != 0)
         {
             CountClippedTriangle(planesCrossed, count);
         }
+#endif // PS2_QUAKE_PROFILE
 
         // The survivors fan-triangulate.
         const int numTriangles = count - 2;
@@ -580,9 +585,11 @@ private:
             // to land after the data, and the rest of the claim is what makes room for them.
             cmdbuf::Commit(m_verts, m_vertCount);
 
+#if PS2_QUAKE_PROFILE
             DrawStats & stats = GetStats();
             ++stats.drawBatches;
             stats.trisDrawn += m_vertCount / 3;
+#endif // PS2_QUAKE_PROFILE
 
             DrawTriangles(*m_mvp, *m_texture, m_verts, m_vertCount, m_drawFlags);
 
@@ -802,9 +809,11 @@ private:
             // Whole groups: a partly filled last group is all a cycle wastes.
             cmdbuf::Commit(m_chunks, ChunkCount(m_vertCount, vu1::kMaxLerpVertsPerBatch));
 
+#if PS2_QUAKE_PROFILE
             DrawStats & stats = GetStats();
             ++stats.drawBatches;
             stats.trisDrawn += m_vertCount / 3;
+#endif // PS2_QUAKE_PROFILE
 
             // Through locals: DrawLerpedTriangles takes these by const reference, and handing it
             // &m_frontv would make the whole stream address-taken. See the note on this class.
@@ -842,7 +851,7 @@ private:
         if (m_lastFlushedCount > 0)
         {
             // A batch, but not new geometry, so trisDrawn is deliberately left alone.
-            ++GetStats().drawBatches;
+            PS2_PROFILE_ONLY(++GetStats().drawBatches);
 
             const math::Vec3 frontv = m_frontv; // as Flush, see there
             const math::Vec3 backv  = m_backv;

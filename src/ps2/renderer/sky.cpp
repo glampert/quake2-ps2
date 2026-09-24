@@ -31,6 +31,7 @@
 #include "ps2/renderer/clip.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/profile.h"
 
 #include <cmath>
 #include <cstdio>
@@ -571,7 +572,7 @@ void DrawSkyBox(const refdef_t & viewDef, const math::Mat4 & viewProj)
         // One batch per face: each binds its own texture, so they could never
         // have shared one anyway.
         rs::Submit(trisStream);
-        ++view::GetStats().skyFaces;
+        PS2_PROFILE_ONLY(++view::GetStats().skyFaces);
     }
 }
 

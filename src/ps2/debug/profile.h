@@ -212,6 +212,8 @@ inline const char * ProfileFormatMillisec(CpuCycles, char * outBuff, size_t) { r
     #define PS2_PROFILE_SCOPED_EVENT(name) \
         const ps2::debug::ProfileEventScoped PS2_PROFILE_CONCAT(profScope, __LINE__) (&(name))
 
+    #define PS2_PROFILE_ONLY(...) __VA_ARGS__
+
 #else // PS2_QUAKE_PROFILE
 
     #define PS2_PROFILE_SCOPED(label, flags, sortKey)
@@ -222,5 +224,7 @@ inline const char * ProfileFormatMillisec(CpuCycles, char * outBuff, size_t) { r
     #define PS2_PROFILE_DECLARE_EVENT(name)                       enum : int { name##_ProfilingDisabled = 0 }
     #define PS2_PROFILE_DEFINE_EVENT(name, label, flags, sortKey) enum : int { name##_ProfilingDisabledDef = 0 }
     #define PS2_PROFILE_SCOPED_EVENT(name)
+
+    #define PS2_PROFILE_ONLY(...)
 
 #endif // PS2_QUAKE_PROFILE

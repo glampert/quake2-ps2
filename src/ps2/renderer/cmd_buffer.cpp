@@ -72,15 +72,21 @@ static int s_kickedQwords = 0;
 static packet2_t * s_packets[2] = {};
 static int s_half = 0;
 
+#if PS2_QUAKE_PROFILE
 // High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
 // copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
-static u32 s_peakQwords = 0;
-static u32 s_frameQwords = 0; // built this frame, across any rewind
-static u32 s_frameQwordsLastFrame = 0;
-static int s_kicks = 0;
-static int s_kicksLastFrame = 0;
-static int s_emergencyDrains = 0;
-static int s_emergencyDrainsLasFrame = 0;
+struct Stats
+{
+    u32 peakQwords;
+    u32 frameQwords; // built this frame, across any rewind
+    u32 frameQwordsLastFrame;
+    int kicks;
+    int kicksLastFrame;
+    int emergencyDrains;
+    int emergencyDrainsLasFrame;
+};
+static Stats s_stats = {};
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // Local helpers
@@ -121,15 +127,17 @@ void Rewind()
 {
     packet2_t * const pkt = Current();
 
+#if PS2_QUAKE_PROFILE
     const u32 used = static_cast<u32>(packet2_get_qw_count(pkt));
-    if (used > s_peakQwords)
+    if (used > s_stats.peakQwords)
     {
-        s_peakQwords = used;
+        s_stats.peakQwords = used;
     }
 
     // Banked before the reset, so a frame that overflowed still reports what it built rather
     // than only the segment it happened to end on. BeginFrame zeroes this after its own rewind.
-    s_frameQwords += used;
+    s_stats.frameQwords += used;
+#endif // PS2_QUAKE_PROFILE
 
     packet2_reset(pkt, /*clear_mem=*/0);
     s_kickedQwords = 0;
@@ -211,24 +219,28 @@ void BeginFrame()
     PublishCurrent();
     Rewind();
 
-    s_frameQwords = 0; // after Rewind, which banked the stale half it just reset
-    s_kicks = 0;
-    s_emergencyDrains = 0;
+#if PS2_QUAKE_PROFILE
+    s_stats.frameQwords = 0; // after Rewind, which banked the stale half it just reset
+    s_stats.kicks = 0;
+    s_stats.emergencyDrains = 0;
+#endif // PS2_QUAKE_PROFILE
 }
 
 void EndFrame()
 {
     PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
 
+#if PS2_QUAKE_PROFILE
     const u32 used = packet2_get_qw_count(Current());
-    if (used > s_peakQwords)
+    if (used > s_stats.peakQwords)
     {
-        s_peakQwords = used;
+        s_stats.peakQwords = used;
     }
 
-    s_frameQwordsLastFrame = s_frameQwords + used;
-    s_kicksLastFrame = s_kicks;
-    s_emergencyDrainsLasFrame = s_emergencyDrains;
+    s_stats.frameQwordsLastFrame = s_stats.frameQwords + used;
+    s_stats.kicksLastFrame = s_stats.kicks;
+    s_stats.emergencyDrainsLasFrame = s_stats.emergencyDrains;
+#endif // PS2_QUAKE_PROFILE
 
     // Unpublish the half. Packet() carries no assert - it is called hundreds of times a frame -
     // so this is what makes a use outside Begin/EndFrame fail: a null here is a TLB fault at the
@@ -270,7 +282,7 @@ bool Reserve(const int qwords)
     Rewind();
 
     s_reserveEnd = QwordCount() + qwords;
-    ++s_emergencyDrains;
+    PS2_PROFILE_ONLY(++s_stats.emergencyDrains);
     return true;
 }
 
@@ -442,7 +454,7 @@ void Kick()
 
         s_kickedQwords = static_cast<int>(packet2_get_qw_count(pkt));
         s_kickInFlight = true;
-        ++s_kicks;
+        PS2_PROFILE_ONLY(++s_stats.kicks);
     }
 }
 
@@ -494,7 +506,7 @@ Q_ALWAYS_INLINE void SpinUntilReady(ReadyFn && ready, const char * const what)
             return; // Sys_Error is not marked noreturn, so do not spin on it.
         }
     }
-#else
+#else // PS2_QUAKE_DEBUG
     (void)what;
     while (!ready()) { }
 #endif // PS2_QUAKE_DEBUG
@@ -572,24 +584,26 @@ void DrainBeforeWorldLoad()
 // Debug overlay counters
 // ------------------------------------------------------------------------------------------------
 
+#if PS2_QUAKE_PROFILE
 u32 PeakBytes()
 {
-    return s_peakQwords * 16u;
+    return s_stats.peakQwords * 16u;
 }
 
 u32 BytesLastFrame()
 {
-    return s_frameQwordsLastFrame * 16u;
+    return s_stats.frameQwordsLastFrame * 16u;
 }
 
 int KicksLastFrame()
 {
-    return s_kicksLastFrame;
+    return s_stats.kicksLastFrame;
 }
 
 int EmergencyDrainsLastFrame()
 {
-    return s_emergencyDrainsLasFrame;
+    return s_stats.emergencyDrainsLasFrame;
 }
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::cmdbuf

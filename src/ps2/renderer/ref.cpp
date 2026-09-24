@@ -396,6 +396,8 @@ void DrawVramUsageOverlay()
 // frame's view pass walked, culled, clipped and submitted to VU1.
 void DrawDrawStatsOverlay()
 {
+#if PS2_QUAKE_PROFILE
+
     if (s_showDrawStats->value == 0.0f)
     {
         return;
@@ -466,6 +468,8 @@ void DrawDrawStatsOverlay()
         DrawInternalString(textX, textY, line);
         textY += kLineHeight;
     }
+
+#endif // PS2_QUAKE_PROFILE
 }
 
 void DrawDebugOverlays()

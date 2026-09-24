@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_view.c -- player rendering positioning
 
 #include "client.h"
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
 
 //=============
 //
@@ -531,7 +532,9 @@ void V_RenderView(float stereo_separation)
         // build a refresh entity list and calc cl.sim*
         // this also calls CL_CalcViewValues which loads
         // v_forward, etc.
+        PS2Quake_ProfileBegin(PS2_PROF_CL_SCENE); // [PS2_QUAKE]
         CL_AddEntities();
+        PS2Quake_ProfileEnd(PS2_PROF_CL_SCENE);
 
         if (cl_testparticles->value)
         {

@@ -1101,6 +1101,7 @@ void Info_Print(char * s)
 // count of all memory allocations, plus a few other minor changes.
 //
 #include "ps2/system/heap.h"
+#include "ps2/debug/engine_profile.h"
 
 enum
 {
@@ -1604,7 +1605,9 @@ void Qcommon_Frame(int msec)
         time_before = Sys_Milliseconds();
     }
 
+    PS2Quake_ProfileBegin(PS2_PROF_SERVER); // [PS2_QUAKE]
     SV_Frame(msec);
+    PS2Quake_ProfileEnd(PS2_PROF_SERVER);
 
     if (host_speeds->value)
     {

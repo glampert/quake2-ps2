@@ -5,8 +5,8 @@
  *
  *        Mostly renderer events, but not exclusively: the frame log writes one column
  *        per event and so needs every one of them declared in a single place. Sound
- *        (the audio backend's submit) lives here for that reason rather than because
- *        it belongs to the renderer.
+ *        (the audio backend's submit) and the engine phases probed from C live here
+ *        for that reason rather than because they belong to the renderer.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -42,6 +42,12 @@ PS2_PROFILE_DECLARE_EVENT(Sky);
 PS2_PROFILE_DECLARE_EVENT(Ui);
 PS2_PROFILE_DECLARE_EVENT(Overlay);
 PS2_PROFILE_DECLARE_EVENT(Sound);
+
+// Engine phases outside the refresh calls, probed from C (see debug/engine_profile.h).
+PS2_PROFILE_DECLARE_EVENT(Server);
+PS2_PROFILE_DECLARE_EVENT(ClParse);
+PS2_PROFILE_DECLARE_EVENT(ClScene);
+PS2_PROFILE_DECLARE_EVENT(SndMix);
 
 } // namespace ps2::prof_evt
 

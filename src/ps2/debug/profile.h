@@ -90,6 +90,20 @@ struct ProfileEvent final
 // Links an event into the registry. Cold - runs once per site, ever.
 void ProfileRegister(ProfileEvent * ev) Q_COLD_FUNC;
 
+// Folds one measured call into an event. What every probe does on exit.
+inline void ProfileAccumulate(ProfileEvent * ev, const CpuCycles elapsed)
+{
+    ev->totalCycles += elapsed;
+    ev->frameCycles += elapsed;
+    ev->callCount   += 1;
+
+    if (elapsed < ev->minCycles) { ev->minCycles = elapsed; }
+    if (elapsed > ev->maxCycles) { ev->maxCycles = elapsed; }
+
+    // One predictable branch; taken exactly once per site.
+    if (!ev->linked) [[unlikely]] { ProfileRegister(ev); }
+}
+
 // RAII probe. Reads the counter on entry, folds the delta into the event on
 // exit. Everything after the closing read is outside the measured window.
 class ProfileEventScoped final
@@ -102,18 +116,7 @@ public:
 
     ~ProfileEventScoped()
     {
-        const CpuCycles elapsed = ReadCycles() - m_start;
-        ProfileEvent * const ev = m_event;
-
-        ev->totalCycles += elapsed;
-        ev->frameCycles += elapsed;
-        ev->callCount   += 1;
-
-        if (elapsed < ev->minCycles) { ev->minCycles = elapsed; }
-        if (elapsed > ev->maxCycles) { ev->maxCycles = elapsed; }
-
-        // One predictable branch; taken exactly once per site.
-        if (!ev->linked) [[unlikely]] { ProfileRegister(ev); }
+        ProfileAccumulate(m_event, ReadCycles() - m_start);
     }
 
     ProfileEventScoped(const ProfileEventScoped &) = delete;

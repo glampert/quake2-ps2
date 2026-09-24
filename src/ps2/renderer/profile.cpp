@@ -7,6 +7,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/profile.h"
+#include "ps2/debug/engine_profile.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/lightmap.h"
@@ -45,8 +46,42 @@ PS2_PROFILE_DEFINE_EVENT(Sky,        "Sky",         kScreenOverlay, 23);
 PS2_PROFILE_DEFINE_EVENT(Ui,         "Ui",          kScreenOverlay, 24);
 PS2_PROFILE_DEFINE_EVENT(Overlay,    "Overlay",     kScreenOverlay, 25);
 PS2_PROFILE_DEFINE_EVENT(Sound,      "Sound",       kScreenOverlay, 26);
+PS2_PROFILE_DEFINE_EVENT(Server,     "Server",      kScreenOverlay, 27);
+PS2_PROFILE_DEFINE_EVENT(ClParse,    "ClParse",     kScreenOverlay, 28);
+PS2_PROFILE_DEFINE_EVENT(ClScene,    "ClScene",     kScreenOverlay, 29);
+PS2_PROFILE_DEFINE_EVENT(SndMix,     "SndMix",      kScreenOverlay, 30);
 
 } // namespace ps2::prof_evt
+
+// ------------------------------------------------------------------------------------------------
+// Engine probes (debug/engine_profile.h)
+// ------------------------------------------------------------------------------------------------
+
+#if PS2_QUAKE_PROFILE
+namespace {
+
+static ps2::debug::ProfileEvent * const s_engineEvents[PS2_PROF_SITE_COUNT] = {
+    &ps2::prof_evt::Server,  // PS2_PROF_SERVER
+    &ps2::prof_evt::ClParse, // PS2_PROF_CL_PARSE
+    &ps2::prof_evt::ClScene, // PS2_PROF_CL_SCENE
+    &ps2::prof_evt::SndMix,  // PS2_PROF_SND_MIX
+};
+
+static ps2::debug::CpuCycles s_engineStart[PS2_PROF_SITE_COUNT];
+
+} // namespace
+
+extern "C" void PS2Quake_ProfileBegin(const int site)
+{
+    s_engineStart[site] = ps2::debug::ReadCycles();
+}
+
+extern "C" void PS2Quake_ProfileEnd(const int site)
+{
+    ps2::debug::ProfileAccumulate(s_engineEvents[site],
+                                  ps2::debug::ReadCycles() - s_engineStart[site]);
+}
+#endif // PS2_QUAKE_PROFILE
 
 // ------------------------------------------------------------------------------------------------
 // Frame log
@@ -63,7 +98,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 27;
+constexpr int kNumEvents = 31;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -133,7 +168,7 @@ void WriteBatch()
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,"
+                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,"
                     "nodes,surfs,surfsAlpha,surfsTurb,skyFaces,tris,trisClipped,trisCulled,"
                     "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
                     "boxesCulled,batches,entities,particles,dlights,"
@@ -216,7 +251,8 @@ void FrameLogCapture()
         &prof_evt::LmChains,    &prof_evt::Entities,   &prof_evt::EntCull,   &prof_evt::EntShade,
         &prof_evt::EntColorLUT, &prof_evt::EntGeom,    &prof_evt::EntShadow, &prof_evt::EntBrush,
         &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
-        &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,
+        &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,     &prof_evt::Server,
+        &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {

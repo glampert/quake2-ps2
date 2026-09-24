@@ -230,6 +230,40 @@ void CL_RunDLights(void)
 
 /*
 ==============
+CL_RegisterMuzzleFlashSounds
+
+[PS2_QUAKE]: CL_ParseMuzzleFlash registers each player weapon's fire sound the first time the
+weapon fires, and outside a registration sequence S_RegisterSound loads it there and then - a
+synchronous file read in the middle of a firefight, one per sound. A level only precaches the
+sounds of the weapons placed in it, so a weapon carried in from the level before paid that on
+its first shots. Registered with the level instead, ~226 KB resident for the lot.
+
+Keep in step with CL_ParseMuzzleFlash. The mission pack weapons are left out: their sounds are
+not in baseq2.
+==============
+*/
+void CL_RegisterMuzzleFlashSounds(void)
+{
+    static const char * const sounds[] = {
+        "weapons/blastf1a.wav", "weapons/hyprbf1a.wav",
+        "weapons/machgf1b.wav", "weapons/machgf2b.wav",
+        "weapons/machgf3b.wav", "weapons/machgf4b.wav",
+        "weapons/machgf5b.wav", "weapons/shotgf1b.wav",
+        "weapons/shotgr1b.wav", "weapons/sshotf1b.wav",
+        "weapons/railgf1a.wav", "weapons/rocklf1a.wav",
+        "weapons/rocklr1b.wav", "weapons/grenlf1a.wav",
+        "weapons/grenlr1b.wav", "weapons/bfg__f1y.wav",
+    };
+    int i;
+
+    for (i = 0; i < (int)(sizeof(sounds) / sizeof(sounds[0])); i++)
+    {
+        S_RegisterSound(sounds[i]);
+    }
+}
+
+/*
+==============
 CL_ParseMuzzleFlash
 ==============
 */

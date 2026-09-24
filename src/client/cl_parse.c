@@ -181,6 +181,7 @@ void CL_RegisterSounds(void)
 
     S_BeginRegistration();
     CL_RegisterTEntSounds();
+    CL_RegisterMuzzleFlashSounds(); // [PS2_QUAKE]
     for (i = 1; i < MAX_SOUNDS; i++)
     {
         if (!cl.configstrings[CS_SOUNDS + i][0])

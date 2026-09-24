@@ -56,6 +56,11 @@ typedef struct pack_s
     FILE * handle;
     int numfiles;
     packfile_t * files;
+
+    // [PS2_QUAKE]: files by name, open addressed: each slot holds a files[] index + 1, or 0 for
+    // empty. See FS_FindInPack.
+    unsigned short * hash;
+    int hashMask;
 } pack_t;
 
 typedef struct filelink_s
@@ -209,17 +214,96 @@ a separate file.
 ===========
 */
 
+// [PS2_QUAKE]: pak directory lookup by hash. id scanned the whole directory with Q_strcasecmp
+// for every open - 3307 entries in pak0.pak, and every one of them for a file that is not
+// there. The hash lowercases as Q_strcasecmp compares, so the two agree on what a match is.
+static unsigned FS_HashName(const char * name)
+{
+    unsigned hash = 2166136261u; // FNV-1a
+
+    for (; *name; name++)
+    {
+        unsigned c = (unsigned char)*name;
+        if (c >= 'A' && c <= 'Z')
+        {
+            c += 'a' - 'A';
+        }
+        hash = (hash ^ c) * 16777619u;
+    }
+    return hash;
+}
+
+static void FS_HashPack(pack_t * pack)
+{
+    int size = 1;
+    int i;
+
+    while (size < pack->numfiles * 2)
+    {
+        size <<= 1;
+    }
+
+    pack->hash = Z_Malloc(size * sizeof(unsigned short)); // zeroed: every slot empty
+    pack->hashMask = size - 1;
+
+    // Inserted in directory order, so a name the pak holds twice resolves to its first entry,
+    // as the linear scan did.
+    for (i = 0; i < pack->numfiles; i++)
+    {
+        unsigned slot = FS_HashName(pack->files[i].name) & pack->hashMask;
+        while (pack->hash[slot])
+        {
+            slot = (slot + 1) & pack->hashMask;
+        }
+        pack->hash[slot] = (unsigned short)(i + 1);
+    }
+}
+
+static packfile_t * FS_FindInPack(pack_t * pack, const char * filename)
+{
+    unsigned slot = FS_HashName(filename) & pack->hashMask;
+    int index;
+
+    while ((index = pack->hash[slot]) != 0)
+    {
+        if (!Q_strcasecmp(pack->files[index - 1].name, filename))
+        {
+            return &pack->files[index - 1];
+        }
+        slot = (slot + 1) & pack->hashMask;
+    }
+    return NULL;
+}
+
+// [PS2_QUAKE]: the stdio buffer a stream reads through. newlib's default is 1 KB, and each
+// refill is a host round trip, so a 60 KB model read in 60 of them. Sized to the file, up to
+// 64 KB: a model or a sound is then one read, and the loaders' seeks between its sections land
+// inside the buffer rather than going back to the host.
+static void FS_SetStreamBuffer(FILE * file, int len)
+{
+    setvbuf(file, NULL, _IOFBF, (len > 0 && len < 0x10000) ? (size_t)len : 0x10000);
+}
+
+/*
+===========
+FS_FindFile
+
+[PS2_QUAKE]: FS_FOpenFile's search, split from its open, so FS_LoadFile can read a pak file
+without opening one. A file on disk comes back opened in *file; one in a pak comes back as its
+pak and directory entry, with *file NULL. Returns the length, or -1 with all three NULL.
+===========
+*/
 #ifndef NO_ADDONS
 
-static int FS_FOpenFileImpl(const char * filename, FILE ** file)
+static int FS_FindFile(const char * filename, FILE ** file, pack_t ** pak, packfile_t ** entry)
 {
     searchpath_t * search;
     char netpath[MAX_OSPATH];
-    pack_t * pak;
     filelink_t * link;
-    int i;
 
-    file_from_pak = 0;
+    *file = NULL;
+    *pak = NULL;
+    *entry = NULL;
 
     // check for links first
     for (link = fs_links; link; link = link->next)
@@ -245,26 +329,13 @@ static int FS_FOpenFileImpl(const char * filename, FILE ** file)
         // is the element a pak file?
         if (search->pack)
         {
-            // look through all the pak file elements
-            pak = search->pack;
-            for (i = 0; i < pak->numfiles; i++)
+            *entry = FS_FindInPack(search->pack, filename);
+            if (*entry)
             {
-                if (!Q_strcasecmp(pak->files[i].name, filename))
-                {
-                    // found it!
-                    file_from_pak = 1;
-                    Com_DPrintf("PackFile: %s : %s\n", pak->filename, filename);
-
-                    // open a new file on the pakfile
-                    *file = fopen(pak->filename, "rb");
-                    if (!*file)
-                    {
-                        Com_Error(ERR_FATAL, "Couldn't reopen %s", pak->filename);
-                    }
-
-                    fseek(*file, pak->files[i].filepos, SEEK_SET);
-                    return pak->files[i].filelen;
-                }
+                // found it!
+                *pak = search->pack;
+                Com_DPrintf("PackFile: %s : %s\n", (*pak)->filename, filename);
+                return (*entry)->filelen;
             }
         }
         else // check a file in the directory tree:
@@ -284,22 +355,20 @@ static int FS_FOpenFileImpl(const char * filename, FILE ** file)
     }
 
     Com_DPrintf("FS_FOpenFile: can't find %s\n", filename);
-
-    *file = NULL;
     return -1;
 }
 
 #else // NO_ADDONS
 
 // this is just for demos to prevent add on hacking
-static int FS_FOpenFileImpl(const char * filename, FILE ** file)
+static int FS_FindFile(const char * filename, FILE ** file, pack_t ** pak, packfile_t ** entry)
 {
     searchpath_t * search;
     char netpath[MAX_OSPATH];
-    pack_t * pak;
-    int i;
 
-    file_from_pak = 0;
+    *file = NULL;
+    *pak = NULL;
+    *entry = NULL;
 
     // get config from directory, everything else from pak
     if (!strcmp(filename, "config.cfg") || !strncmp(filename, "players/", 8))
@@ -327,38 +396,53 @@ static int FS_FOpenFileImpl(const char * filename, FILE ** file)
 
     if (!search)
     {
-        *file = NULL;
         return -1;
     }
 
-    pak = search->pack;
-    for (i = 0; i < pak->numfiles; i++)
+    *entry = FS_FindInPack(search->pack, filename);
+    if (*entry)
     {
-        if (!Q_strcasecmp(pak->files[i].name, filename))
-        {
-            // found it!
-            file_from_pak = 1;
-            Com_DPrintf("PackFile: %s : %s\n", pak->filename, filename);
-
-            // open a new file on the pakfile
-            *file = fopen(pak->filename, "rb");
-            if (!*file)
-            {
-                Com_Error(ERR_FATAL, "Couldn't reopen %s", pak->filename);
-            }
-
-            fseek(*file, pak->files[i].filepos, SEEK_SET);
-            return pak->files[i].filelen;
-        }
+        // found it!
+        *pak = search->pack;
+        Com_DPrintf("PackFile: %s : %s\n", (*pak)->filename, filename);
+        return (*entry)->filelen;
     }
 
     Com_DPrintf("FS_FOpenFile (NO_ADDONS): can't find %s\n", filename);
-
-    *file = NULL;
     return -1;
 }
 
 #endif // NO_ADDONS
+
+static int FS_FOpenFileImpl(const char * filename, FILE ** file)
+{
+    pack_t * pak;
+    packfile_t * entry;
+    const int len = FS_FindFile(filename, file, &pak, &entry);
+
+    file_from_pak = 0;
+
+    if (pak)
+    {
+        file_from_pak = 1;
+
+        // open a new file on the pakfile
+        *file = fopen(pak->filename, "rb");
+        if (!*file)
+        {
+            Com_Error(ERR_FATAL, "Couldn't reopen %s", pak->filename);
+        }
+
+        FS_SetStreamBuffer(*file, len);
+        fseek(*file, entry->filepos, SEEK_SET);
+    }
+    else if (*file)
+    {
+        FS_SetStreamBuffer(*file, len);
+    }
+
+    return len;
+}
 
 // [PS2_QUAKE]: every open, read and close is timed as the frame log's FsIo, and every open
 // named in it - a file touched while a level runs is a synchronous host round trip inside
@@ -468,33 +552,51 @@ a null buffer will just return the file length without loading
 int FS_LoadFile(const char * path, void ** buffer)
 {
     FILE * h;
+    pack_t * pak;
+    packfile_t * entry;
     byte * buf;
     int len;
 
-    buf = NULL; // quiet compiler warning
+    // [PS2_QUAKE]: a whole-file load does not need a stream of its own. A file in a pak is read
+    // through the pak's handle, which stays open (and unbuffered) for the life of the game: one
+    // seek and one read, where FS_FOpenFile's reopen made it an open, a seek, a read per KB and
+    // a close. A file on disk is read unbuffered for the same reason.
+    PS2Quake_FrameLogNoteOpen(path);
+    PS2Quake_ProfileBegin(PS2_PROF_FS_IO);
+    len = FS_FindFile(path, &h, &pak, &entry);
+    PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
 
-    // look for it in the filesystem or pack files
-    len = FS_FOpenFile(path, &h);
-    if (!h)
+    file_from_pak = (pak != NULL); // SV_BeginDownload_f reads it after this, as it did after FS_FOpenFile
+
+    if (len < 0 || !buffer)
     {
+        if (h)
+        {
+            fclose(h);
+        }
         if (buffer)
         {
             *buffer = NULL;
         }
-        return -1;
-    }
-
-    if (!buffer)
-    {
-        fclose(h);
         return len;
     }
 
     buf = Z_Malloc(len);
     *buffer = buf;
 
-    FS_Read(buf, len, h);
-    fclose(h);
+    PS2Quake_ProfileBegin(PS2_PROF_FS_IO);
+    if (pak)
+    {
+        fseek(pak->handle, entry->filepos, SEEK_SET);
+        FS_ReadImpl(buf, len, pak->handle);
+    }
+    else
+    {
+        setvbuf(h, NULL, _IONBF, 0);
+        FS_ReadImpl(buf, len, h);
+        fclose(h);
+    }
+    PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
     return len;
 }
 
@@ -534,6 +636,11 @@ pack_t * FS_LoadPackFile(char * packfile)
     {
         return NULL;
     }
+
+    // [PS2_QUAKE]: unbuffered. The handle stays open for the life of the game and FS_LoadFile
+    // reads whole files through it, each in one call; a buffer would only split those reads
+    // into 1 KB host round trips.
+    setvbuf(packhandle, NULL, _IONBF, 0);
 
     fread(&header, 1, sizeof(header), packhandle);
     if (LittleLong(header.ident) != IDPAKHEADER)
@@ -604,6 +711,7 @@ pack_t * FS_LoadPackFile(char * packfile)
     pack->handle = packhandle;
     pack->numfiles = numpackfiles;
     pack->files = newfiles;
+    FS_HashPack(pack); // [PS2_QUAKE]
 
     Com_Printf("Added packfile %s (%i files)\n", packfile, numpackfiles);
     return pack;
@@ -722,6 +830,7 @@ void FS_SetGamedir(const char * dir)
         {
             fclose(fs_searchpaths->pack->handle);
             Z_Free(fs_searchpaths->pack->files);
+            Z_Free(fs_searchpaths->pack->hash); // [PS2_QUAKE]
             Z_Free(fs_searchpaths->pack);
         }
         next = fs_searchpaths->next;

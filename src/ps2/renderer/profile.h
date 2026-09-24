@@ -48,6 +48,7 @@ PS2_PROFILE_DECLARE_EVENT(Server);
 PS2_PROFILE_DECLARE_EVENT(ClParse);
 PS2_PROFILE_DECLARE_EVENT(ClScene);
 PS2_PROFILE_DECLARE_EVENT(SndMix);
+PS2_PROFILE_DECLARE_EVENT(FsIo);
 
 } // namespace ps2::prof_evt
 
@@ -81,6 +82,13 @@ void FrameLogFlush();
 // Emits a marker row so a run can be split by map. Called from PS2_BeginRegistration.
 void FrameLogMarkMap(const char * mapName);
 
+// Records a file being opened, written as an "FLOG#open,<row>,<name>" line with the next dump -
+// the row being the one whose columns are charged with the read. Called from FS_FOpenFile
+// through PS2Quake_FrameLogNoteOpen, so every mid-level load names itself in the log. Note that
+// SV_Frame and CL_ReadPackets, where most of those happen, run before the frame's rollover: the
+// read then stretches the Frame of the row after (see debug/engine_profile.h).
+void FrameLogNoteOpen(const char * fileName);
+
 // Ends the log: writes whatever the batch still holds, rather than waiting for
 // it to fill, then an "FLOG#end" row. Call once when a run finishes - without it
 // the last partial batch is lost, and a capture cut short by a crash reads the
@@ -92,6 +100,7 @@ void FrameLogFinish();
 inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
+inline void FrameLogNoteOpen(const char *) {}
 inline void FrameLogFinish() {}
 #endif // PS2_QUAKE_PROFILE
 

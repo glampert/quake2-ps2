@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "common/q_common.h"
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
 
 //===========================================================================
 
@@ -156,7 +157,9 @@ on files returned by FS_FOpenFile...
 */
 void FS_FCloseFile(FILE * fp)
 {
+    PS2Quake_ProfileBegin(PS2_PROF_FS_IO); // [PS2_QUAKE]: see FS_FOpenFile
     fclose(fp);
+    PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
 }
 
 // RAFAEL
@@ -208,7 +211,7 @@ a separate file.
 
 #ifndef NO_ADDONS
 
-int FS_FOpenFile(const char * filename, FILE ** file)
+static int FS_FOpenFileImpl(const char * filename, FILE ** file)
 {
     searchpath_t * search;
     char netpath[MAX_OSPATH];
@@ -289,7 +292,7 @@ int FS_FOpenFile(const char * filename, FILE ** file)
 #else // NO_ADDONS
 
 // this is just for demos to prevent add on hacking
-int FS_FOpenFile(const char * filename, FILE ** file)
+static int FS_FOpenFileImpl(const char * filename, FILE ** file)
 {
     searchpath_t * search;
     char netpath[MAX_OSPATH];
@@ -357,6 +360,19 @@ int FS_FOpenFile(const char * filename, FILE ** file)
 
 #endif // NO_ADDONS
 
+// [PS2_QUAKE]: every open, read and close is timed as the frame log's FsIo, and every open
+// named in it - a file touched while a level runs is a synchronous host round trip inside
+// whatever frame asked for it.
+int FS_FOpenFile(const char * filename, FILE ** file)
+{
+    int len;
+    PS2Quake_FrameLogNoteOpen(filename);
+    PS2Quake_ProfileBegin(PS2_PROF_FS_IO);
+    len = FS_FOpenFileImpl(filename, file);
+    PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
+    return len;
+}
+
 /*
 =================
 FS_Read
@@ -364,7 +380,7 @@ FS_Read
 Properly handles partial reads
 =================
 */
-void FS_Read(void * buffer, int len, FILE * fp)
+static void FS_ReadImpl(void * buffer, int len, FILE * fp)
 {
     //
     // [PS2_QUAKE] 2016-01-26:
@@ -432,6 +448,13 @@ void FS_Read(void * buffer, int len, FILE * fp)
     }
 
 #endif // FS_CHUNKED_FILE_READ
+}
+
+void FS_Read(void * buffer, int len, FILE * fp)
+{
+    PS2Quake_ProfileBegin(PS2_PROF_FS_IO); // [PS2_QUAKE]: see FS_FOpenFile
+    FS_ReadImpl(buffer, len, fp);
+    PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
 }
 
 /*

@@ -31,6 +31,7 @@ enum
     PS2_PROF_CL_PARSE, /* CL_ReadPackets - parsing server messages */
     PS2_PROF_CL_SCENE, /* CL_AddEntities - entity, particle, temp entity and dlight lists */
     PS2_PROF_SND_MIX,  /* S_Update - spatialize and mix; the "Sound" probe nests inside it */
+    PS2_PROF_FS_IO,    /* FS_FOpenFile/FS_Read/FS_FCloseFile - nests inside whichever phase loads */
 
     PS2_PROF_SITE_COUNT
 };
@@ -44,6 +45,9 @@ extern "C" {
 void PS2Quake_ProfileBegin(int site);
 void PS2Quake_ProfileEnd(int site);
 
+/* Names a file being opened in the frame log (ps2::debug::FrameLogNoteOpen). */
+void PS2Quake_FrameLogNoteOpen(const char * fileName);
+
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
@@ -52,6 +56,7 @@ void PS2Quake_ProfileEnd(int site);
 
 #define PS2Quake_ProfileBegin(site) ((void)0)
 #define PS2Quake_ProfileEnd(site)   ((void)0)
+#define PS2Quake_FrameLogNoteOpen(fileName) ((void)0)
 
 #endif /* PS2_QUAKE_PROFILE */
 

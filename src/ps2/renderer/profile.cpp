@@ -50,6 +50,7 @@ PS2_PROFILE_DEFINE_EVENT(Server,     "Server",      kScreenOverlay, 27);
 PS2_PROFILE_DEFINE_EVENT(ClParse,    "ClParse",     kScreenOverlay, 28);
 PS2_PROFILE_DEFINE_EVENT(ClScene,    "ClScene",     kScreenOverlay, 29);
 PS2_PROFILE_DEFINE_EVENT(SndMix,     "SndMix",      kScreenOverlay, 30);
+PS2_PROFILE_DEFINE_EVENT(FsIo,       "FsIo",        kScreenOverlay, 31);
 
 } // namespace ps2::prof_evt
 
@@ -65,6 +66,7 @@ static ps2::debug::ProfileEvent * const s_engineEvents[PS2_PROF_SITE_COUNT] = {
     &ps2::prof_evt::ClParse, // PS2_PROF_CL_PARSE
     &ps2::prof_evt::ClScene, // PS2_PROF_CL_SCENE
     &ps2::prof_evt::SndMix,  // PS2_PROF_SND_MIX
+    &ps2::prof_evt::FsIo,    // PS2_PROF_FS_IO
 };
 
 static ps2::debug::CpuCycles s_engineStart[PS2_PROF_SITE_COUNT];
@@ -80,6 +82,11 @@ extern "C" void PS2Quake_ProfileEnd(const int site)
 {
     ps2::debug::ProfileAccumulate(s_engineEvents[site],
                                   ps2::debug::ReadCycles() - s_engineStart[site]);
+}
+
+extern "C" void PS2Quake_FrameLogNoteOpen(const char * fileName)
+{
+    ps2::debug::FrameLogNoteOpen(fileName);
 }
 #endif // PS2_QUAKE_PROFILE
 
@@ -98,7 +105,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 31;
+constexpr int kNumEvents = 32;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -137,6 +144,20 @@ static bool s_headerDone = false;
 
 static const cvar_t * s_frameLog = nullptr;
 
+// Files opened since the last dump, written out with it. A file opened while a level runs is a
+// synchronous read inside whatever frame asked for it, and without a name the log can only show
+// the spike. Loading a map opens hundreds; past the buffer only the count is kept.
+constexpr int kMaxOpenNotes = 16;
+
+struct OpenNote
+{
+    u32  frameIndex;
+    char name[MAX_QPATH];
+};
+
+static OpenNote s_openNotes[kMaxOpenNotes];
+static int s_openCount = 0; // including the ones past the buffer
+
 // Cycles to microseconds. Cold - only runs at dump time, so the 64-bit divide
 // (a libgcc call on the R5900) is fine; it is what the capture path exists to avoid.
 u32 ToMicrosec(u32 cycles)
@@ -168,7 +189,7 @@ void WriteBatch()
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,"
+                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,"
                     "nodes,surfs,surfsAlpha,surfsTurb,skyFaces,tris,trisClipped,trisCulled,"
                     "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
                     "boxesCulled,batches,entities,particles,dlights,"
@@ -213,6 +234,16 @@ void WriteBatch()
         std::printf("%s", line);
     }
 
+    for (int i = 0; i < s_openCount && i < kMaxOpenNotes; ++i)
+    {
+        std::printf("FLOG#open,%u,%s\n", s_openNotes[i].frameIndex, s_openNotes[i].name);
+    }
+    if (s_openCount > kMaxOpenNotes)
+    {
+        std::printf("FLOG#open,%u,+%d more\n", s_frameIndex, s_openCount - kMaxOpenNotes);
+    }
+    s_openCount = 0;
+
     s_count    = 0;
     s_skipNext = true; // this frame just absorbed the whole dump
 }
@@ -252,7 +283,7 @@ void FrameLogCapture()
         &prof_evt::EntColorLUT, &prof_evt::EntGeom,    &prof_evt::EntShadow, &prof_evt::EntBrush,
         &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
         &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,     &prof_evt::Server,
-        &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,
+        &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,    &prof_evt::FsIo,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {
@@ -327,6 +358,23 @@ void FrameLogFinish()
     // Lets the reader tell a completed capture from one the emulator cut short.
     std::printf("FLOG#end,%u\n", s_frameIndex);
     std::fflush(stdout);
+}
+
+void FrameLogNoteOpen(const char * fileName)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    if (s_openCount < kMaxOpenNotes)
+    {
+        // The row the open is charged to: the frame being measured now, which FrameLogCapture
+        // will number one past the last row it wrote.
+        OpenNote & note = s_openNotes[s_openCount];
+        note.frameIndex = s_frameIndex + 1;
+        std::snprintf(note.name, sizeof(note.name), "%s", (fileName != nullptr) ? fileName : "?");
+    }
+    ++s_openCount;
 }
 
 void FrameLogMarkMap(const char * mapName)

@@ -428,8 +428,8 @@ float CalcFov(float fov_x, float width, float height)
         Com_Error(ERR_DROP, "Bad fov: %f", fov_x);
     }
 
-    x = width / tan(fov_x / 360 * M_PI);
-    a = atan(height / x);
+    x = width / tanf(fov_x / 360 * M_PI);
+    a = atanf(height / x);
     a = a * 360 / M_PI;
 
     return a;

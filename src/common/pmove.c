@@ -346,7 +346,7 @@ void PM_Friction(void)
 
     vel = pml.velocity;
 
-    speed = sqrt(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
+    speed = PS2Quake_Sqrtf(vel[0] * vel[0] + vel[1] * vel[1] + vel[2] * vel[2]);
     if (speed < 1)
     {
         vel[0] = 0;
@@ -438,7 +438,7 @@ void PM_AddCurrents(vec3_t wishvel)
     // account for ladders
     //
 
-    if (pml.ladder && fabs(pml.velocity[2]) <= 200)
+    if (pml.ladder && PS2Quake_Fabsf(pml.velocity[2]) <= 200)
     {
         if ((pm->viewangles[PITCH] <= -15) && (pm->cmd.forwardmove > 0))
             wishvel[2] = 200;

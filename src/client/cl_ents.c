@@ -1215,7 +1215,7 @@ void CL_AddPacketEntities(frame_t * frame)
                 {
                     float intensity;
 
-                    intensity = 50 + (500 * (sin(cl.time / 500.0) + 1.0));
+                    intensity = 50 + (500 * (PS2Quake_Sinf(cl.time / 500.0) + 1.0));
                     // FIXME - check out this effect in rendition
                     if (vidref_val == VIDREF_GL)
                         V_AddLight(ent.origin, intensity, -1.0, -1.0, -1.0);
@@ -1349,7 +1349,7 @@ void CL_CalcViewValues(void)
     ops = &oldframe->playerstate;
 
     // see if the player entity was teleported this frame
-    if (fabs(ops->pmove.origin[0] - ps->pmove.origin[0]) > 256 * 8 || abs(ops->pmove.origin[1] - ps->pmove.origin[1]) > 256 * 8 || abs(ops->pmove.origin[2] - ps->pmove.origin[2]) > 256 * 8)
+    if (abs(ops->pmove.origin[0] - ps->pmove.origin[0]) > 256 * 8 || abs(ops->pmove.origin[1] - ps->pmove.origin[1]) > 256 * 8 || abs(ops->pmove.origin[2] - ps->pmove.origin[2]) > 256 * 8)
         ops = ps; // don't interpolate
 
     ent = &cl_entities[cl.playernum + 1];

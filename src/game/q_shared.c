@@ -66,10 +66,10 @@ void RotatePointAroundVector(vec3_t dst, const vec3_t dir, const vec3_t point, f
     memset(zrot, 0, sizeof(zrot));
     zrot[0][0] = zrot[1][1] = zrot[2][2] = 1.0F;
 
-    zrot[0][0] = cos(DEG2RAD(degrees));
-    zrot[0][1] = sin(DEG2RAD(degrees));
-    zrot[1][0] = -sin(DEG2RAD(degrees));
-    zrot[1][1] = cos(DEG2RAD(degrees));
+    zrot[0][0] = PS2Quake_Cosf(DEG2RAD(degrees));
+    zrot[0][1] = PS2Quake_Sinf(DEG2RAD(degrees));
+    zrot[1][0] = -PS2Quake_Sinf(DEG2RAD(degrees));
+    zrot[1][1] = PS2Quake_Cosf(DEG2RAD(degrees));
 
     R_ConcatRotations(m, zrot, tmpmat);
     R_ConcatRotations(tmpmat, im, rot);
@@ -87,14 +87,14 @@ void AngleVectors(const vec3_t angles, vec3_t forward, vec3_t right, vec3_t up)
     // static to help MS compiler fp bugs
 
     angle = angles[YAW] * (M_PI * 2 / 360);
-    sy = sin(angle);
-    cy = cos(angle);
+    sy = PS2Quake_Sinf(angle);
+    cy = PS2Quake_Cosf(angle);
     angle = angles[PITCH] * (M_PI * 2 / 360);
-    sp = sin(angle);
-    cp = cos(angle);
+    sp = PS2Quake_Sinf(angle);
+    cp = PS2Quake_Cosf(angle);
     angle = angles[ROLL] * (M_PI * 2 / 360);
-    sr = sin(angle);
-    cr = cos(angle);
+    sr = PS2Quake_Sinf(angle);
+    cr = PS2Quake_Cosf(angle);
 
     if (forward)
     {
@@ -150,10 +150,10 @@ void PerpendicularVector(vec3_t dst, const vec3_t src)
 	*/
     for (pos = 0, i = 0; i < 3; i++)
     {
-        if (fabs(src[i]) < minelem)
+        if (PS2Quake_Fabsf(src[i]) < minelem)
         {
             pos = i;
-            minelem = fabs(src[i]);
+            minelem = PS2Quake_Fabsf(src[i]);
         }
     }
     tempvec[0] = tempvec[1] = tempvec[2] = 0.0F;
@@ -689,7 +689,7 @@ vec_t VectorNormalize(vec3_t v)
     float length, ilength;
 
     length = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-    length = sqrt(length); // FIXME
+    length = PS2Quake_Sqrtf(length); // FIXME
 
     if (length)
     {
@@ -707,7 +707,7 @@ vec_t VectorNormalize2(vec3_t v, vec3_t out)
     float length, ilength;
 
     length = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-    length = sqrt(length); // FIXME
+    length = PS2Quake_Sqrtf(length); // FIXME
 
     if (length)
     {
@@ -771,7 +771,7 @@ vec_t VectorLength(vec3_t v)
         length += v[i] * v[i];
     }
 
-    length = sqrt(length);
+    length = PS2Quake_Sqrtf(length);
     return length;
 }
 

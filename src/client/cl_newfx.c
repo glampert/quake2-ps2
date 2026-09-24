@@ -50,7 +50,7 @@ void vectoangles2(vec3_t value1, vec3_t angles)
     {
         // PMM - fixed to correct for pitch of 0
         if (value1[0])
-            yaw = (atan2(value1[1], value1[0]) * 180 / M_PI);
+            yaw = (atan2f(value1[1], value1[0]) * 180 / M_PI);
         else if (value1[1] > 0)
             yaw = 90;
         else
@@ -59,8 +59,8 @@ void vectoangles2(vec3_t value1, vec3_t angles)
         if (yaw < 0)
             yaw += 360;
 
-        forward = sqrt(value1[0] * value1[0] + value1[1] * value1[1]);
-        pitch = (atan2(value1[2], forward) * 180 / M_PI);
+        forward = PS2Quake_Sqrtf(value1[0] * value1[0] + value1[1] * value1[1]);
+        pitch = (atan2f(value1[2], forward) * 180 / M_PI);
         if (pitch < 0)
             pitch += 360;
     }
@@ -462,9 +462,9 @@ void CL_Heatbeam(vec3_t start, vec3_t end)
     //  for (i=0 ; i<len ; i++)
     for (i = 0; i < len; i += step)
     {
-        d = i * 0.1 - fmod(ltime, 16.0) * M_PI;
-        c = cos(d) / 1.75;
-        s = sin(d) / 1.75;
+        d = i * 0.1 - PS2Quake_Fmodf(ltime, 16.0) * M_PI;
+        c = PS2Quake_Cosf(d) / 1.75;
+        s = PS2Quake_Sinf(d) / 1.75;
 #ifdef DOUBLE_SCREW
         for (k = -1; k < 2; k += 2)
         {
@@ -554,7 +554,7 @@ void CL_Heatbeam(vec3_t start, vec3_t forward)
     // otherwise assume SOFT
 
     ltime = (float)cl.time / 1000.0;
-    start_pt = fmod(ltime * 96.0, step);
+    start_pt = PS2Quake_Fmodf(ltime * 96.0, step);
     VectorMA(move, start_pt, vec, move);
 
     VectorScale(vec, step, vec);
@@ -584,8 +584,8 @@ void CL_Heatbeam(vec3_t start, vec3_t forward)
             //          s = sin(rot)/2.0;
             //          variance = 0.4 + ((float)rand()/(float)RAND_MAX) *0.2;
             variance = 0.5;
-            c = cos(rot) * variance;
-            s = sin(rot) * variance;
+            c = PS2Quake_Cosf(rot) * variance;
+            s = PS2Quake_Sinf(rot) * variance;
 
             // trim it so it looks like it's starting at the origin
             if (i < 10)
@@ -657,8 +657,8 @@ void CL_Heatbeam(vec3_t start, vec3_t end)
         VectorClear(p->accel);
 
         d = crand() * M_PI;
-        c = cos(d) * 30;
-        s = sin(d) * 30;
+        c = PS2Quake_Cosf(d) * 30;
+        s = PS2Quake_Sinf(d) * 30;
 
         p->alpha = 1.0;
         p->alphavel = -5.0 / (1 + frand());
@@ -878,7 +878,7 @@ void CL_TrackerTrail(vec3_t start, vec3_t end, int particleColor)
         p->alphavel = -2.0;
         p->color = particleColor;
         dist = DotProduct(move, forward);
-        VectorMA(move, 8 * cos(dist), up, p->org);
+        VectorMA(move, 8 * PS2Quake_Cosf(dist), up, p->org);
         for (j = 0; j < 3; j++)
         {
             //          p->org[j] = move[j] + crand();

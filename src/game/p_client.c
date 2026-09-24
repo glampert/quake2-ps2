@@ -471,7 +471,7 @@ void LookAtKiller(edict_t * self, edict_t * inflictor, edict_t * attacker)
     }
 
     if (dir[0])
-        self->client->killer_yaw = 180 / M_PI * atan2(dir[1], dir[0]);
+        self->client->killer_yaw = 180 / M_PI * atan2f(dir[1], dir[0]);
     else
     {
         self->client->killer_yaw = 0;

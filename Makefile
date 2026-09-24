@@ -71,7 +71,6 @@ PS2_CXX_SRC =                         \
 	ps2/system/sys.cpp                \
 	ps2/system/iop_boot.cpp           \
 	ps2/system/heap.cpp               \
-	ps2/math/math.cpp                 \
 	ps2/math/vec_mat.cpp              \
 	ps2/net/net.cpp                   \
 	ps2/input/input.cpp               \
@@ -252,7 +251,13 @@ EE_INCS += -I$(SRC_DIR)
 # TODO: Look into addressing and fixing some of these warnings, some are likely real bugs
 # that need patching (aggressive-loop-optimizations, maybe-uninitialized, dangling-else, etc).
 #
-EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing $(COMMON_DEFS) \
+#
+# -fsingle-precision-constant: id's code writes its float constants unsuffixed (x * 0.5),
+# which C makes double - and the EE has no double FPU, so every one of those turned a float
+# expression into libgcc soft-float calls. The backend's C++ needs no such flag: it uses f
+# suffixes, and -Wdouble-promotion enforces them.
+#
+EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing -fsingle-precision-constant $(COMMON_DEFS) \
 	-Wno-implicit-function-declaration -Wno-implicit-int -Wno-maybe-uninitialized \
 	-Wno-int-conversion -Wno-int-to-pointer-cast -Wno-pointer-sign \
 	-Wno-pointer-to-int-cast -Wno-missing-braces -Wno-unused-variable \

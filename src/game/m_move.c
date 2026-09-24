@@ -355,8 +355,8 @@ qboolean SV_StepDirection(edict_t * ent, float yaw, float dist)
     M_ChangeYaw(ent);
 
     yaw = yaw * M_PI * 2 / 360;
-    move[0] = cos(yaw) * dist;
-    move[1] = sin(yaw) * dist;
+    move[0] = PS2Quake_Cosf(yaw) * dist;
+    move[1] = PS2Quake_Sinf(yaw) * dist;
     move[2] = 0;
 
     VectorCopy(ent->s.origin, oldorigin);
@@ -538,8 +538,8 @@ qboolean M_walkmove(edict_t * ent, float yaw, float dist)
 
     yaw = yaw * M_PI * 2 / 360;
 
-    move[0] = cos(yaw) * dist;
-    move[1] = sin(yaw) * dist;
+    move[0] = PS2Quake_Cosf(yaw) * dist;
+    move[1] = PS2Quake_Sinf(yaw) * dist;
     move[2] = 0;
 
     return SV_movestep(ent, move, true);

@@ -9,6 +9,9 @@
 #include <float.h>
 #include <math.h>
 
+// The scalar functions the C engine shares, implemented once in math_c.h.
+#include "ps2/math/math_c.h"
+
 namespace ps2::math {
 
 constexpr float kPI     = 3.1415926535897932384626433832795f;
@@ -16,63 +19,21 @@ constexpr float kTwoPI  = 6.283185307179586476925286766559f;
 constexpr float kHalfPI = 1.5707963267948966192313216916398f;
 
 // NOTE: Sine/cosine and angles are in radians as in the std lib counterparts.
-float ASinf(float x);
-float Cosf(float x);
-float Fmodf(float x, float y);
-
-inline float Fabsf(float x)
-{
-	float r;
-	asm volatile (
-		"abs.s %0, %1 \n\t"
-		: "=&f" (r) : "f" (x)
-	);
-	return r;
-}
-
-inline float Minf(float a, float b)
-{
-	float r;
-	asm volatile (
-		"min.s %0, %1, %2 \n\t"
-		: "=&f" (r) : "f" (a), "f" (b)
-	);
-	return r;
-}
-
-inline float Maxf(float a, float b)
-{
-	float r;
-	asm volatile (
-		"max.s %0, %1, %2 \n\t"
-		: "=&f" (r) : "f" (a), "f" (b)
-	);
-	return r;
-}
-
-inline float Sqrtf(float x)
-{
-	float r;
-	asm volatile (
-		"sqrt.s %0, %1 \n\t"
-		: "=&f" (r) : "f" (x)
-	);
-	return r;
-}
+inline float Sinf(float x)            { return PS2Quake_Sinf(x);     }
+inline float Cosf(float x)            { return PS2Quake_Cosf(x);     }
+inline float ASinf(float x)           { return PS2Quake_ASinf(x);    }
+inline float ACosf(float x)           { return PS2Quake_ACosf(x);    }
+inline float Fabsf(float x)           { return PS2Quake_Fabsf(x);    }
+inline float Sqrtf(float x)           { return PS2Quake_Sqrtf(x);    }
+inline float Minf(float a, float b)   { return PS2Quake_Minf(a, b);  }
+inline float Maxf(float a, float b)   { return PS2Quake_Maxf(a, b);  }
+inline float Floorf(float x)          { return PS2Quake_Floorf(x);   }
+inline float Ceilf(float x)           { return PS2Quake_Ceilf(x);    }
+inline float Fmodf(float x, float y)  { return PS2Quake_Fmodf(x, y); }
 
 inline float RSqrtf(float x)
 {
 	return 1.0f / Sqrtf(x);
-}
-
-inline float Sinf(float x)
-{
-	return Cosf(x - kHalfPI);
-}
-
-inline float ACosf(float x)
-{
-	return kHalfPI - ASinf(x);
 }
 
 inline int FloatEq(float a, float b, float tolerance)

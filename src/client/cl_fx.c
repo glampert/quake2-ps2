@@ -1307,13 +1307,13 @@ void CL_BigTeleportParticles(vec3_t org)
 
         angle = M_PI * 2 * (rand() & 1023) / 1023.0;
         dist = rand() & 31;
-        p->org[0] = org[0] + cos(angle) * dist;
-        p->vel[0] = cos(angle) * (70 + (rand() & 63));
-        p->accel[0] = -cos(angle) * 100;
+        p->org[0] = org[0] + PS2Quake_Cosf(angle) * dist;
+        p->vel[0] = PS2Quake_Cosf(angle) * (70 + (rand() & 63));
+        p->accel[0] = -PS2Quake_Cosf(angle) * 100;
 
-        p->org[1] = org[1] + sin(angle) * dist;
-        p->vel[1] = sin(angle) * (70 + (rand() & 63));
-        p->accel[1] = -sin(angle) * 100;
+        p->org[1] = org[1] + PS2Quake_Sinf(angle) * dist;
+        p->vel[1] = PS2Quake_Sinf(angle) * (70 + (rand() & 63));
+        p->accel[1] = -PS2Quake_Sinf(angle) * 100;
 
         p->org[2] = org[2] + 8 + (rand() % 90);
         p->vel[2] = -100 + (rand() & 31);
@@ -1735,8 +1735,8 @@ void CL_RailTrail(vec3_t start, vec3_t end)
         VectorClear(p->accel);
 
         d = i * 0.1;
-        c = cos(d);
-        s = sin(d);
+        c = PS2Quake_Cosf(d);
+        s = PS2Quake_Sinf(d);
 
         VectorScale(right, c, dir);
         VectorMA(dir, s, up, dir);
@@ -1931,14 +1931,14 @@ void CL_FlyParticles(vec3_t origin, int count)
     for (i = 0; i < count; i += 2)
     {
         angle = ltime * avelocities[i][0];
-        sy = sin(angle);
-        cy = cos(angle);
+        sy = PS2Quake_Sinf(angle);
+        cy = PS2Quake_Cosf(angle);
         angle = ltime * avelocities[i][1];
-        sp = sin(angle);
-        cp = cos(angle);
+        sp = PS2Quake_Sinf(angle);
+        cp = PS2Quake_Cosf(angle);
         angle = ltime * avelocities[i][2];
-        sr = sin(angle);
-        cr = cos(angle);
+        sr = PS2Quake_Sinf(angle);
+        cr = PS2Quake_Cosf(angle);
 
         forward[0] = cp * cy;
         forward[1] = cp * sy;
@@ -1953,7 +1953,7 @@ void CL_FlyParticles(vec3_t origin, int count)
 
         p->time = cl.time;
 
-        dist = sin(ltime + i) * 64;
+        dist = PS2Quake_Sinf(ltime + i) * 64;
         p->org[0] = origin[0] + bytedirs[i][0] * dist + forward[0] * BEAMLENGTH;
         p->org[1] = origin[1] + bytedirs[i][1] * dist + forward[1] * BEAMLENGTH;
         p->org[2] = origin[2] + bytedirs[i][2] * dist + forward[2] * BEAMLENGTH;
@@ -2027,14 +2027,14 @@ void CL_BfgParticles(entity_t * ent)
     for (i = 0; i < NUMVERTEXNORMALS; i++)
     {
         angle = ltime * avelocities[i][0];
-        sy = sin(angle);
-        cy = cos(angle);
+        sy = PS2Quake_Sinf(angle);
+        cy = PS2Quake_Cosf(angle);
         angle = ltime * avelocities[i][1];
-        sp = sin(angle);
-        cp = cos(angle);
+        sp = PS2Quake_Sinf(angle);
+        cp = PS2Quake_Cosf(angle);
         angle = ltime * avelocities[i][2];
-        sr = sin(angle);
-        cr = cos(angle);
+        sr = PS2Quake_Sinf(angle);
+        cr = PS2Quake_Cosf(angle);
 
         forward[0] = cp * cy;
         forward[1] = cp * sy;
@@ -2049,7 +2049,7 @@ void CL_BfgParticles(entity_t * ent)
 
         p->time = cl.time;
 
-        dist = sin(ltime + i) * 64;
+        dist = PS2Quake_Sinf(ltime + i) * 64;
         p->org[0] = ent->origin[0] + bytedirs[i][0] * dist + forward[0] * BEAMLENGTH;
         p->org[1] = ent->origin[1] + bytedirs[i][1] * dist + forward[1] * BEAMLENGTH;
         p->org[2] = ent->origin[2] + bytedirs[i][2] * dist + forward[2] * BEAMLENGTH;
@@ -2059,7 +2059,7 @@ void CL_BfgParticles(entity_t * ent)
 
         VectorSubtract(p->org, ent->origin, v);
         dist = VectorLength(v) / 90.0;
-        p->color = floor(0xd0 + dist * 7);
+        p->color = PS2Quake_Floorf(0xd0 + dist * 7);
         p->colorvel = 0;
 
         p->alpha = 1.0 - dist;

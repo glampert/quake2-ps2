@@ -40,6 +40,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <time.h>
 #include <math.h>
 
+#ifdef PS2_QUAKE
+// [PS2_QUAKE]: single-precision replacements for libm's double sin/cos/sqrt/etc., which the
+// EE can only run in software. See ps2/math/math_c.h.
+#include "ps2/math/math_c.h"
+#endif // PS2_QUAKE
+
 #if (defined _M_IX86 || defined __i386__) && !defined C_ONLY && !defined __sun__
 #define id386 1
 #else

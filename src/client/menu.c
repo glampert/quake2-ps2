@@ -1126,11 +1126,11 @@ static void InvertMouseFunc(void * unused)
 {
     if (s_options_invertmouse_box.curvalue == 0)
     {
-        Cvar_SetValue("m_pitch", fabs(m_pitch->value));
+        Cvar_SetValue("m_pitch", PS2Quake_Fabsf(m_pitch->value));
     }
     else
     {
-        Cvar_SetValue("m_pitch", -fabs(m_pitch->value));
+        Cvar_SetValue("m_pitch", -PS2Quake_Fabsf(m_pitch->value));
     }
 }
 

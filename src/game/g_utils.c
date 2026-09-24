@@ -333,7 +333,7 @@ float vectoyaw(vec3_t vec)
     }
     else
     {
-        yaw = (int)(atan2(vec[YAW], vec[PITCH]) * 180 / M_PI);
+        yaw = (int)(atan2f(vec[YAW], vec[PITCH]) * 180 / M_PI);
         if (yaw < 0)
             yaw += 360;
     }
@@ -357,7 +357,7 @@ void vectoangles(vec3_t value1, vec3_t angles)
     else
     {
         if (value1[0])
-            yaw = (int)(atan2(value1[1], value1[0]) * 180 / M_PI);
+            yaw = (int)(atan2f(value1[1], value1[0]) * 180 / M_PI);
         else if (value1[1] > 0)
             yaw = 90;
         else
@@ -365,8 +365,8 @@ void vectoangles(vec3_t value1, vec3_t angles)
         if (yaw < 0)
             yaw += 360;
 
-        forward = sqrt(value1[0] * value1[0] + value1[1] * value1[1]);
-        pitch = (int)(atan2(value1[2], forward) * 180 / M_PI);
+        forward = PS2Quake_Sqrtf(value1[0] * value1[0] + value1[1] * value1[1]);
+        pitch = (int)(atan2f(value1[2], forward) * 180 / M_PI);
         if (pitch < 0)
             pitch += 360;
     }

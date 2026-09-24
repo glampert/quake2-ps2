@@ -45,7 +45,7 @@ float SV_CalcRoll(vec3_t angles, vec3_t velocity)
 
     side = DotProduct(velocity, right);
     sign = side < 0 ? -1 : 1;
-    side = fabs(side);
+    side = PS2Quake_Fabsf(side);
 
     value = sv_rollangle->value;
 
@@ -989,7 +989,7 @@ void ClientEndServerFrame(edict_t * ent)
     // calculate speed and cycle to be used for
     // all cyclic walking effects
     //
-    xyspeed = sqrt(ent->velocity[0] * ent->velocity[0] + ent->velocity[1] * ent->velocity[1]);
+    xyspeed = PS2Quake_Sqrtf(ent->velocity[0] * ent->velocity[0] + ent->velocity[1] * ent->velocity[1]);
 
     if (xyspeed < 5)
     {
@@ -1012,7 +1012,7 @@ void ClientEndServerFrame(edict_t * ent)
         bobtime *= 4;
 
     bobcycle = (int)bobtime;
-    bobfracsin = fabs(sin(bobtime * M_PI));
+    bobfracsin = PS2Quake_Fabsf(PS2Quake_Sinf(bobtime * M_PI));
 
     // detect hitting the floor
     P_FallingDamage(ent);

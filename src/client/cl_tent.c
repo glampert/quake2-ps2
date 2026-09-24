@@ -188,6 +188,20 @@ void CL_RegisterTEntModels(void)
     re.RegisterModel("models/weapons/v_machn/tris.md2");
     re.RegisterModel("models/weapons/v_handgr/tris.md2");
     re.RegisterModel("models/weapons/v_shotg2/tris.md2");
+
+    // [PS2_QUAKE]: The rest of the view weapons too. A level only precaches the view models of
+    // the weapons placed in it, so the first switch to a weapon carried in from the level before
+    // loaded its model and skin mid-frame - a synchronous read of ~120 KB, several frames on USB.
+    // ~830 KB resident for these eight. Keep in step with itemlist[] in g_items.c.
+    re.RegisterModel("models/weapons/v_blast/tris.md2");
+    re.RegisterModel("models/weapons/v_shotg/tris.md2");
+    re.RegisterModel("models/weapons/v_chain/tris.md2");
+    re.RegisterModel("models/weapons/v_launch/tris.md2");
+    re.RegisterModel("models/weapons/v_rocket/tris.md2");
+    re.RegisterModel("models/weapons/v_hyperb/tris.md2");
+    re.RegisterModel("models/weapons/v_rail/tris.md2");
+    re.RegisterModel("models/weapons/v_bfg/tris.md2");
+
     re.RegisterModel("models/objects/gibs/bone/tris.md2");
     re.RegisterModel("models/objects/gibs/sm_meat/tris.md2");
     re.RegisterModel("models/objects/gibs/bone2/tris.md2");

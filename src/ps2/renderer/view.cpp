@@ -116,7 +116,6 @@ static cplane_t s_frustum[4] = {};
 // The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
 static math::Mat4 s_frustumMatrix = {};
 
-
 // Wall texture animation frame (viewDef.time * 2, as in ref_gl).
 static int s_textureAnimFrame = 0;
 
@@ -831,7 +830,7 @@ Q_ALWAYS_INLINE void ApplyDrawState(const SurfaceDrawState & state, const tex::T
 }
 
 // Every vertex the polygon being gathered can emit, already in the form the
-// batch wants. Filled by EmitPolyTrianglesUnclipped, and bounded by
+// batch wants. Filled by GatherPolyTriangles, and bounded by
 // mod::kTriangulationMaxVerts as it is. File level rather than a local because
 // 128 entries is 4 KB of stack, and gathers never interleave - the same
 // single-caller-at-a-time discipline the sky path's clip::Scratch relies on.
@@ -885,7 +884,7 @@ Q_ALWAYS_INLINE void BuildPolyVertexCache(const mod::ModelPoly & poly, const Sur
 // emission of one is byte for byte the same. So each vertex is assembled once
 // into s_polyVertexCache and the triangle loop only copies, which also lifts the
 // draw state's branches out of the inner loop entirely.
-void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly, const SurfaceDrawState & state)
+void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
 {
     // TriangulatePolygon refuses a polygon wider than the cache and leaves its
     // triangle list degenerate, so one draws nothing by either route; bailing
@@ -915,7 +914,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly, const SurfaceDrawSt
     // left in the vertex belongs to the diffuse pass, not this one.
     const bool patchLightmapUVs = state.bakedVertices && state.lightmapUVs;
 
-    const mod::ModelTriangle * const tris = poly.triangles;
+    const mod::ModelTriangle * __restrict const tris = poly.triangles;
     const mod::PolyVertex * const polyVerts = poly.vertexes;
     const int numTriangles = poly.numVerts - 2;
 
@@ -929,7 +928,7 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly, const SurfaceDrawSt
 
         state.stream->BeginVerts(3);
 
-        mod::PolyVertex * const dst = state.stream->PushTriangle();
+        mod::PolyVertex * __restrict const dst = state.stream->PushTriangle();
         if (patchLightmapUVs)
         {
             for (int i = 0; i < 3; ++i)
@@ -948,15 +947,6 @@ void EmitPolyTrianglesUnclipped(const mod::ModelPoly & poly, const SurfaceDrawSt
             vu1::CopyDrawVertex(dst[2], src[tri.vertexes[2]]);
         }
     }
-}
-
-// Every surface the world draws is now cut on VU1, so this is the only gather
-// there is - the clipped twin it used to pick between is gone with the EE
-// clipper. Kept as a name rather than folded into the callers because sky still
-// has its own path and the passes read better calling one thing.
-Q_ALWAYS_INLINE void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & state)
-{
-    EmitPolyTrianglesUnclipped(poly, state);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1165,7 +1155,6 @@ void DrawLightmapChains(const SurfaceDrawState & base)
 
         for (const mod::ModelSurface * surf = chain; surf != nullptr; surf = surf->lightmapChain)
         {
-
             for (const mod::ModelPoly * poly = surf->polys; poly != nullptr; poly = poly->next)
             {
                 GatherPolyTriangles(*poly, state);

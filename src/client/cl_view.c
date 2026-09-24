@@ -83,26 +83,6 @@ void V_AddEntity(entity_t * ent)
 
 /*
 =====================
-V_AddParticle
-=====================
-*/
-void V_AddParticle(vec3_t org, int color, float alpha)
-{
-    particle_t * p;
-
-    if (r_numparticles >= MAX_PARTICLES)
-    {
-        return;
-    }
-
-    p = &r_particles[r_numparticles++];
-    VectorCopy(org, p->origin);
-    p->color = color;
-    p->alpha = alpha;
-}
-
-/*
-=====================
 V_AddLight
 =====================
 */

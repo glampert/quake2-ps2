@@ -547,7 +547,7 @@ void CL_ParseLaser(int colors)
             VectorCopy(start, l->ent.origin);
             VectorCopy(end, l->ent.oldorigin);
             l->ent.alpha = 0.30;
-            l->ent.skinnum = (colors >> ((rand() % 4) * 8)) & 0xff;
+            l->ent.skinnum = (colors >> ((Com_FxRand() % 4) * 8)) & 0xff;
             l->ent.model = NULL;
             l->ent.frame = 4;
             l->endtime = cl.time + 100;
@@ -730,7 +730,7 @@ void CL_ParseTEnt(void)
             CL_SmokeAndFlash(pos);
 
             // impact sound
-            cnt = rand() & 15;
+            cnt = Com_FxRand() & 15;
             if (cnt == 1)
                 S_StartSound(pos, 0, 0, cl_sfx_ric1, 1, ATTN_NORM, 0);
             else if (cnt == 2)
@@ -773,7 +773,7 @@ void CL_ParseTEnt(void)
 
         if (r == SPLASH_SPARKS)
         {
-            r = rand() & 3;
+            r = Com_FxRand() & 3;
             if (r == 0)
                 S_StartSound(pos, 0, 0, cl_sfx_spark5, 1, ATTN_STATIC, 0);
             else if (r == 1)
@@ -851,7 +851,7 @@ void CL_ParseTEnt(void)
         ex->ent.model = cl_mod_explo4;
         ex->frames = 19;
         ex->baseframe = 30;
-        ex->ent.angles[1] = rand() % 360;
+        ex->ent.angles[1] = Com_FxRand() % 360;
         CL_ExplosionParticles(pos);
         if (type == TE_GRENADE_EXPLOSION_WATER)
             S_StartSound(pos, 0, 0, cl_sfx_watrexp, 1, ATTN_NORM, 0);
@@ -871,7 +871,7 @@ void CL_ParseTEnt(void)
         ex->lightcolor[0] = 1.0;
         ex->lightcolor[1] = 0.5;
         ex->lightcolor[2] = 0.5;
-        ex->ent.angles[1] = rand() % 360;
+        ex->ent.angles[1] = Com_FxRand() % 360;
         ex->ent.model = cl_mod_explo4;
         if (frand() < 0.5)
             ex->baseframe = 15;
@@ -896,7 +896,7 @@ void CL_ParseTEnt(void)
         ex->lightcolor[0] = 1.0;
         ex->lightcolor[1] = 0.5;
         ex->lightcolor[2] = 0.5;
-        ex->ent.angles[1] = rand() % 360;
+        ex->ent.angles[1] = Com_FxRand() % 360;
         if (type != TE_EXPLOSION1_BIG)     // PMM
             ex->ent.model = cl_mod_explo4; // PMM
         else
@@ -974,7 +974,7 @@ void CL_ParseTEnt(void)
         // we need a better no draw flag
         ex->ent.flags = RF_BEAM;
         ex->start = cl.frame.servertime - 0.1;
-        ex->light = 100 + (rand() % 75);
+        ex->light = 100 + (Com_FxRand() % 75);
         ex->lightcolor[0] = 1.0;
         ex->lightcolor[1] = 1.0;
         ex->lightcolor[2] = 0.3;
@@ -1072,7 +1072,7 @@ void CL_ParseTEnt(void)
         ex->lightcolor[0] = 1.0;
         ex->lightcolor[1] = 0.5;
         ex->lightcolor[2] = 0.5;
-        ex->ent.angles[1] = rand() % 360;
+        ex->ent.angles[1] = Com_FxRand() % 360;
         ex->ent.model = cl_mod_explo4;
         if (frand() < 0.5)
             ex->baseframe = 15;
@@ -1293,7 +1293,7 @@ void CL_AddBeams(void)
             ent.flags = RF_FULLBRIGHT;
             ent.angles[0] = pitch;
             ent.angles[1] = yaw;
-            ent.angles[2] = rand() % 360;
+            ent.angles[2] = Com_FxRand() % 360;
             V_AddEntity(&ent);
             return;
         }
@@ -1306,13 +1306,13 @@ void CL_AddBeams(void)
                 ent.flags = RF_FULLBRIGHT;
                 ent.angles[0] = -pitch;
                 ent.angles[1] = yaw + 180.0;
-                ent.angles[2] = rand() % 360;
+                ent.angles[2] = Com_FxRand() % 360;
             }
             else
             {
                 ent.angles[0] = pitch;
                 ent.angles[1] = yaw;
-                ent.angles[2] = rand() % 360;
+                ent.angles[2] = Com_FxRand() % 360;
             }
 
             //			Com_Printf("B: %d -> %d\n", b->entity, b->dest_entity);
@@ -1535,7 +1535,7 @@ void CL_AddPlayerBeams(void)
             ent.flags = RF_FULLBRIGHT;
             ent.angles[0] = pitch;
             ent.angles[1] = yaw;
-            ent.angles[2] = rand() % 360;
+            ent.angles[2] = Com_FxRand() % 360;
             V_AddEntity(&ent);
             return;
         }
@@ -1559,13 +1559,13 @@ void CL_AddPlayerBeams(void)
                 ent.flags = RF_FULLBRIGHT;
                 ent.angles[0] = -pitch;
                 ent.angles[1] = yaw + 180.0;
-                ent.angles[2] = rand() % 360;
+                ent.angles[2] = Com_FxRand() % 360;
             }
             else
             {
                 ent.angles[0] = pitch;
                 ent.angles[1] = yaw;
-                ent.angles[2] = rand() % 360;
+                ent.angles[2] = Com_FxRand() % 360;
             }
 
             //			Com_Printf("B: %d -> %d\n", b->entity, b->dest_entity);

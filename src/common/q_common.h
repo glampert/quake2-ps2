@@ -787,8 +787,27 @@ void Com_BlockChecksumUpdate(blockchecksum_t * ctx, const void * buffer, int len
 unsigned Com_BlockChecksumEnd(blockchecksum_t * ctx);
 byte COM_BlockSequenceCRCByte(byte * base, int length, int sequence);
 
-float frand(void); //  0 to 1
-float crand(void); // -1 to 1
+// [PS2_QUAKE]: random numbers for the client effects, which draw several per particle.
+// newlib's rand() is a 64-bit LCG that the R5900, lacking a 64-bit multiply, runs as ~40
+// instructions of shifts and adds; this is the 32-bit LCG and 15-bit result of the MSVC rand()
+// id wrote the effects against. Cosmetic use only - the game code keeps rand().
+extern unsigned int com_fxRandSeed;
+
+static inline int Com_FxRand(void)
+{
+    com_fxRandSeed = com_fxRandSeed * 214013u + 2531011u;
+    return (int)((com_fxRandSeed >> 16) & 0x7fffu);
+}
+
+static inline float frand(void) //  0 to 1
+{
+    return (float)Com_FxRand() * (1.0f / 32767.0f);
+}
+
+static inline float crand(void) // -1 to 1
+{
+    return (float)Com_FxRand() * (2.0f / 32767.0f) - 1.0f;
+}
 
 extern cvar_t * developer;
 extern cvar_t * dedicated;

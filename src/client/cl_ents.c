@@ -913,7 +913,7 @@ void CL_AddPacketEntities(frame_t * frame)
         if (renderfx & RF_BEAM)
         { // the four beam colors are encoded in 32 bits of skinnum (hack)
             ent.alpha = 0.30;
-            ent.skinnum = (s1->skinnum >> ((rand() % 4) * 8)) & 0xff;
+            ent.skinnum = (s1->skinnum >> ((Com_FxRand() % 4) * 8)) & 0xff;
             ent.model = NULL;
         }
         else
@@ -1189,7 +1189,7 @@ void CL_AddPacketEntities(frame_t * frame)
             {
                 ent.origin[2] += 32;
                 CL_TrapParticles(&ent);
-                i = (rand() % 100) + 100;
+                i = (Com_FxRand() % 100) + 100;
                 V_AddLight(ent.origin, i, 1, 0.8, 0.1);
             }
             else if (effects & EF_FLAG1)

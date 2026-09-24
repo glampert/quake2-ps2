@@ -163,7 +163,7 @@ void CL_DebugTrail(vec3_t start, vec3_t end)
         p->alpha = 1.0;
         p->alphavel = -0.1;
         //      p->alphavel = 0;
-        p->color = 0x74 + (rand() & 7);
+        p->color = 0x74 + (Com_FxRand() & 7);
         VectorCopy(move, p->org);
         /*
         for (j=0 ; j<3 ; j++)
@@ -213,7 +213,7 @@ void CL_SmokeTrail(vec3_t start, vec3_t end, int colorStart, int colorRun, int s
 
         p->alpha = 1.0;
         p->alphavel = -1.0 / (1 + frand() * 0.5);
-        p->color = colorStart + (rand() % colorRun);
+        p->color = colorStart + (Com_FxRand() % colorRun);
         for (j = 0; j < 3; j++)
         {
             p->org[j] = move[j] + crand() * 3;
@@ -280,7 +280,7 @@ void CL_FlameEffects(centity_t * ent, vec3_t origin)
     int j;
     cparticle_t * p;
 
-    count = rand() & 0xF;
+    count = Com_FxRand() & 0xF;
 
     for (n = 0; n < count; n++)
     {
@@ -297,7 +297,7 @@ void CL_FlameEffects(centity_t * ent, vec3_t origin)
 
         p->alpha = 1.0;
         p->alphavel = -1.0 / (1 + frand() * 0.2);
-        p->color = 226 + (rand() % 4);
+        p->color = 226 + (Com_FxRand() % 4);
         for (j = 0; j < 3; j++)
         {
             p->org[j] = origin[j] + crand() * 5;
@@ -307,7 +307,7 @@ void CL_FlameEffects(centity_t * ent, vec3_t origin)
         p->accel[2] = -PARTICLE_GRAVITY;
     }
 
-    count = rand() & 0x7;
+    count = Com_FxRand() & 0x7;
 
     for (n = 0; n < count; n++)
     {
@@ -323,7 +323,7 @@ void CL_FlameEffects(centity_t * ent, vec3_t origin)
 
         p->alpha = 1.0;
         p->alphavel = -1.0 / (1 + frand() * 0.5);
-        p->color = 0 + (rand() % 4);
+        p->color = 0 + (Com_FxRand() % 4);
         for (j = 0; j < 3; j++)
         {
             p->org[j] = origin[j] + crand() * 3;
@@ -354,14 +354,14 @@ void CL_GenericParticleEffect(vec3_t org, vec3_t dir, int color, int count, int 
 
         p->time = cl.time;
         if (numcolors > 1)
-            p->color = color + (rand() & numcolors);
+            p->color = color + (Com_FxRand() & numcolors);
         else
             p->color = color;
 
-        d = rand() & dirspread;
+        d = Com_FxRand() & dirspread;
         for (j = 0; j < 3; j++)
         {
-            p->org[j] = org[j] + ((rand() & 7) - 4) + d * dir[j];
+            p->org[j] = org[j] + ((Com_FxRand() & 7) - 4) + d * dir[j];
             p->vel[j] = crand() * 20;
         }
 
@@ -412,7 +412,7 @@ void CL_BubbleTrail2(vec3_t start, vec3_t end, int dist)
 
         p->alpha = 1.0;
         p->alphavel = -1.0 / (1 + frand() * 0.1);
-        p->color = 4 + (rand() & 7);
+        p->color = 4 + (Com_FxRand() & 7);
         for (j = 0; j < 3; j++)
         {
             p->org[j] = move[j] + crand() * 2;
@@ -603,7 +603,7 @@ void CL_Heatbeam(vec3_t start, vec3_t forward)
             //      p->alphavel = -1.0 / (1+frand()*0.2);
             p->alphavel = -1000.0;
             //      p->color = 0x74 + (rand()&7);
-            p->color = 223 - (rand() & 7);
+            p->color = 223 - (Com_FxRand() & 7);
             for (j = 0; j < 3; j++)
             {
                 p->org[j] = move[j] + dir[j] * 3;
@@ -662,7 +662,7 @@ void CL_Heatbeam(vec3_t start, vec3_t end)
 
         p->alpha = 1.0;
         p->alphavel = -5.0 / (1 + frand());
-        p->color = 223 - (rand() & 7);
+        p->color = 223 - (Com_FxRand() & 7);
 
         for (j = 0; j < 3; j++)
         {
@@ -764,7 +764,7 @@ void CL_ParticleSteamEffect(vec3_t org, vec3_t dir, int color, int count, int ma
         active_particles = p;
 
         p->time = cl.time;
-        p->color = color + (rand() & 7);
+        p->color = color + (Com_FxRand() & 7);
 
         for (j = 0; j < 3; j++)
         {
@@ -810,7 +810,7 @@ void CL_ParticleSteamEffect2(cl_sustain_t * self)
         active_particles = p;
 
         p->time = cl.time;
-        p->color = self->color + (rand() & 7);
+        p->color = self->color + (Com_FxRand() & 7);
 
         for (j = 0; j < 3; j++)
         {
@@ -978,7 +978,7 @@ void CL_Widowbeamout(cl_sustain_t * self)
 
         p->alpha = 1.0;
         p->alphavel = INSTANT_PARTICLE;
-        p->color = colortable[rand() & 3];
+        p->color = colortable[Com_FxRand() & 3];
 
         dir[0] = crand();
         dir[1] = crand();
@@ -1014,7 +1014,7 @@ void CL_Nukeblast(cl_sustain_t * self)
 
         p->alpha = 1.0;
         p->alphavel = INSTANT_PARTICLE;
-        p->color = colortable[rand() & 3];
+        p->color = colortable[Com_FxRand() & 3];
 
         dir[0] = crand();
         dir[1] = crand();
@@ -1043,7 +1043,7 @@ void CL_WidowSplash(vec3_t org)
         active_particles = p;
 
         p->time = cl.time;
-        p->color = colortable[rand() & 3];
+        p->color = colortable[Com_FxRand() & 3];
 
         dir[0] = crand();
         dir[1] = crand();
@@ -1162,12 +1162,12 @@ void CL_ColorExplosionParticles(vec3_t org, int color, int run)
         active_particles = p;
 
         p->time = cl.time;
-        p->color = color + (rand() % run);
+        p->color = color + (Com_FxRand() % run);
 
         for (j = 0; j < 3; j++)
         {
-            p->org[j] = org[j] + ((rand() % 32) - 16);
-            p->vel[j] = (rand() % 256) - 128;
+            p->org[j] = org[j] + ((Com_FxRand() % 32) - 16);
+            p->vel[j] = (Com_FxRand() % 256) - 128;
         }
 
         p->accel[0] = p->accel[1] = 0;
@@ -1202,7 +1202,7 @@ void CL_ParticleSmokeEffect(vec3_t org, vec3_t dir, int color, int count, int ma
         active_particles = p;
 
         p->time = cl.time;
-        p->color = color + (rand() & 7);
+        p->color = color + (Com_FxRand() & 7);
 
         for (j = 0; j < 3; j++)
         {
@@ -1247,12 +1247,12 @@ void CL_BlasterParticles2(vec3_t org, vec3_t dir, unsigned int color)
         active_particles = p;
 
         p->time = cl.time;
-        p->color = color + (rand() & 7);
+        p->color = color + (Com_FxRand() & 7);
 
-        d = rand() & 15;
+        d = Com_FxRand() & 15;
         for (j = 0; j < 3; j++)
         {
-            p->org[j] = org[j] + ((rand() & 7) - 4) + d * dir[j];
+            p->org[j] = org[j] + ((Com_FxRand() & 7) - 4) + d * dir[j];
             p->vel[j] = dir[j] * 30 + crand() * 40;
         }
 

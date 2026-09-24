@@ -499,9 +499,28 @@ extern struct model_s * gun_model;
 void V_Init(void);
 void V_RenderView(float stereo_separation);
 void V_AddEntity(entity_t * ent);
-void V_AddParticle(vec3_t org, int color, float alpha);
 void V_AddLight(vec3_t org, float intensity, float r, float g, float b);
 void V_AddLightStyle(int style, float r, float g, float b);
+
+// [PS2_QUAKE]: inline, with the list it fills made visible for it. CL_AddParticles calls it
+// once per live particle per frame, which a full 2048 pool makes the busiest call in the client.
+extern int r_numparticles;
+extern particle_t r_particles[MAX_PARTICLES];
+
+static inline void V_AddParticle(vec3_t org, int color, float alpha)
+{
+    particle_t * p;
+
+    if (r_numparticles >= MAX_PARTICLES)
+    {
+        return;
+    }
+
+    p = &r_particles[r_numparticles++];
+    VectorCopy(org, p->origin);
+    p->color = color;
+    p->alpha = alpha;
+}
 
 //
 // cl_tent.c

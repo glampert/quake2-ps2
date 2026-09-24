@@ -521,9 +521,8 @@ public:
     // calls it at all, and counts the culled/clipped/drawn triangles for the caller.
     //
     // The corners arrive with position, UVs and colour payload set; the clipper fills in their
-    // distances. 'vertexColor' packs one survivor's final GS colour: u32 (const clip::ClipVertex &).
-    template<typename ColorFn>
-    void PushClippedTriangle(clip::ClipVertex (&corners)[3], ColorFn && vertexColor)
+    // distances. 'vertexColor' packs one survivor's final GS colour.
+    void PushClippedTriangle(clip::ClipVertex (&corners)[3], const u32 vertexColor)
     {
         const clip::ClipVertex * verts = nullptr;
         u32 planesCrossed = 0;
@@ -548,9 +547,9 @@ public:
 
         for (int v = 1; v < count - 1; ++v)
         {
-            EmitVertex(verts[0],     vertexColor(verts[0]));
-            EmitVertex(verts[v],     vertexColor(verts[v]));
-            EmitVertex(verts[v + 1], vertexColor(verts[v + 1]));
+            EmitVertex(verts[0],     vertexColor);
+            EmitVertex(verts[v],     vertexColor);
+            EmitVertex(verts[v + 1], vertexColor);
         }
     }
 

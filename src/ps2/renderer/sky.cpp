@@ -333,7 +333,7 @@ void ClipSkyPolygon(const int nump, vec3_t * vecs, const int stage)
 // clipper left behind.
 Q_ALWAYS_INLINE void PushSkyTriangle(rs::TriangleStream & trisStream, clip::ClipVertex (&corners)[3])
 {
-    trisStream.PushClippedTriangle(corners, [](const clip::ClipVertex &) { return kSkyColor; });
+    trisStream.PushClippedTriangle(corners, kSkyColor);
 }
 
 // One corner of a cube face: face-local ST in [-1, 1] to a world-space vertex

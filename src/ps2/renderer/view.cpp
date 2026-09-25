@@ -113,6 +113,20 @@ static math::Mat4 s_weaponViewProjMatrix = {};
 // View frustum side planes (left, right, bottom, top) for bounding-box culling.
 static cplane_t s_frustum[4] = {};
 
+// For each frustum plane, which of a bounding box's six minmaxs values (mins xyz, then maxs xyz)
+// make the corner farthest along the plane normal, and which the nearest - the pair of corners
+// BoxOnPlaneSide picks by the plane's sign bits, picked once a frame here instead. The far corner
+// behind the plane puts the whole box behind it; the near one in front puts the whole box in front.
+struct FrustumPlaneCorners
+{
+    u8 farCorner[3];
+    u8 nearCorner[3];
+};
+static FrustumPlaneCorners s_frustumCorners[4] = {};
+
+// All four frustum planes still to be tested, which is where the world walk starts.
+constexpr int kAllFrustumPlanes = 0xF;
+
 // The same four planes packed for VU0; rebuilt with them by SetUpFrustum.
 static math::Mat4 s_frustumMatrix = {};
 
@@ -234,11 +248,21 @@ void SetUpFrustum(const refdef_t & viewDef)
     RotatePointAroundVector(s_frustum[2].normal, s_rightVec, s_forwardVec,  (90.0f - viewDef.fov_y * 0.5f));
     RotatePointAroundVector(s_frustum[3].normal, s_rightVec, s_forwardVec, -(90.0f - viewDef.fov_y * 0.5f));
 
-    for (cplane_t & plane : s_frustum)
+    for (int p = 0; p < 4; ++p)
     {
+        cplane_t & plane = s_frustum[p];
         plane.type     = PLANE_ANYZ;
         plane.dist     = DotProduct(viewDef.vieworg, plane.normal);
         plane.signbits = static_cast<byte>(SignBitsForPlane(plane));
+
+        // A negative normal component takes the far corner from mins, as BoxOnPlaneSide's
+        // sign bits do.
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const bool negative = (plane.normal[axis] < 0.0f);
+            s_frustumCorners[p].farCorner[axis]  = static_cast<u8>(negative ? axis : axis + 3);
+            s_frustumCorners[p].nearCorner[axis] = static_cast<u8>(negative ? axis + 3 : axis);
+        }
     }
 
     // The same four planes as a transform, so a point's distance to all of them
@@ -321,18 +345,52 @@ void SetUpDynamicLights(const refdef_t & viewDef)
 
 // Extracts the six planes bounding the VU1 clip volume from a view-projection.
 //
-// True when the box is completely outside the frustum and must not draw.
-Q_ALWAYS_INLINE bool ShouldCullBBox(float * mins, float * maxs)
+// Tests a box ('minmaxs': mins xyz, then maxs xyz) against the frustum planes still set in
+// 'clipFlags'. Returns -1 when it is entirely behind one of them, and otherwise the planes its
+// contents still have to be tested against: a plane the box is entirely in front of is cleared,
+// since nothing inside the box can be behind it either. That is what makes the world walk cheap -
+// once a node is fully inside a plane, nothing beneath it tests that plane again, which is the
+// software renderer's R_RecursiveWorldNode clipflags.
+//
+// The same corners, sums and comparisons as BOX_ON_PLANE_SIDE, so the same boxes go: the frustum
+// planes are never axial, which sent every one of those to an out-of-line BoxOnPlaneSide.
+Q_ALWAYS_INLINE int CullBoxToFrustum(const float * const minmaxs, int clipFlags)
 {
-    for (cplane_t & plane : s_frustum)
+    for (int p = 0; p < 4; ++p)
     {
-        if (BOX_ON_PLANE_SIDE(mins, maxs, &plane) == 2)
+        if ((clipFlags & (1 << p)) == 0)
+        {
+            continue;
+        }
+
+        const cplane_t & plane = s_frustum[p];
+        const FrustumPlaneCorners & corners = s_frustumCorners[p];
+
+        const float farDist = plane.normal[0] * minmaxs[corners.farCorner[0]]
+                            + plane.normal[1] * minmaxs[corners.farCorner[1]]
+                            + plane.normal[2] * minmaxs[corners.farCorner[2]];
+        if (farDist < plane.dist)
         {
             PS2_PROFILE_ONLY(++s_drawStats.boxesCulled);
-            return true;
+            return -1;
+        }
+
+        const float nearDist = plane.normal[0] * minmaxs[corners.nearCorner[0]]
+                             + plane.normal[1] * minmaxs[corners.nearCorner[1]]
+                             + plane.normal[2] * minmaxs[corners.nearCorner[2]];
+        if (nearDist >= plane.dist)
+        {
+            clipFlags &= ~(1 << p);
         }
     }
-    return false;
+    return clipFlags;
+}
+
+// True when the box is completely outside the frustum and must not draw.
+Q_ALWAYS_INLINE bool ShouldCullBBox(const float * const mins, const float * const maxs)
+{
+    const float minmaxs[6] = { mins[0], mins[1], mins[2], maxs[0], maxs[1], maxs[2] };
+    return CullBoxToFrustum(minmaxs, kAllFrustumPlanes) < 0;
 }
 
 void SetupFrame(const refdef_t & viewDef)
@@ -560,7 +618,8 @@ const tex::Texture * TextureAnimation(const mod::ModelTexInfo * texInfo, int ani
 // front-to-back, culling nodes against the PVS marks and the view frustum,
 // and threads each drawable surface onto its texture's chain so the next
 // DrawTextureChains() call renders what was collected here.
-void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & world, mod::ModelNode * node)
+void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & world, mod::ModelNode * node,
+                        int clipFlags)
 {
     if (node->contents == CONTENTS_SOLID)
     {
@@ -570,9 +629,14 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
     {
         return; // Not reachable from the current PVS cluster.
     }
-    if (ShouldCullBBox(node->minmaxs, node->minmaxs + 3))
+    // Only the planes the parent was not already entirely inside.
+    if (clipFlags != 0)
     {
-        return; // Entirely outside the view frustum.
+        clipFlags = CullBoxToFrustum(node->minmaxs, clipFlags);
+        if (clipFlags < 0)
+        {
+            return; // Entirely outside the view frustum.
+        }
     }
 
     PS2_PROFILE_ONLY(++s_drawStats.nodesWalked);
@@ -622,7 +686,7 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
     const bool cameraOnBack = (side == 1);
 
     // Recurse down the camera side first (front-to-back order)...
-    RecursiveWorldNode(viewDef, world, node->children[side]);
+    RecursiveWorldNode(viewDef, world, node->children[side], clipFlags);
 
     // ...then chain this node's surfaces that face the camera...
     mod::ModelSurface * surf = world.Brush().surfaces + node->firstSurface;
@@ -678,7 +742,7 @@ void RecursiveWorldNode(const refdef_t & viewDef, const mod::ModelInstance & wor
     }
 
     // ...and finally recurse down the far side.
-    RecursiveWorldNode(viewDef, world, node->children[side ^ 1]);
+    RecursiveWorldNode(viewDef, world, node->children[side ^ 1], clipFlags);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -1590,7 +1654,7 @@ void RenderWorldModel(const refdef_t & viewDef)
         // per level. LmChain nests underneath this one.
         {
             PS2_PROFILE_SCOPED_EVENT(prof_evt::BspWalk);
-            RecursiveWorldNode(viewDef, *world, world->Brush().nodes);
+            RecursiveWorldNode(viewDef, *world, world->Brush().nodes, kAllFrustumPlanes);
         }
     }
 

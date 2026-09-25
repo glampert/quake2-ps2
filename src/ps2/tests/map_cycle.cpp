@@ -128,26 +128,45 @@ size_t LiveTotalBytes()
 // One line per map, with the tags that actually move between levels. The peak is
 // the global high-water (PS2_GetPeakMemBytes), so "NEW PEAK" marks the transition
 // that cost the most - which is the number the whole test exists to find.
+//
+// The tags are the level's steady state: the report waits for the registration to
+// finish, so the previous level's leftovers are gone. A second line gives this
+// load's own peak and what it was made of - where the old level's assets were
+// still resident alongside the new one's - and the dlmalloc arena, whose growth
+// beyond the live peak is what fragmentation cost.
 void ReportMap(const char * const name, const int index)
 {
-    char world[ps2::heap::kMemUnitStrSize], audio[ps2::heap::kMemUnitStrSize];
-    char tex[ps2::heap::kMemUnitStrSize],   alias[ps2::heap::kMemUnitStrSize];
-    char total[ps2::heap::kMemUnitStrSize], peak[ps2::heap::kMemUnitStrSize];
-    char freeMem[ps2::heap::kMemUnitStrSize];
+    using ps2::heap::FormatMemoryUnit;
+    using ps2::heap::MemTag;
+    constexpr size_t kUnit = ps2::heap::kMemUnitStrSize;
+
+    char world[kUnit], audio[kUnit], tex[kUnit], alias[kUnit], sprite[kUnit];
+    char total[kUnit], peak[kUnit], freeMem[kUnit], arena[kUnit];
 
     const size_t peakNow = ps2::heap::GetPeakMemBytes();
 
-    Com_Printf("MapCycle [%2d/%2d] %-9s World %-9s Audio %-9s Tex %-9s Mdl %-9s "
+    Com_Printf("MapCycle [%2d/%2d] %-9s World %-9s Audio %-9s Tex %-9s Mdl %-9s Spr %-9s "
                "TOTAL %-9s PEAK %-9s FREE %-9s%s\n",
                index + 1, ArrayLength(kMaps), name,
-               ps2::heap::FormatMemoryUnit(TagBytes(ps2::heap::MemTag::WorldMdl), true, world, sizeof(world)),
-               ps2::heap::FormatMemoryUnit(TagBytes(ps2::heap::MemTag::Audio),    true, audio, sizeof(audio)),
-               ps2::heap::FormatMemoryUnit(TagBytes(ps2::heap::MemTag::TexImage), true, tex,   sizeof(tex)),
-               ps2::heap::FormatMemoryUnit(TagBytes(ps2::heap::MemTag::AliasMdl), true, alias, sizeof(alias)),
-               ps2::heap::FormatMemoryUnit(LiveTotalBytes(),           true, total, sizeof(total)),
-               ps2::heap::FormatMemoryUnit(peakNow,                    true, peak,  sizeof(peak)),
-               ps2::heap::FormatMemoryUnit(ps2::heap::GetAvailableMemBytes(), true, freeMem, sizeof(freeMem)),
+               FormatMemoryUnit(TagBytes(MemTag::WorldMdl),  true, world,  sizeof(world)),
+               FormatMemoryUnit(TagBytes(MemTag::Audio),     true, audio,  sizeof(audio)),
+               FormatMemoryUnit(TagBytes(MemTag::TexImage),  true, tex,    sizeof(tex)),
+               FormatMemoryUnit(TagBytes(MemTag::AliasMdl),  true, alias,  sizeof(alias)),
+               FormatMemoryUnit(TagBytes(MemTag::SpriteMdl), true, sprite, sizeof(sprite)),
+               FormatMemoryUnit(LiveTotalBytes(),            true, total,  sizeof(total)),
+               FormatMemoryUnit(peakNow,                     true, peak,   sizeof(peak)),
+               FormatMemoryUnit(ps2::heap::GetAvailableMemBytes(), true, freeMem, sizeof(freeMem)),
                (peakNow > s_peakBeforeMap) ? "  <- NEW PEAK" : "");
+
+    const auto atPeak = [](const MemTag tag) { return ps2::heap::GetWindowPeakTagBytes(tag); };
+    Com_Printf("MapCycle [%2d/%2d] %-9s load peak %-9s Tex %-9s Mdl %-9s Spr %-9s Audio %-9s ARENA %-9s\n",
+               index + 1, ArrayLength(kMaps), name,
+               FormatMemoryUnit(ps2::heap::GetWindowPeakMemBytes(), true, peak,   sizeof(peak)),
+               FormatMemoryUnit(atPeak(MemTag::TexImage),           true, tex,    sizeof(tex)),
+               FormatMemoryUnit(atPeak(MemTag::AliasMdl),           true, alias,  sizeof(alias)),
+               FormatMemoryUnit(atPeak(MemTag::SpriteMdl),          true, sprite, sizeof(sprite)),
+               FormatMemoryUnit(atPeak(MemTag::Audio),              true, audio,  sizeof(audio)),
+               FormatMemoryUnit(ps2::heap::GetHeapStats().arenaBytes, true, arena, sizeof(arena)));
 }
 
 // Where the free memory sits, which the memtag table cannot show. A pass can end
@@ -240,8 +259,10 @@ bool StartNextMap()
         }
 
         // Sampled before the load so ReportMap can tell whether *this* transition
-        // set a new high-water, rather than just echoing the running maximum.
+        // set a new high-water, rather than just echoing the running maximum - and
+        // the window peak restarted, so it measures this transition alone.
         s_peakBeforeMap = ps2::heap::GetPeakMemBytes();
+        ps2::heap::ResetWindowPeak();
 
         Cbuf_AddText(va("map %s\n", name));
 
@@ -282,7 +303,11 @@ void RunMapCycle()
         break;
 
     case State::Loading:
-        if (TargetWorldIsResident() && ++s_confirmFrames >= kFramesToConfirm)
+        // Registration finished as well as the world resident: CL_PrepRefresh draws
+        // frames between its loads, and a level with many models can outlast the
+        // dwell inside it - which reported the previous level's leftovers as this
+        // one's, before EndRegistration had freed them.
+        if (TargetWorldIsResident() && !mod::IsRegistering() && ++s_confirmFrames >= kFramesToConfirm)
         {
             const int dwellMs = static_cast<int>(s_dwell->value * 1000.0f);
             s_dwellUntilMs = Sys_Milliseconds() + ((dwellMs > 0) ? dwellMs : 1);

@@ -53,6 +53,7 @@ public:
 
     const ModelInstance * Find(const char * name);
     const ModelInstance * WorldModel() { return m_worldModel; }
+    bool IsRegistering() const { return m_registering; }
 
 private:
     const ModelInstance * LoadModel(const char * name);
@@ -95,6 +96,9 @@ private:
 
     // Currently loaded world map (a pointer into m_modelPool).
     const ModelInstance * m_worldModel = nullptr;
+
+    // Between BeginRegistration and EndRegistration.
+    bool m_registering = false;
 };
 
 void ModelCache::Init()
@@ -421,6 +425,7 @@ void ModelCache::BeginRegistration(const char * const mapName)
     // Bump first, so everything found or loaded this cycle is stamped current
     // and survives EndRegistration().
     ++m_regSequence;
+    m_registering = true;
     LoadWorldModel(mapName);
 }
 
@@ -486,6 +491,8 @@ void ModelCache::LoadWorldModel(const char * const mapName)
 
 void ModelCache::EndRegistration()
 {
+    m_registering = false;
+
     // Free the models this cycle no longer references.
     const int freedCount = static_cast<int>(m_lookup.RemoveIf([this](u64, u16 slot) {
         ModelInstance & mdl = m_modelPool.Slot(slot);
@@ -535,6 +542,11 @@ void BeginRegistration(const char * mapName)
 void EndRegistration()
 {
     s_cache.EndRegistration();
+}
+
+bool IsRegistering()
+{
+    return s_cache.IsRegistering();
 }
 
 bool ReleaseWorldModel(const char * fullName)

@@ -421,6 +421,10 @@ void Init();
 void BeginRegistration(const char * mapName);
 void EndRegistration();
 
+// True between BeginRegistration and EndRegistration: a level's assets are still being
+// registered, and whatever the previous level left unreferenced is still resident.
+bool IsRegistering();
+
 const ModelInstance * Find(const char * name);
 
 // Frees the resident world model, unless it is already 'fullName' (a "maps/*.bsp"

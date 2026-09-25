@@ -99,6 +99,12 @@ static inline size_t MemTagToIndex(const MemTag tag)
 static size_t s_liveTotalBytes = 0;
 static size_t s_peakTotalBytes = 0;
 
+// The restartable peak (ResetWindowPeak) and every tag's bytes when it was set. The snapshot is
+// retaken whenever the window peak rises, which happens during a level load and almost never
+// after, so its cost lands where nothing is being timed.
+static size_t s_windowPeakBytes = 0;
+static size_t s_windowPeakTagBytes[kMemTagCount] = {};
+
 static inline void AccountAlloc(const MemTag tag, const size_t bytes)
 {
     MemStats & s = s_memTagCounts[MemTagToIndex(tag)];
@@ -111,6 +117,15 @@ static inline void AccountAlloc(const MemTag tag, const size_t bytes)
 
     s_liveTotalBytes += bytes;
     if (s_liveTotalBytes > s_peakTotalBytes) { s_peakTotalBytes = s_liveTotalBytes; }
+
+    if (s_liveTotalBytes > s_windowPeakBytes) [[unlikely]]
+    {
+        s_windowPeakBytes = s_liveTotalBytes;
+        for (size_t i = 0; i < kMemTagCount; ++i)
+        {
+            s_windowPeakTagBytes[i] = s_memTagCounts[i].totalBytes;
+        }
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -359,6 +374,25 @@ const char * GetNameForMemTag(const MemTag tag)
 size_t GetPeakMemBytes()
 {
     return s_peakTotalBytes;
+}
+
+void ResetWindowPeak()
+{
+    s_windowPeakBytes = s_liveTotalBytes;
+    for (size_t i = 0; i < kMemTagCount; ++i)
+    {
+        s_windowPeakTagBytes[i] = s_memTagCounts[i].totalBytes;
+    }
+}
+
+size_t GetWindowPeakMemBytes()
+{
+    return s_windowPeakBytes;
+}
+
+size_t GetWindowPeakTagBytes(const MemTag tag)
+{
+    return s_windowPeakTagBytes[MemTagToIndex(tag)];
 }
 
 HeapStats GetHeapStats()

@@ -97,6 +97,14 @@ HeapStats GetHeapStats();
 // a steady-state reading.
 size_t GetPeakMemBytes();
 
+// A second high-water of the same running total, which the caller can restart: the map cycle
+// restarts it as each map is issued, so it reads the peak of one transition rather than of the
+// whole run. With it, every tag's bytes at the moment that peak was set - what the peak was made
+// of, which the per-tag peaks cannot say since those happen at different moments.
+void ResetWindowPeak();
+size_t GetWindowPeakMemBytes();
+size_t GetWindowPeakTagBytes(MemTag tag);
+
 // Renders the whole memory-tag table into the caller's buffer and returns it.
 // Truncates rather than overrunning if the buffer is short; kMemTagsDumpSize
 // is big enough for the full table.

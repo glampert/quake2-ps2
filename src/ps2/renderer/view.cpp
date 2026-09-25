@@ -18,6 +18,7 @@
  * ================================================================================================ */
 
 #include "ps2/renderer/view.h"
+#include "ps2/qwords.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/md2.h"
 #include "ps2/renderer/sky.h"
@@ -2314,18 +2315,26 @@ void RenderParticles(const refdef_t & viewDef)
     // by the DMA.
     auto * __restrict particles = rs::Begin<vu1::ParticleVertex *>(numParticles);
 
-    for (int i = 0; i < numParticles; ++i)
+    // Through cursors of our own. 'particles' goes to rs::Submit by reference, so its address
+    // escapes and gcc kept it in memory, reloading it - and the source array out of viewDef - on
+    // every particle.
+    vu1::ParticleVertex * __restrict out = particles;
+    const particle_t * __restrict in = viewDef.particles;
+
+    for (int i = 0; i < numParticles; ++i, ++in, ++out)
     {
-        const particle_t & p = viewDef.particles[i];
+        const float alpha = (in->alpha < 0.0f) ? 0.0f : ((in->alpha > 1.0f) ? 1.0f : in->alpha);
 
-        const float alpha = (p.alpha < 0.0f) ? 0.0f : ((p.alpha > 1.0f) ? 1.0f : p.alpha);
-        const u32   color = (global_palette[p.color & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24); 
+        // Converted through int: alpha * 128 is at most 128, and a float to u32 conversion costs
+        // a compare and a branch per particle for the half of the range it cannot reach.
+        const u32 alphaByte = static_cast<u32>(static_cast<int>(alpha * 128.0f));
+        const u32 color     = (global_palette[in->color & 0xFF] & 0x00FFFFFF) | (alphaByte << 24);
 
-        vu1::ParticleVertex & dst = particles[i];
-        dst.rgba = color;
-        dst.x = p.origin[0];
-        dst.y = p.origin[1];
-        dst.z = p.origin[2];
+        // The billboard is one qword, so it goes out as one: colour, then the position's bits.
+        StoreQword(out, color,
+                   bits_to_u32(in->origin[0]),
+                   bits_to_u32(in->origin[1]),
+                   bits_to_u32(in->origin[2]));
     }
 
     rs::Submit(particles, s_viewProjMatrix, texture, quadOffset);

@@ -298,6 +298,15 @@ const Texture & ParticleTexture();
 // wraps at the power-of-two extent, so a coordinate scale cannot fix one; the
 // world textures are resampled on load instead (see Texture::srcWidth), which
 // is why they come back 1.0 here.
-void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT);
+inline void StScaleFor(const Texture & texture, float * outScaleS, float * outScaleT)
+{
+    // tex::Log2 rounds up, and it is the same call gs.cpp fills TEX0's TW/TH
+    // with - so this stays exact whatever the texture is, resident or not.
+    const int potWidth  = 1 << Log2(static_cast<u32>(texture.width));
+    const int potHeight = 1 << Log2(static_cast<u32>(texture.height));
+
+    *outScaleS = static_cast<float>(texture.width)  / static_cast<float>(potWidth);
+    *outScaleT = static_cast<float>(texture.height) / static_cast<float>(potHeight);
+}
 
 } // namespace ps2::tex

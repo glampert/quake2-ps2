@@ -24,6 +24,7 @@
  * ================================================================================================ */
 
 #include "ps2/renderer/render_system.h"
+#include "ps2/qwords.h"
 #include "ps2/debug/profile.h"
 #include "ps2/debug/pipeline_dump.h"
 #include "ps2/renderer/profile.h"
@@ -169,30 +170,38 @@ void AddFlush()
     packet2_chain_close_tag(pkt);
 }
 
-// Small unpacks built directly into the chain: open, append qwords, close.
-Q_ALWAYS_INLINE void OpenInlineUnpack(const u32 vuAddr, const bool useTop)
+// Small unpacks built directly into the chain: the CNT tag and the unpack opened here, the payload
+// written by the caller through the cursor this returns, then CloseInlinePayload.
+//
+// Through a cursor of the caller's own rather than packet2_add_*: those store through
+// packet2->next and then advance it, and under -fno-strict-aliasing gcc has to assume each store
+// may have hit the field it is about to reload - five memory operations per word written, where a
+// whole qword can go in one sq (see qwords.h). The payload lands 16-byte aligned: with TTE on, the
+// tag's own qword carries the two VIFcodes and closes out.
+Q_ALWAYS_INLINE qword_t * OpenInlinePayload(const u32 vuAddr, const bool useTop)
 {
-    packet2_utils_vu_open_unpack(Packet(), vuAddr, useTop);
+    packet2_t * const pkt = Packet();
+    packet2_utils_vu_open_unpack(pkt, vuAddr, useTop);
+    return pkt->next;
 }
 
-Q_ALWAYS_INLINE void CloseInlineUnpack()
+// Closes what OpenInlinePayload opened, after exactly 'qwords' were written from its cursor. The
+// CNT tag's QWC and the V4_32 unpack's NUM are both just that count, so the unpack is closed with it
+// rather than recounted by packet2_vif_close_unpack_auto - an out-of-line call per chunk that arrives
+// at the same number.
+Q_ALWAYS_INLINE void CloseInlinePayload(qword_t * const payload, const u32 qwords)
 {
-    packet2_utils_vu_close_unpack(Packet());
+    packet2_t * const pkt = Packet();
+    pkt->next = payload + qwords;
+    packet2_chain_close_tag(pkt);
+    packet2_vif_close_unpack_manual(pkt, qwords);
 }
 
-Q_ALWAYS_INLINE void AddQword(const u64 lo, const u64 hi)
+// Overwrites one 32-bit word of a payload being built - the per-chunk count in a head that is
+// otherwise the same for every chunk of a draw.
+Q_ALWAYS_INLINE void PatchPayloadWord(qword_t * const payload, const int word, const u32 value)
 {
-    packet2_add_2x_s64(Packet(), static_cast<s64>(lo), static_cast<s64>(hi));
-}
-
-Q_ALWAYS_INLINE void AddFloat(const float value)
-{
-    packet2_add_float(Packet(), value);
-}
-
-Q_ALWAYS_INLINE void AddU32(const u32 value)
-{
-    packet2_add_u32(Packet(), value);
+    static_cast<u32 *>(static_cast<void *>(payload))[word] = value;
 }
 
 // Opens a DIRECT transfer: everything written until CloseDirect reaches the GIF verbatim as GIF
@@ -732,8 +741,14 @@ inline void DepthRangeFor(DrawFlags flags, float * outScale, float * outOffset)
 // then TEST, TEX1, TEX0, ALPHA and ZBUF for this context. The triangle and particle paths share
 // it and differ only in the drawing tag each appends after.
 //
-// Returns whether the batch blends, which is decided here and which that tag needs for ABE.
-bool AddBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags)
+// Built into 'out' - 2 * kStateBlockQwords 64-bit halves, low first - once per draw rather than
+// into the chain per chunk: all of it is a property of the texture, the context and the flags,
+// which a draw holds fixed. Returns whether the batch blends, which is decided here and which that
+// tag needs for ABE.
+constexpr int kStateBlockQwords = 6;
+
+bool BuildBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags,
+                          u64 * const out)
 {
     const gs::BlendMode blendMode = BlendModeFor(flags);
 
@@ -744,24 +759,46 @@ bool AddBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx, D
                       || HasDrawFlag(flags, DrawFlags::Modulate);
 
     // Pixel tests, the texture bind, the blend function and the depth-write mask...
-    AddQword(GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1), GIF_REG_AD);
-    AddQword(gs::MakePixelTests(), gs::ContextReg(GS_REG_TEST, drawCtx));
-    AddQword(gs::MakeTex1(texture), gs::ContextReg(GS_REG_TEX1, drawCtx));
-    AddQword(gs::MakeTex0(texture, tex::TakesIntensity(texture.type)),
-                 gs::ContextReg(GS_REG_TEX0, drawCtx));
-    AddQword(gs::MakeAlphaBlend(blendMode), gs::ContextReg(GS_REG_ALPHA, drawCtx));
-    AddQword(gs::MakeZBuf(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite)),
-                 gs::ContextReg(GS_REG_ZBUF, drawCtx));
+    out[0]  = GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1);
+    out[1]  = GIF_REG_AD;
+    out[2]  = gs::MakePixelTests();
+    out[3]  = gs::ContextReg(GS_REG_TEST, drawCtx);
+    out[4]  = gs::MakeTex1(texture);
+    out[5]  = gs::ContextReg(GS_REG_TEX1, drawCtx);
+    out[6]  = gs::MakeTex0(texture, tex::TakesIntensity(texture.type));
+    out[7]  = gs::ContextReg(GS_REG_TEX0, drawCtx);
+    out[8]  = gs::MakeAlphaBlend(blendMode);
+    out[9]  = gs::ContextReg(GS_REG_ALPHA, drawCtx);
+    out[10] = gs::MakeZBuf(blended || HasDrawFlag(flags, DrawFlags::NoDepthWrite));
+    out[11] = gs::ContextReg(GS_REG_ZBUF, drawCtx);
 
     return blended;
 }
 
-// The batch's 7 GIF tag qwords into an open inline unpack: the A+D state block plus the drawing
-// tag, whose NLOOP the microprogram fills in.
-void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
-                     DrawFlags flags, bool packedRgbaOut = false)
+// The 9 qwords every chunk of a triangle draw - world or lerped - unpacks to kBatchHeaderAddr
+// ahead of its vertices: the batch header, its parameter qword, and the 7 GIF tag qwords the
+// microprogram copies into each output window.
+//
+// All of it is a property of the draw bar the vertex count in header word 3, so a draw builds this
+// once and each chunk copies it into the chain whole and patches that one word (EmitChunkHead).
+// Built per chunk it cost ~250 instructions of register encoding, including a call into
+// gs::MakeTex0, for every 60 or 90 vertices - and the header then went in a word at a time.
+struct alignas(16) ChunkHead
 {
-    const bool blended = AddBatchStateBlock(texture, drawCtx, flags);
+    u32 header[4]; // colour mode, warp, vertex format, vertex count (EmitChunkHead's)
+    u32 params[4]; // the warp's texel scale and scroll; zero for everything else
+    u64 gifTags[2 * vu1::kNumGifTagQwords];
+};
+constexpr int kChunkHeadQwords = sizeof(ChunkHead) / 16;
+static_assert(kChunkHeadQwords == 2 + vu1::kNumGifTagQwords, "A chunk head is the header, the parameters and the tags");
+static_assert(vu1::kNumGifTagQwords == kStateBlockQwords + 1, "The tag block is the state block and the drawing tag");
+
+// The batch's 7 GIF tag qwords: the A+D state block plus the drawing tag, whose NLOOP the
+// microprogram fills in.
+void BuildBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags,
+                       bool packedRgbaOut, u64 (&out)[2 * vu1::kNumGifTagQwords])
+{
+    const bool blended = BuildBatchStateBlock(texture, drawCtx, flags, out);
     const int  tme     = HasDrawFlag(flags, DrawFlags::Untextured) ? 0 : 1;
     const int  abe     = blended ? 1 : 0;
 
@@ -783,8 +820,67 @@ void AddBatchGifTags(const tex::Texture & texture, gs::DrawContext drawCtx,
     // then draws nothing, where a real-looking count would send the GIF reading past what was
     // written and into the next window's tag block. Both callers patch; particles do not come
     // through here, and their count *is* known up front.
-    AddQword(GIF_SET_TAG(0, 1, 1, prim, GIF_FLG_PACKED, 3),
-             packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList);
+    out[2 * kStateBlockQwords]     = GIF_SET_TAG(0, 1, 1, prim, GIF_FLG_PACKED, 3);
+    out[2 * kStateBlockQwords + 1] = packedRgba ? vu1::kLitVertexRegList : vu1::kVertexRegList;
+}
+
+// The chunk head of a DrawTriangles draw: colour mode and warp from the flags, the warp's texel
+// scale and drift in the parameters - taken from the texture's size on disk, for the same reason
+// ref_gl's hardcoded 64 works (see DrawAnimatedWaterPolys) - and the tags.
+ChunkHead MakeTriangleChunkHead(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags)
+{
+    const bool lit    = HasDrawFlag(flags, DrawFlags::DynamicLights);
+    const bool warped = HasDrawFlag(flags, DrawFlags::Warped);
+
+    ChunkHead head;
+
+    // What the microprogram should do per vertex. The mode fields are separate lanes so it can
+    // test each against zero directly.
+    head.header[0] = static_cast<u32>(lit ? vu1::BatchColorMode::Computed : vu1::BatchColorMode::PackedU32);
+    head.header[1] = static_cast<u32>(warped ? vu1::BatchWarp::On : vu1::BatchWarp::Off);
+    head.header[2] = static_cast<u32>(vu1::BatchVertexFormat::DrawVertex);
+    head.header[3] = 0;
+
+    if (warped)
+    {
+        head.params[0] = bits_to_u32(1.0f / static_cast<float>(texture.srcWidth));
+        head.params[1] = bits_to_u32(1.0f / static_cast<float>(texture.srcHeight));
+        head.params[2] = bits_to_u32(HasDrawFlag(flags, DrawFlags::WarpFlowing) ? s_warpScrollTexels : 0.0f);
+        head.params[3] = 0;
+    }
+    else
+    {
+        head.params[0] = head.params[1] = head.params[2] = head.params[3] = 0;
+    }
+
+    BuildBatchGifTags(texture, drawCtx, flags, /*packedRgbaOut=*/false, head.gifTags);
+    return head;
+}
+
+// The chunk head of a DrawLerpedTriangles draw: the colour is computed, from the shade term; no
+// warp; keyframe vertices. No per-batch parameters - the qword is still sent, so the tags land
+// where a world batch's do. Everything per entity went up once with the draw (vu1::LerpConstants).
+ChunkHead MakeLerpChunkHead(const tex::Texture & texture, gs::DrawContext drawCtx, DrawFlags flags)
+{
+    ChunkHead head;
+    head.header[0] = static_cast<u32>(vu1::BatchColorMode::Computed);
+    head.header[1] = static_cast<u32>(vu1::BatchWarp::Off);
+    head.header[2] = static_cast<u32>(vu1::BatchVertexFormat::Keyframes);
+    head.header[3] = 0;
+    head.params[0] = head.params[1] = head.params[2] = head.params[3] = 0;
+
+    BuildBatchGifTags(texture, drawCtx, flags, /*packedRgbaOut=*/true, head.gifTags);
+    return head;
+}
+
+// The head of one chunk into the chain, inline at the current double buffer's header address:
+// the draw's head copied in whole qwords, then this chunk's vertex count over header word 3.
+void EmitChunkHead(const ChunkHead & head, const int vertCount)
+{
+    qword_t * const payload = OpenInlinePayload(vu1::kBatchHeaderAddr, true);
+    CopyQwords<kChunkHeadQwords>(payload, &head);
+    PatchPayloadWord(payload, 3, static_cast<u32>(vertCount));
+    CloseInlinePayload(payload, kChunkHeadQwords);
 }
 
 // Builds the draw's transform and per-draw blocks into the buffer and unpacks them to their fixed
@@ -817,7 +913,9 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
 
     vu1::FrameConstants * const constants = cmdbuf::Alloc<vu1::FrameConstants>(1);
 
-    constants->mvp        = mvp;
+    // The matrix and the per-draw block below go in as whole qwords: a struct assignment of
+    // either lowers to ld/sd pairs, twice the memory operations (see qwords.h).
+    CopyQwords<sizeof(math::Mat4) / 16>(&constants->mvp, &mvp);
     // .w is the clipper's plane shrink, and is read by nothing else - the screen mapping uses
     // .xyz only. See vu1::kVuClipShrink.
     constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 1.0f - vu1::kVuClipShrink };
@@ -838,7 +936,7 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
     {
         // A copy in the buffer, like everything else here: the caller's is a local.
         vu1::LerpConstants * const block = cmdbuf::Alloc<vu1::LerpConstants>(1);
-        *block = *lerp;
+        CopyQwords<kLerpConstantsQwords>(block, lerp);
 
         AddUnpackData(vu1::kLerpBlockAddr, block, kLerpConstantsQwords, false);
     }
@@ -847,7 +945,7 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
         // s_lightConstants is the source of truth; the buffer gets a copy, for the same lifetime
         // reason as the transform block.
         vu1::LightConstants * const lights = cmdbuf::Alloc<vu1::LightConstants>(1);
-        *lights = s_lightConstants;
+        CopyQwords<kLightConstantsQwords>(lights, &s_lightConstants);
 
         AddUnpackData(vu1::kLightBlockAddr, lights, kLightConstantsQwords, false);
     }
@@ -869,55 +967,19 @@ void ReserveChunk(const int chunkQwords, const math::Mat4 & mvp, const DrawFlags
     }
 }
 
-// One chunk: batch header and GIF tags unpacked inline to the current double buffer, the vertex
-// data referenced in place, and the MSCAL that runs the microprogram over it.
-void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
-                   const vu1::DrawVertex * verts, int vertCount, DrawFlags flags)
+// One chunk: the draw's head (batch header and GIF tags) unpacked inline to the current double
+// buffer, the vertex data referenced in place, and the MSCAL that runs the microprogram over it.
+void AddBatchChunk(const ChunkHead & head, const vu1::DrawVertex * verts, int vertCount,
+                   const vu1::ProgramAddr program)
 {
     PS2_Assert(vertCount > 0 && vertCount <= vu1::kMaxVertsPerBatch && (vertCount % 3) == 0);
     EnsureSpace(kChunkChainQwords);
 
-    const bool lit = HasDrawFlag(flags, DrawFlags::DynamicLights);
-
-    // A warped batch is this same layout with the warp flag set, and reads its parameters from
-    // the qword after the header; see below.
-    const bool warped = HasDrawFlag(flags, DrawFlags::Warped);
-
-    OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
-    {
-        // Header: what the microprogram should do per vertex. The mode fields are separate lanes
-        // so it can test each against zero directly.
-        AddU32(static_cast<u32>(lit ? vu1::BatchColorMode::Computed
-                                    : vu1::BatchColorMode::PackedU32));
-        AddU32(static_cast<u32>(warped ? vu1::BatchWarp::On : vu1::BatchWarp::Off));
-        AddU32(static_cast<u32>(vu1::BatchVertexFormat::DrawVertex));
-        AddU32(static_cast<u32>(vertCount));
-
-        // Parameters for whatever that asked for. The warp wants the texel-to-image divide -
-        // taken from the texture's size on disk, for the same reason ref_gl's hardcoded 64
-        // works (see DrawAnimatedWaterPolys) - and the frame's SURF_FLOWING drift.
-        if (warped)
-        {
-            AddFloat(1.0f / static_cast<float>(texture.srcWidth));
-            AddFloat(1.0f / static_cast<float>(texture.srcHeight));
-            AddFloat(HasDrawFlag(flags, DrawFlags::WarpFlowing) ? s_warpScrollTexels : 0.0f);
-            AddFloat(0.0f);
-        }
-        else
-        {
-            AddU32(0);
-            AddU32(0);
-            AddU32(0);
-            AddU32(0);
-        }
-
-        AddBatchGifTags(texture, drawCtx, flags);
-    }
-    CloseInlineUnpack();
+    EmitChunkHead(head, vertCount);
 
     AddUnpackData(vu1::kVertexDataAddr, verts, static_cast<u32>(vertCount * 2), true);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::TexturedTriangles));
+    AddStartProgram(program);
 }
 
 // The lerped equivalent, for the same microprogram: the same head as a world batch, then the two
@@ -925,31 +987,14 @@ void AddBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
 // per-entity - the pose scales, the light, the cull sign - went up once with the draw
 // (vu1::LerpConstants), so the header carries only what the batch is. The byte-position DMA must
 // be whole source qwords, so an odd count transfers one pad vertex the VU never reads.
-void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
-                       const vu1::LerpPosChunk & posChunk, const vu1::LerpDrawAttrib * attribs,
-                       int vertCount, DrawFlags flags)
+void AddLerpBatchChunk(const ChunkHead & head, const vu1::LerpPosChunk & posChunk,
+                       const vu1::LerpDrawAttrib * attribs, int vertCount,
+                       const vu1::ProgramAddr program)
 {
     PS2_Assert(vertCount > 0 && vertCount <= vu1::kMaxLerpVertsPerBatch && (vertCount % 3) == 0);
     EnsureSpace(kLerpChunkChainQwords);
 
-    OpenInlineUnpack(vu1::kBatchHeaderAddr, true);
-    {
-        // The colour is computed, from the shade term; no warp; keyframe vertices.
-        AddU32(static_cast<u32>(vu1::BatchColorMode::Computed));
-        AddU32(static_cast<u32>(vu1::BatchWarp::Off));
-        AddU32(static_cast<u32>(vu1::BatchVertexFormat::Keyframes));
-        AddU32(static_cast<u32>(vertCount));
-
-        // No per-batch parameters. The qword is still sent, so the tags land where a world
-        // batch's do and one open inline unpack covers the lot.
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
-
-        AddBatchGifTags(texture, drawCtx, flags, /*packedRgbaOut=*/true);
-    }
-    CloseInlineUnpack();
+    EmitChunkHead(head, vertCount);
 
     // The keyframe bytes: V4_8 elements, one source word and so one destination qword each, cur
     // then old, padded to an even count so the transfer is whole qwords. Two written, one skipped:
@@ -969,57 +1014,74 @@ void AddLerpBatchChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
                      P2_UNPACK_V4_32, true,
                      /*writeLen=*/1, /*cycleLen=*/vu1::kLerpVertexQwords);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::TexturedTriangles));
+    AddStartProgram(program);
 }
 
-// One particle chunk: header, batch constants and GIF tags unpacked inline, the particles
-// referenced in place, then the MSCAL. 'clipOffset' is the corner offset already in clip space;
-// the UVs are in the GS 12.4 fixed point the PACKED UV descriptor wants.
-void AddParticleChunk(const tex::Texture & texture, gs::DrawContext drawCtx,
-                      const math::Vec4 & clipOffset, u32 uvMaxU, u32 uvMaxV,
-                      const vu1::ParticleVertex * particles, int count, DrawFlags flags)
+// The 11 qwords every particle chunk unpacks inline ahead of its billboards: the header, the corner
+// offset, the two corner UVs, the state block and the sprite tag. As with ChunkHead, a draw builds
+// it once and each chunk copies it in and patches its count - which a particle chunk carries twice,
+// in header word 3 and as the sprite tag's NLOOP, since here the count *is* known up front.
+struct alignas(16) ParticleHead
+{
+    u32 header[4];   // count in word 3
+    float offset[4]; // the clip-space corner offset, with the distance blow-up rate in .w
+    u32 uv0[4];      // anchor corner UV; PACKED UV takes U in word 0 and V in word 1
+    u32 uv1[4];      // opposite corner UV
+    u64 stateBlock[2 * kStateBlockQwords];
+    u64 spriteTag[2]; // NLOOP in bits 0-14 of the first word
+};
+constexpr int kParticleHeadQwords = sizeof(ParticleHead) / 16;
+constexpr int kParticleTagWord    = offsetof(ParticleHead, spriteTag) / 4;
+static_assert(kParticleHeadQwords == vu1::kPrtDataAddr - vu1::kPrtBatchHeaderAddr,
+              "The particle head must fill the batch layout up to the billboards");
+
+// 'clipOffset' is the corner offset already in clip space; the UVs are in the GS 12.4 fixed point
+// the PACKED UV descriptor wants.
+ParticleHead MakeParticleHead(const tex::Texture & texture, gs::DrawContext drawCtx,
+                              const math::Vec4 & clipOffset, u32 uvMaxU, u32 uvMaxV, DrawFlags flags)
+{
+    ParticleHead head;
+    head.header[0] = head.header[1] = head.header[2] = head.header[3] = 0;
+
+    head.offset[0] = clipOffset.x;
+    head.offset[1] = clipOffset.y;
+    head.offset[2] = clipOffset.z;
+    head.offset[3] = vu1::kParticleBlowUpRate;
+
+    head.uv0[0] = head.uv0[1] = head.uv0[2] = head.uv0[3] = 0;
+    head.uv1[0] = uvMaxU;
+    head.uv1[1] = uvMaxV;
+    head.uv1[2] = head.uv1[3] = 0;
+
+    const bool blended = BuildBatchStateBlock(texture, drawCtx, flags, head.stateBlock);
+    const int  abe     = blended ? 1 : 0; // Hoisted: see the note in BuildBatchGifTags.
+
+    // One sprite per particle, five registers each: the A+D that sets its colour, then a UV/XYZ2
+    // pair per corner. FST selects UV over ST - a screen-aligned sprite needs no perspective
+    // correction. NLOOP 0 here; each chunk ORs in its own.
+    const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, gs::Index(drawCtx), 0);
+    head.spriteTag[0] = GIF_SET_TAG(0, 1, 1, prim, GIF_FLG_PACKED, 5);
+    head.spriteTag[1] = vu1::kParticleRegList;
+    return head;
+}
+
+// One particle chunk: the draw's head unpacked inline with this chunk's count patched in, the
+// particles referenced in place, then the MSCAL.
+void AddParticleChunk(const ParticleHead & head, const vu1::ParticleVertex * particles, int count,
+                      const vu1::ProgramAddr program)
 {
     PS2_Assert(count > 0 && count <= vu1::kMaxParticlesPerBatch);
     EnsureSpace(kParticleChunkQwords);
 
-    OpenInlineUnpack(vu1::kPrtBatchHeaderAddr, true);
-    {
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
-        AddU32(static_cast<u32>(count));
-
-        // The corner offset, with the distance blow-up rate riding in its unused .w.
-        AddFloat(clipOffset.x);
-        AddFloat(clipOffset.y);
-        AddFloat(clipOffset.z);
-        AddFloat(vu1::kParticleBlowUpRate);
-
-        // The two corner UVs. PACKED UV takes U in word 0 and V in word 1.
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
-        AddU32(0);
-
-        AddU32(uvMaxU);
-        AddU32(uvMaxV);
-        AddU32(0);
-        AddU32(0);
-
-        const bool blended = AddBatchStateBlock(texture, drawCtx, flags);
-        const int  abe     = blended ? 1 : 0; // Hoisted: see the note in AddBatchGifTags.
-
-        // One sprite per particle, five registers each: the A+D that sets its colour, then a
-        // UV/XYZ2 pair per corner. FST selects UV over ST - a screen-aligned sprite needs no
-        // perspective correction.
-        const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, gs::Index(drawCtx), 0);
-        AddQword(GIF_SET_TAG(count, 1, 1, prim, GIF_FLG_PACKED, 5), vu1::kParticleRegList);
-    }
-    CloseInlineUnpack();
+    qword_t * const payload = OpenInlinePayload(vu1::kPrtBatchHeaderAddr, true);
+    CopyQwords<kParticleHeadQwords>(payload, &head);
+    PatchPayloadWord(payload, 3, static_cast<u32>(count));
+    PatchPayloadWord(payload, kParticleTagWord, static_cast<u32>(head.spriteTag[0]) | static_cast<u32>(count));
+    CloseInlinePayload(payload, kParticleHeadQwords);
 
     AddUnpackData(vu1::kPrtDataAddr, particles, static_cast<u32>(count), true);
 
-    AddStartProgram(vu1::ProgramAddress(vu1::Program::Particles));
+    AddStartProgram(program);
 }
 
 } // namespace
@@ -1036,6 +1098,10 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     EnsureTextureResident(texture);
 
+    // Everything a chunk carries that is not its vertices, built once for the whole draw.
+    const ChunkHead head = MakeTriangleChunkHead(texture, s_drawCtx, flags);
+    const vu1::ProgramAddr program = vu1::ProgramAddress(vu1::Program::TexturedTriangles);
+
     // One chunk per VU run; the double buffer overlaps each unpack with the previous transform.
     for (int firstVert = 0; firstVert < vertCount; firstVert += vu1::kMaxVertsPerBatch)
     {
@@ -1043,7 +1109,7 @@ void DrawTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < vu1::kMaxVertsPerBatch) ? remaining : vu1::kMaxVertsPerBatch;
-        AddBatchChunk(texture, s_drawCtx, verts + firstVert, chunkVerts, flags);
+        AddBatchChunk(head, verts + firstVert, chunkVerts, program);
     }
 }
 
@@ -1079,6 +1145,9 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     // Chunking as in DrawTriangles. The positions are already grouped one LerpPosChunk per VU
     // run, and the attributes slice at the same boundary because the caller gathered them in
     // order. Only a final odd chunk pads its position transfer.
+    const ChunkHead head = MakeLerpChunkHead(texture, s_drawCtx, flags);
+    const vu1::ProgramAddr program = vu1::ProgramAddress(vu1::Program::TexturedTriangles);
+
     for (int firstVert = 0, c = 0; firstVert < vertCount; firstVert += vu1::kMaxLerpVertsPerBatch, ++c)
     {
         ReserveChunk(kLerpChunkChainQwords, mvp, flags, /*firstChunk=*/firstVert == 0, &lerp);
@@ -1086,7 +1155,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
         const int remaining  = vertCount - firstVert;
         const int chunkVerts = (remaining < vu1::kMaxLerpVertsPerBatch) ? remaining : vu1::kMaxLerpVertsPerBatch;
 
-        AddLerpBatchChunk(texture, s_drawCtx, posChunks[c], attribs + firstVert, chunkVerts, flags);
+        AddLerpBatchChunk(head, posChunks[c], attribs + firstVert, chunkVerts, program);
     }
 }
 
@@ -1112,14 +1181,16 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
     const u32 uvMaxU = static_cast<u32>(texture.width)  << 4;
     const u32 uvMaxV = static_cast<u32>(texture.height) << 4;
 
+    const ParticleHead head = MakeParticleHead(texture, s_drawCtx, clipOffset, uvMaxU, uvMaxV, flags);
+    const vu1::ProgramAddr program = vu1::ProgramAddress(vu1::Program::Particles);
+
     for (int first = 0; first < count; first += vu1::kMaxParticlesPerBatch)
     {
         ReserveChunk(kParticleChunkQwords, mvp, flags, /*firstChunk=*/first == 0);
 
         const int remaining  = count - first;
         const int chunkCount = (remaining < vu1::kMaxParticlesPerBatch) ? remaining : vu1::kMaxParticlesPerBatch;
-        AddParticleChunk(texture, s_drawCtx, clipOffset, uvMaxU, uvMaxV,
-                         particles + first, chunkCount, flags);
+        AddParticleChunk(head, particles + first, chunkCount, program);
     }
 }
 

@@ -917,36 +917,55 @@ void GatherPolyTriangles(const mod::ModelPoly & poly, const SurfaceDrawState & s
     const mod::ModelTriangle * __restrict const tris = poly.triangles;
     const mod::PolyVertex * const polyVerts = poly.vertexes;
     const int numTriangles = poly.numVerts - 2;
+    if (numTriangles <= 0) [[unlikely]]
+    {
+        return;
+    }
+
+    // The whole polygon's room claimed once and written through a cursor of our own, rather than
+    // pushed a triangle at a time through the stream - which reloaded the stream and three of its
+    // members and stored the count back for every triangle (see ReserveVerts). A degenerate
+    // triangle leaves its slot for the next one; CommitVerts takes only what was written.
+    //
+    // __restrict for the same reason as everywhere in these loops: the stores cannot be proven
+    // disjoint from the mesh under -fno-strict-aliasing without it. Declared after the one call
+    // that may flush.
+    mod::PolyVertex * __restrict dst = state.stream->ReserveVerts(numTriangles * 3);
 
     for (int t = 0; t < numTriangles; ++t)
     {
+        // All three indices read up front: after the first store, the compiler would reload them.
         const mod::ModelTriangle & tri = tris[t];
-        if (tri.vertexes[0] == tri.vertexes[1]) [[unlikely]]
+        const int i0 = tri.vertexes[0];
+        const int i1 = tri.vertexes[1];
+        const int i2 = tri.vertexes[2];
+
+        if (i0 == i1) [[unlikely]]
         {
             continue; // Degenerate leftover from the triangulation.
         }
 
-        state.stream->BeginVerts(3);
-
-        mod::PolyVertex * __restrict const dst = state.stream->PushTriangle();
         if (patchLightmapUVs)
         {
+            const int v[3] = { i0, i1, i2 };
             for (int i = 0; i < 3; ++i)
             {
-                const int v = tri.vertexes[i];
-                vu1::CopyDrawVertex(dst[i], src[v]);
+                vu1::CopyDrawVertex(dst[i], src[v[i]]);
                 dst[i].rgba = kFullBright;
-                dst[i].s    = polyVerts[v].lightmap_s;
-                dst[i].t    = polyVerts[v].lightmap_t;
+                dst[i].s = polyVerts[v[i]].lightmap_s;
+                dst[i].t = polyVerts[v[i]].lightmap_t;
             }
         }
         else
         {
-            vu1::CopyDrawVertex(dst[0], src[tri.vertexes[0]]);
-            vu1::CopyDrawVertex(dst[1], src[tri.vertexes[1]]);
-            vu1::CopyDrawVertex(dst[2], src[tri.vertexes[2]]);
+            vu1::CopyDrawVertex(dst[0], src[i0]);
+            vu1::CopyDrawVertex(dst[1], src[i1]);
+            vu1::CopyDrawVertex(dst[2], src[i2]);
         }
+        dst += 3;
     }
+
+    state.stream->CommitVerts(dst);
 }
 
 // ------------------------------------------------------------------------------------------------

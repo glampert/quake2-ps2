@@ -512,6 +512,30 @@ public:
         return tri;
     }
 
+    // Room for up to 'verts' vertices, as BeginVerts, and where they start. For a caller gathering
+    // a run whose most it knows up front - a polygon's triangles - which then writes through a
+    // local cursor and hands back where it stopped with CommitVerts.
+    //
+    // A cursor of the caller's own is the point: pushed one triangle at a time, every triangle
+    // reloads the stream's pointer and three of its members and stores the count back, because
+    // under -fno-strict-aliasing the vertex stores in between could have changed any of them.
+    // Nothing may push, flush or change state between the two calls.
+    Q_ALWAYS_INLINE vu1::DrawVertex * ReserveVerts(const int verts)
+    {
+        BeginVerts(verts);
+        return m_verts + m_vertCount;
+    }
+
+    // Takes what was written since ReserveVerts - everything below 'end' - and leaves the rest of
+    // the reservation for whatever comes next.
+    Q_ALWAYS_INLINE void CommitVerts(const vu1::DrawVertex * const end)
+    {
+        const int count = static_cast<int>(end - (m_verts + m_vertCount));
+        PS2_AssertMsg(count >= 0 && (count % 3) == 0 && (m_vertCount + count) <= m_maxVerts,
+                      "TriangleStream::CommitVerts past what ReserveVerts gave out!");
+        m_vertCount += count;
+    }
+
     // One slot. Same contract.
     Q_ALWAYS_INLINE vu1::DrawVertex & PushVertex()
     {

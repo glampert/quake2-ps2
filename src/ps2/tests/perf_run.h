@@ -11,7 +11,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#if PS2_QUAKE_DEBUG
+#if PS2_QUAKE_PROFILE
 namespace ps2::test {
 
 // Advances the performance run by one frame. Call every frame from PS2_EndFrame.
@@ -37,4 +37,4 @@ namespace ps2::test {
 void RunPerfTest();
 
 } // namespace ps2::test
-#endif // PS2_QUAKE_DEBUG
+#endif // PS2_QUAKE_PROFILE

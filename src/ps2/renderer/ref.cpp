@@ -756,13 +756,17 @@ void PS2_EndFrame()
     // commands - but it lives here because this is the one place guaranteed to
     // be reached once per frame.
     ps2::test::RunMapCycle();
+#endif // PS2_QUAKE_DEBUG
 
+#if PS2_QUAKE_PROFILE
     // Unattended performance run (cvar "ps2_perftest 1"): plays the attract loop
     // demos with the profiling cvars forced on and quits at the end, so a capture
     // is reproducible and needs nobody watching it. Draws nothing either - it is
-    // here for the same reason as the map cycle above.
+    // here for the same reason as the map cycle above. Gated on the profiler rather
+    // than the debug build, since the frame log is all it exists to produce: a
+    // release build with the profiler on can take a capture too.
     ps2::test::RunPerfTest();
-#endif // PS2_QUAKE_DEBUG
+#endif // PS2_QUAKE_PROFILE
 
     // The backend's own debug overlays, kept out of "Ui" so the engine's 2D pass
     // and our instrumentation can be told apart - the whole point of measuring

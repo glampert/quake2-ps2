@@ -18,7 +18,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#if PS2_QUAKE_DEBUG
+#if PS2_QUAKE_PROFILE
 #include "ps2/common.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/renderer/profile.h"
@@ -214,4 +214,4 @@ void RunPerfTest()
 }
 
 } // namespace ps2::test
-#endif // PS2_QUAKE_DEBUG
+#endif // PS2_QUAKE_PROFILE

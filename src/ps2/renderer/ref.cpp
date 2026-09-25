@@ -71,7 +71,11 @@ const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2:
     const ps2::tex::Texture * texture = ps2::tex::Find(name, type);
     if (texture == nullptr)
     {
-        Com_DPrintf("Missing texture '%s', using placeholder.\n", name);
+        // A touch-only pass returns nothing for what is not cached yet, which is not missing.
+        if (!ps2::tex::IsTouchOnly())
+        {
+            Com_DPrintf("Missing texture '%s', using placeholder.\n", name);
+        }
         texture = &ps2::tex::DebugTexture();
     }
     return *texture;
@@ -578,6 +582,29 @@ void PS2_EndRegistration()
 {
     ps2::mod::EndRegistration();
     ps2::tex::EndRegistration();
+}
+
+// Free-before-load registration, driven by the client's CL_PrepRefresh. Registration used to keep
+// every asset of the level being left resident until EndRegistration, all the while the new level
+// loaded on top of it - ~3 MB of textures and models at the worst transitions, and the largest
+// single term of a map change's peak. So the client first runs its registration calls in
+// touch-only mode, which stamps what is already cached and loads nothing; PS2_FreeUnregistered
+// then frees whatever was left unstamped, and only then does the registration proper load what
+// is missing into the room that made.
+//
+// A name the touch pass misses is freed and loaded again - a disk read, never a wrong result -
+// and asserts builds report each one (see the texture and model caches).
+void PS2_SetRegistrationTouchOnly(const qboolean enable)
+{
+    ps2::mod::SetTouchOnly(enable != 0);
+    ps2::tex::SetTouchOnly(enable != 0);
+}
+
+void PS2_FreeUnregistered()
+{
+    // Models first, as EndRegistration does: a model's skins are stamped only if the model was.
+    ps2::mod::FreeUnregistered();
+    ps2::tex::FreeUnregistered();
 }
 
 // Called by the server just before it builds the next map's collision model,

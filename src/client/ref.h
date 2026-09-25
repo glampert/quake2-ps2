@@ -171,6 +171,16 @@ typedef struct
     // memory. See SV_SpawnServer, which is the only caller.
     void (*ReleaseWorldModel)(const char * bsp_name);
 
+    // [PS2_QUAKE] 2026-09-25
+    // Not part of id's original refexport_t either. Free-before-load registration:
+    // CL_PrepRefresh runs its registration calls once with SetRegistrationTouchOnly(true),
+    // which only marks what is already loaded as used by the new level and loads
+    // nothing, then calls FreeUnregistered to free everything left unmarked - the old
+    // level's leftovers - before the registration proper loads what is missing. Without
+    // it they stayed resident until EndRegistration, on top of every new load.
+    void (*SetRegistrationTouchOnly)(qboolean enable);
+    void (*FreeUnregistered)(void);
+
     // renders a 3D game view.
     void (*RenderFrame)(refdef_t * fd);
 

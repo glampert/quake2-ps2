@@ -448,7 +448,11 @@ void SetSky(const char * name, const float rotate, const vec3_t axis)
         s_faces[i] = tex::Find(path, tex::ImageType::Sky);
         if (s_faces[i] == nullptr)
         {
-            Com_DPrintf("WARNING: Missing sky face '%s'!\n", path);
+            // A touch-only pass returns nothing for a face not cached yet; the real SetSky follows.
+            if (!tex::IsTouchOnly())
+            {
+                Com_DPrintf("WARNING: Missing sky face '%s'!\n", path);
+            }
             s_faces[i] = &tex::DebugTexture();
         }
     }

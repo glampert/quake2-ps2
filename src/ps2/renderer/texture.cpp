@@ -325,6 +325,12 @@ public:
     void BeginRegistration();
     void EndRegistration();
 
+    void SetTouchOnly(const bool enable) { m_touchOnly = enable; }
+    bool IsTouchOnly() const { return m_touchOnly; }
+
+    // Frees the level assets not stamped this cycle; see tex::FreeUnregistered. Returns how many.
+    int FreeUnregistered(ImageType onlyType, bool early);
+
     // Stamp a texture as used this registration cycle (see tex::TouchTexture).
     void MarkReferenced(const Texture & texture)
     {
@@ -360,6 +366,21 @@ private:
 
     // Lookup: FNV-1a hash of the full path + image type -> pool slot of the texture.
     HashMap<kMaxTextures> m_lookup;
+
+    // See tex::SetTouchOnly.
+    bool m_touchOnly = false;
+
+#if PS2_QUAKE_ASSERTS
+    // What the early sweeps dropped this cycle, by lookup key. A texture freed there and then
+    // loaded again before EndRegistration was one the new level uses after all - a name the touch
+    // pass missed - and costs a second read from disk. Reported as it happens and counted, so
+    // the MapCycle log shows whether the touch pass is complete. Bounded: a cycle drops a few
+    // hundred at most; past the cap it stops recording rather than growing.
+    static constexpr int kMaxEarlyFrees = 1024;
+    u64 m_earlyFreedKeys[kMaxEarlyFrees] = {};
+    int m_earlyFreedCount = 0;
+    int m_reloadedCount   = 0;
+#endif // PS2_QUAKE_ASSERTS
 };
 
 const Texture * TextureCache::Find(const char * name, const ImageType type)
@@ -370,9 +391,28 @@ const Texture * TextureCache::Find(const char * name, const ImageType type)
     char fullname[MAX_QPATH];
     NormalizeName(name, type, fullname);
 
-    const u16 slot = m_lookup.Find(LookupKey(fullname, type));
+    const u64 key  = LookupKey(fullname, type);
+    const u16 slot = m_lookup.Find(key);
+
     if (slot == m_lookup.kInvalidValue)
     {
+        if (m_touchOnly)
+        {
+            return nullptr; // Stamping only; the registration proper loads it.
+        }
+
+#if PS2_QUAKE_ASSERTS
+        for (int i = 0; i < m_earlyFreedCount; ++i)
+        {
+            if (m_earlyFreedKeys[i] == key)
+            {
+                Com_Printf("WARNING: texture '%s' freed before load and then loaded again.\n", fullname);
+                ++m_reloadedCount;
+                break;
+            }
+        }
+#endif // PS2_QUAKE_ASSERTS
+
         return LoadFromFile(fullname, type);
     }
 
@@ -537,19 +577,30 @@ void TextureCache::BeginRegistration()
     ++m_regSequence;
 }
 
-void TextureCache::EndRegistration()
+int TextureCache::FreeUnregistered(const ImageType onlyType, const bool early)
 {
     // Free the level assets this registration cycle no longer references.
     // Pics are exempt like in ref_gl - the client caches pointers to them
     // across levels and they are small; built-ins are permanent.
-    const int freedCount = static_cast<int>(m_lookup.RemoveIf([this](u64, u16 slot) {
+    const int freedCount = static_cast<int>(m_lookup.RemoveIf([this, onlyType, early](u64 key, u16 slot) {
         const Texture & texture = m_texturePool.Slot(slot);
         if (HasFlag(texture.flags, TexFlags::Builtin) ||
             texture.type == ImageType::Pic ||
-            texture.regSequence == m_regSequence)
+            texture.regSequence == m_regSequence ||
+            (onlyType != ImageType::Null && texture.type != onlyType))
         {
             return false;
         }
+
+#if PS2_QUAKE_ASSERTS
+        if (early && m_earlyFreedCount < kMaxEarlyFrees)
+        {
+            m_earlyFreedKeys[m_earlyFreedCount++] = key;
+        }
+#else // PS2_QUAKE_ASSERTS
+        (void)key;
+        (void)early;
+#endif // PS2_QUAKE_ASSERTS
 
         Com_DPrintf("Freeing unused texture '%s'\n", texture.name);
         Unload(slot);
@@ -558,9 +609,26 @@ void TextureCache::EndRegistration()
 
     if (freedCount > 0)
     {
-        Com_DPrintf("Texture cache: freed %d unused textures.\n", freedCount);
+        Com_DPrintf("Texture cache: freed %d unused textures%s.\n", freedCount, early ? " before load" : "");
         gs::DefragVramHeap();
     }
+    return freedCount;
+}
+
+void TextureCache::EndRegistration()
+{
+    PS2_AssertMsg(!m_touchOnly, "Registration ended with touch-only mode still on!");
+
+    FreeUnregistered(ImageType::Null, /*early=*/false);
+
+#if PS2_QUAKE_ASSERTS
+    if (m_reloadedCount > 0)
+    {
+        Com_Printf("WARNING: %d texture(s) freed before load were loaded again.\n", m_reloadedCount);
+    }
+    m_earlyFreedCount = 0;
+    m_reloadedCount   = 0;
+#endif // PS2_QUAKE_ASSERTS
 
     scrap::DumpUsage();
 }
@@ -725,6 +793,21 @@ void BeginRegistration()
 void EndRegistration()
 {
     s_cache.EndRegistration();
+}
+
+void SetTouchOnly(const bool enable)
+{
+    s_cache.SetTouchOnly(enable);
+}
+
+bool IsTouchOnly()
+{
+    return s_cache.IsTouchOnly();
+}
+
+void FreeUnregistered(const ImageType onlyType)
+{
+    s_cache.FreeUnregistered(onlyType, /*early=*/true);
 }
 
 const Texture * Find(const char * name, const ImageType type)

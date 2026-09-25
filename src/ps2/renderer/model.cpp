@@ -54,6 +54,11 @@ public:
     const ModelInstance * Find(const char * name);
     const ModelInstance * WorldModel() { return m_worldModel; }
     bool IsRegistering() const { return m_registering; }
+    void SetTouchOnly(const bool enable) { m_touchOnly = enable; }
+
+    // Frees the models this cycle has not stamped. 'early' when run before the loads rather than
+    // at EndRegistration (see mod::FreeUnregistered). Returns how many.
+    int FreeUnregistered(bool early);
 
 private:
     const ModelInstance * LoadModel(const char * name);
@@ -99,6 +104,18 @@ private:
 
     // Between BeginRegistration and EndRegistration.
     bool m_registering = false;
+
+    // See mod::SetTouchOnly.
+    bool m_touchOnly = false;
+
+#if PS2_QUAKE_ASSERTS
+    // What the early sweep dropped this cycle, by name hash, to report any of them loaded again
+    // before EndRegistration - a name the touch pass missed. As in the texture cache.
+    static constexpr int kMaxEarlyFrees = 256;
+    u64 m_earlyFreedKeys[kMaxEarlyFrees] = {};
+    int m_earlyFreedCount = 0;
+    int m_reloadedCount   = 0;
+#endif // PS2_QUAKE_ASSERTS
 };
 
 void ModelCache::Init()
@@ -123,7 +140,9 @@ const ModelInstance * ModelCache::Find(const char * const name)
         return FindInlineModel(name);
     }
 
-    const u16 slot = m_lookup.Find(HashStr64(name));
+    const u64 key  = HashStr64(name);
+    const u16 slot = m_lookup.Find(key);
+
     if (slot != m_lookup.kInvalidValue)
     {
         ModelInstance & mdl = m_modelPool.Slot(slot);
@@ -140,6 +159,23 @@ const ModelInstance * ModelCache::Find(const char * const name)
         ReferenceAllTextures(mdl);       // Keep its textures alive too.
         return &mdl;
     }
+
+    if (m_touchOnly)
+    {
+        return nullptr; // Stamping only; the registration proper loads it.
+    }
+
+#if PS2_QUAKE_ASSERTS
+    for (int i = 0; i < m_earlyFreedCount; ++i)
+    {
+        if (m_earlyFreedKeys[i] == key)
+        {
+            Com_Printf("WARNING: model '%s' freed before load and then loaded again.\n", name);
+            ++m_reloadedCount;
+            break;
+        }
+    }
+#endif // PS2_QUAKE_ASSERTS
 
     return LoadModel(name);
 }
@@ -489,17 +525,25 @@ void ModelCache::LoadWorldModel(const char * const mapName)
     m_worldModel = world;
 }
 
-void ModelCache::EndRegistration()
+int ModelCache::FreeUnregistered(const bool early)
 {
-    m_registering = false;
-
     // Free the models this cycle no longer references.
-    const int freedCount = static_cast<int>(m_lookup.RemoveIf([this](u64, u16 slot) {
+    const int freedCount = static_cast<int>(m_lookup.RemoveIf([this, early](u64 key, u16 slot) {
         ModelInstance & mdl = m_modelPool.Slot(slot);
         if (mdl.regSequence == m_regSequence)
         {
             return false;
         }
+
+#if PS2_QUAKE_ASSERTS
+        if (early && m_earlyFreedCount < kMaxEarlyFrees)
+        {
+            m_earlyFreedKeys[m_earlyFreedCount++] = key;
+        }
+#else // PS2_QUAKE_ASSERTS
+        (void)key;
+        (void)early;
+#endif // PS2_QUAKE_ASSERTS
 
         if (kVerboseModelCache)
         {
@@ -517,8 +561,26 @@ void ModelCache::EndRegistration()
 
     if (freedCount > 0)
     {
-        Com_DPrintf("Model cache: freed %d unused models.\n", freedCount);
+        Com_DPrintf("Model cache: freed %d unused models%s.\n", freedCount, early ? " before load" : "");
     }
+    return freedCount;
+}
+
+void ModelCache::EndRegistration()
+{
+    PS2_AssertMsg(!m_touchOnly, "Registration ended with touch-only mode still on!");
+    m_registering = false;
+
+    FreeUnregistered(/*early=*/false);
+
+#if PS2_QUAKE_ASSERTS
+    if (m_reloadedCount > 0)
+    {
+        Com_Printf("WARNING: %d model(s) freed before load were loaded again.\n", m_reloadedCount);
+    }
+    m_earlyFreedCount = 0;
+    m_reloadedCount   = 0;
+#endif // PS2_QUAKE_ASSERTS
 }
 
 static ModelCache s_cache;
@@ -547,6 +609,16 @@ void EndRegistration()
 bool IsRegistering()
 {
     return s_cache.IsRegistering();
+}
+
+void SetTouchOnly(const bool enable)
+{
+    s_cache.SetTouchOnly(enable);
+}
+
+void FreeUnregistered()
+{
+    s_cache.FreeUnregistered(/*early=*/true);
 }
 
 bool ReleaseWorldModel(const char * fullName)

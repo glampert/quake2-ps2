@@ -702,6 +702,21 @@ void LoadTexInfo(ModelInstance & mdl, HunkAllocator & hunk, const void * const l
     mdl.Brush().texInfos    = out;
     mdl.Brush().numTexInfos = ToU16(count);
 
+    // Free before load, for the walls (see PS2_SetRegistrationTouchOnly for the rest of a level).
+    // The old world's walls would otherwise stay resident until EndRegistration, under all of this
+    // one's. By now nothing else references them: the old world and its inline models were
+    // released before this load, and no other kind of model draws with a Wall image. So mark the
+    // ones this map reuses, free the rest, and only then load what is missing.
+    tex::SetTouchOnly(true);
+    for (int i = 0; i < count; ++i)
+    {
+        char name[MAX_QPATH];
+        std::snprintf(name, sizeof(name), "textures/%s.wal", in[i].texture);
+        tex::Find(name, tex::ImageType::Wall);
+    }
+    tex::SetTouchOnly(false);
+    tex::FreeUnregistered(tex::ImageType::Wall);
+
     for (int i = 0; i < count; ++i)
     {
         for (int j = 0; j < 4; ++j)

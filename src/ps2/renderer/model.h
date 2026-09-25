@@ -425,6 +425,13 @@ void EndRegistration();
 // registered, and whatever the previous level left unreferenced is still resident.
 bool IsRegistering();
 
+// Free-before-load registration, as tex::SetTouchOnly/FreeUnregistered: while touch-only mode is
+// on, Find stamps a cached model (and, through it, its skins or frames) and returns nullptr for
+// one that is not cached, without loading it. FreeUnregistered then frees every model this cycle
+// has not stamped - EndRegistration's sweep, run before the new level's loads.
+void SetTouchOnly(bool enable);
+void FreeUnregistered();
+
 const ModelInstance * Find(const char * name);
 
 // Frees the resident world model, unless it is already 'fullName' (a "maps/*.bsp"

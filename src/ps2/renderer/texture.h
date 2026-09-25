@@ -227,6 +227,18 @@ void Init(float intensity);
 void BeginRegistration();
 void EndRegistration();
 
+// Free-before-load registration (see PS2_SetRegistrationTouchOnly in ref.cpp). While touch-only
+// mode is on, Find stamps what is already cached as used this cycle and returns nullptr for
+// anything that is not, without loading it.
+void SetTouchOnly(bool enable);
+bool IsTouchOnly();
+
+// EndRegistration's sweep, run early: frees the level assets this cycle has not stamped, so the
+// previous level's leftovers are gone before the new level's loads rather than after them.
+// 'onlyType' limits it to one ImageType - the world load frees the old walls that way before
+// loading the new ones; Null means every type a level owns.
+void FreeUnregistered(ImageType onlyType = ImageType::Null);
+
 // Looks up a texture by game name and type, loading it from disk (PCX/WAL/TGA,
 // by extension) on a cache miss; the type is part of the cache key, so the same
 // file may live in the cache once per ImageType. Pic names follow the ref_gl

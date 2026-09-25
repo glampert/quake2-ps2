@@ -272,6 +272,74 @@ void CL_ReleaseWorldModel(const char * bsp_name)
     re.ReleaseWorldModel(bsp_name ? bsp_name : "");
 }
 
+#ifdef PS2_QUAKE
+/*
+=================
+CL_TouchLevelAssets
+
+[PS2_QUAKE]: Free before load. Registration used to leave everything the previous level
+loaded resident until EndRegistration, while every new model, skin and sky face of this
+level loaded on top of it: ~3 MB of textures and models at the worst map changes, and the
+biggest single term of the peak. This runs the same registration calls CL_PrepRefresh is
+about to make, in touch-only mode - the renderer marks what it already holds as used by
+this level and loads nothing - and then has it free everything left unmarked, so the
+loads that follow land in the room that made.
+
+Anything missed here is only freed and loaded again (asserts builds log each one), so it
+reuses the real pass's own calls rather than a list of its own. The pointers they write
+into cl are overwritten by that pass straight after, and nothing draws 3D in between:
+V_RenderView returns until refresh_prepped. Walls are the renderer's business - they come
+from the BSP and are dealt with as the world loads.
+=================
+*/
+static void CL_TouchLevelAssets(void)
+{
+    int i;
+    float rotate;
+    vec3_t axis;
+
+    re.SetRegistrationTouchOnly(true);
+
+    CL_RegisterTEntModels();
+
+    // The '#' entries are the player weapon models the client infos below look up, so the list
+    // they read has to exist first - built exactly as the model loop in CL_PrepRefresh does.
+    num_cl_weaponmodels = 1;
+    strcpy(cl_weaponmodels[0], "weapon.md2");
+
+    for (i = 1; i < MAX_MODELS && cl.configstrings[CS_MODELS + i][0]; i++)
+    {
+        if (cl.configstrings[CS_MODELS + i][0] == '#')
+        {
+            if (num_cl_weaponmodels < MAX_CLIENTWEAPONMODELS)
+            {
+                strncpy(cl_weaponmodels[num_cl_weaponmodels], cl.configstrings[CS_MODELS + i] + 1,
+                        sizeof(cl_weaponmodels[num_cl_weaponmodels]) - 1);
+                num_cl_weaponmodels++;
+            }
+        }
+        else
+        {
+            re.RegisterModel(cl.configstrings[CS_MODELS + i]);
+        }
+    }
+
+    for (i = 0; i < MAX_CLIENTS; i++)
+    {
+        if (cl.configstrings[CS_PLAYERSKINS + i][0])
+            CL_ParseClientinfo(i);
+    }
+    CL_LoadClientinfo(&cl.baseclientinfo, "unnamed\\male/grunt");
+
+    rotate = atof(cl.configstrings[CS_SKYROTATE]);
+    sscanf(cl.configstrings[CS_SKYAXIS], "%f %f %f", &axis[0], &axis[1], &axis[2]);
+    re.SetSky(cl.configstrings[CS_SKY], rotate, axis);
+
+    re.SetRegistrationTouchOnly(false);
+    re.FreeUnregistered();
+}
+#endif // PS2_QUAKE
+
 /*
 =================
 CL_PrepRefresh
@@ -302,6 +370,10 @@ void CL_PrepRefresh(void)
     SCR_UpdateScreen();
     re.BeginRegistration(mapname);
     Com_Printf("                                     \r");
+
+#ifdef PS2_QUAKE
+    CL_TouchLevelAssets(); // [PS2_QUAKE]: free the previous level's leftovers before loading
+#endif
 
     // precache status bar pics
     Com_Printf("pics\r");

@@ -36,7 +36,7 @@
 ;        blow-up rate in .w
 ;   +2   UV of the billboard's anchor corner
 ;   +3   UV of its opposite corner
-;   +4   7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
+;   +4   7 GIF tag qwords (set tag, MIPTBP1/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
 ;   +11  particles, 1 qword each: (rgba, x, y, z)
 ;
 ; The GS packet (the 7 GIF tags + 5 output qwords per particle: the

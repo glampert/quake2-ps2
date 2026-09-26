@@ -194,12 +194,6 @@ constexpr u64 PackDitherMatrix(const signed char (&matrix)[16])
     return packed;
 }
 
-// Bytes of EE RAM the texture's pixel buffer occupies (linear width*height texels).
-Q_ALWAYS_INLINE int PixelBufferBytes(const tex::Texture & texture)
-{
-    return texture.width * texture.height * tex::BytesPerTexel(texture.format);
-}
-
 // Sends one or two CLUTs to their fixed VRAM addresses and waits for the
 // transfer. Only ever called from Init now, before a frame has ever started, so
 // it can take the shared upload packet without fighting the streamed texture
@@ -391,6 +385,24 @@ u64 MakeTex0(const tex::Texture & texture, const bool lit)
                        palettized ? CLUT_LOAD : CLUT_NO_LOAD);
 }
 
+u64 MakeMipTbp1(const tex::Texture & texture)
+{
+    if (tex::MipLevels(texture) == 0)
+    {
+        return 0;
+    }
+    PS2_AssertMsg(texture.IsVramResident(), "MakeMipTbp1 for a texture with no VRAM!");
+
+    // The same offsets and buffer widths UploadTexture wrote the levels with. A texture with
+    // fewer than three levels leaves the unused ones pointing at its base; MXL keeps the GS off
+    // them.
+    const vram::MipLayout & layout = vram::MipLayoutFor(texture);
+    const u32 base = static_cast<u32>(texture.vramAddr) >> 6;
+    return GS_SET_MIPTBP1(base + layout.blockOffset[1], layout.strideUnits[1],
+                          base + layout.blockOffset[2], layout.strideUnits[2],
+                          base + layout.blockOffset[3], layout.strideUnits[3]);
+}
+
 void ReleaseTexture(const tex::Texture & texture)
 {
     // Never leave the TEX0 dedupe pointing at a released texture: a rebind in
@@ -459,7 +471,7 @@ void UploadTexture(const tex::Texture & texture)
         // SendChain only writes back the chain-tag buffer, not REF'd data - flush the range or
         // the GS reads stale texels. Built-ins are never dirty (the ELF loader wrote them).
         void * pixels = const_cast<void *>(texture.pixels);
-        SyncDCache(pixels, static_cast<u8 *>(pixels) + PixelBufferBytes(texture));
+        SyncDCache(pixels, static_cast<u8 *>(pixels) + tex::PixelBytes(texture));
         texture.dirtyPixels = false;
     }
 
@@ -468,7 +480,27 @@ void UploadTexture(const tex::Texture & texture)
     // texture needs - but GifWriter::Advance checks afterwards under asserts, so a texture that
     // outgrows this scratch packet says so instead of scribbling past it.
     GifWriter & pkt = s_texUploadPacket.Begin();
-    pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
+    const int mipLevels = tex::MipLevels(texture);
+    if (mipLevels == 0)
+    {
+        pkt.TextureTransfer(texture.pixels, texture.width, texture.height, psm, texture.vramAddr, stride);
+    }
+    else
+    {
+        // One transfer per level, each to where the chain's layout puts it and at its own buffer
+        // width - the same two things MIPTBP1 hands the GS for sampling it.
+        const vram::MipLayout & layout = vram::MipLayoutFor(texture);
+        const u8 * levelPixels = static_cast<const u8 *>(texture.pixels);
+        for (int level = 0; level <= mipLevels; ++level)
+        {
+            const int levelWidth  = texture.width  >> level;
+            const int levelHeight = texture.height >> level;
+            const auto levelAddr  = vram::Address(static_cast<int>(texture.vramAddr) + (layout.blockOffset[level] * 64));
+
+            pkt.TextureTransfer(levelPixels, levelWidth, levelHeight, psm, levelAddr, layout.strideUnits[level] * 64);
+            levelPixels += levelWidth * levelHeight * tex::BytesPerTexel(texture.format);
+        }
+    }
     pkt.TextureFlush();
 
     // Nothing may reach the GS over PATH3 while a chain is still being fed to it over PATH1 and
@@ -525,6 +557,13 @@ void EmitBegin2D(GifWriter & w, const DrawContext ctx)
 
     w.DisableTests(Index(ctx), detail::g_state.zbuffer);
     w.SetRegister(ContextReg(GS_REG_ZBUF, ctx), MakeZBuf(false));
+}
+
+void EmitEnd2D(GifWriter & w, const DrawContext ctx)
+{
+    w.EnsureSpace(kEnd2DQwords);
+
+    w.SetRegister(ContextReg(GS_REG_TEST, ctx), MakePixelTests());
 }
 
 void EmitFillRect(GifWriter & w, const DrawContext ctx, const int x, const int y,

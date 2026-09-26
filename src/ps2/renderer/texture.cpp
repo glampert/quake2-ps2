@@ -20,6 +20,24 @@
 namespace ps2::tex {
 namespace {
 
+// ------------------------------------------------------------------------------------------------
+// Global texture settings
+// ------------------------------------------------------------------------------------------------
+
+// Set by tex::SetSkyDownsample(); consumed by LoadFromFile for Sky images.
+static bool s_skyDownsample = false;
+
+// Set by tex::SetWallMipmaps(); consumed by LoadFromFile for WAL walls.
+static bool s_wallMipmaps = false;
+
+// ref_gl's 'intensity', as Init was given it: the brightening a lit true-colour image
+// takes in its own texels. Latched, so it is the same for every image of a run.
+static float s_intensityScale = 1.0f;
+
+// ------------------------------------------------------------------------------------------------
+// Local helpers
+// ------------------------------------------------------------------------------------------------
+
 // Cache lookup key: the name hash continued with the image type as one extra
 // FNV-1a byte, so the same file may be cached independently per ImageType.
 Q_ALWAYS_INLINE u64 LookupKey(const char * fullname, ImageType type)
@@ -66,10 +84,6 @@ bool HasTransparentTexels(const u8 * pic8, int texelCount)
     return false;
 }
 
-// ref_gl's 'intensity', as Init was given it: the brightening a lit true-colour image
-// takes in its own texels. Latched, so it is the same for every image of a run.
-static float s_intensityScale = 1.0f;
-
 // Multiplies an RGBA32 image's colour channels in place, clamping each at full
 // rather than wrapping. The alpha is left alone - it is coverage, not light.
 // This is ref_gl's intensitytable applied directly to the texels, for the images
@@ -81,7 +95,7 @@ void ScaleTexelsForIntensity(u8 * rgba, int texelCount, float scale)
         return;
     }
 
-    // TODO: Precompute and cache ramp values.
+    // TODO: Precompute and cache ramp values?
     u8 ramp[256];
     for (int i = 0; i < ArrayLength(ramp); ++i)
     {
@@ -96,9 +110,6 @@ void ScaleTexelsForIntensity(u8 * rgba, int texelCount, float scale)
         rgba[2] = ramp[rgba[2]];
     }
 }
-
-// Set by tex::SetSkyDownsample(); consumed by LoadFromFile for Sky images.
-static bool s_skyDownsample = false;
 
 // Halves an 8-bit indexed image in both dimensions by point sampling, into a
 // fresh allocation - a quarter of the VRAM for a sky face.
@@ -160,9 +171,13 @@ u8 * DownsampleIndexed2x(u8 * pic8, int * width, int * height)
 // is dropped - so an image's transparent texels (index 255) all survive, and
 // the duplication is invisible under bilinear sampling at PS2 resolutions.
 //
+// 'mipLevels' levels follow level 0 in 'pixels' (see MipChainBytes), and each
+// is stretched to its own half of the one before, so the chain comes out as the
+// power-of-two image's mip chain.
+//
 // Frees 'pixels' and returns the replacement, or leaves it alone and returns
 // it unchanged when both dimensions are already powers of two.
-u8 * ResampleToPowerOfTwo(u8 * pixels, int * width, int * height, const int bytesPerTexel)
+u8 * ResampleToPowerOfTwo(u8 * pixels, int * width, int * height, const int bytesPerTexel, const int mipLevels)
 {
     const int srcW = *width;
     const int srcH = *height;
@@ -176,46 +191,81 @@ u8 * ResampleToPowerOfTwo(u8 * pixels, int * width, int * height, const int byte
 
     u8 * const scaled = static_cast<u8 *>(
         ps2::heap::AllocAligned(ps2::heap::MemAlign(16),
-                                static_cast<size_t>(dstW * dstH * bytesPerTexel),
+                                static_cast<size_t>(MipChainBytes(dstW, dstH, mipLevels, bytesPerTexel)),
                                 ps2::heap::MemTag::TexImage));
 
-    // 16.16 fixed-point steps through the source image. The destination never
-    // shrinks, so both steps are <= 1.0 and the accumulators stay in bounds.
-    const u32 stepS = (static_cast<u32>(srcW) << 16) / static_cast<u32>(dstW);
-    const u32 stepT = (static_cast<u32>(srcH) << 16) / static_cast<u32>(dstH);
-
-    const int srcPitch = srcW * bytesPerTexel;
-    const int dstPitch = dstW * bytesPerTexel;
-
-    u32 accT = 0;
-    for (int y = 0; y < dstH; ++y, accT += stepT)
+    const u8 * srcLevel = pixels;
+    u8 *       dstLevel = scaled;
+    for (int level = 0; level <= mipLevels; ++level)
     {
-        const u8 * const srcRow = pixels + (static_cast<int>(accT >> 16) * srcPitch);
-        u8 * const       dstRow = scaled + (y * dstPitch);
+        const int levelSrcW = srcW >> level;
+        const int levelSrcH = srcH >> level;
+        const int levelDstW = dstW >> level;
+        const int levelDstH = dstH >> level;
 
-        if (srcW == dstW) // Only the height grew; rows copy whole.
-        {
-            std::memcpy(dstRow, srcRow, static_cast<size_t>(srcPitch));
-            continue;
-        }
+        // 16.16 fixed-point steps through the source image. The destination never
+        // shrinks, so both steps are <= 1.0 and the accumulators stay in bounds.
+        const u32 stepS = (static_cast<u32>(levelSrcW) << 16) / static_cast<u32>(levelDstW);
+        const u32 stepT = (static_cast<u32>(levelSrcH) << 16) / static_cast<u32>(levelDstH);
 
-        u32 accS = 0;
-        for (int x = 0; x < dstW; ++x, accS += stepS)
+        const int srcPitch = levelSrcW * bytesPerTexel;
+        const int dstPitch = levelDstW * bytesPerTexel;
+
+        u32 accT = 0;
+        for (int y = 0; y < levelDstH; ++y, accT += stepT)
         {
-            const u8 * const srcTexel = srcRow + (static_cast<int>(accS >> 16) * bytesPerTexel);
-            u8 * const       dstTexel = dstRow + (x * bytesPerTexel);
-            for (int b = 0; b < bytesPerTexel; ++b)
+            const u8 * const srcRow = srcLevel + (static_cast<int>(accT >> 16) * srcPitch);
+            u8 * const       dstRow = dstLevel + (y * dstPitch);
+
+            if (levelSrcW == levelDstW) // Only the height grew; rows copy whole.
             {
-                dstTexel[b] = srcTexel[b];
+                std::memcpy(dstRow, srcRow, static_cast<size_t>(srcPitch));
+                continue;
+            }
+
+            u32 accS = 0;
+            for (int x = 0; x < levelDstW; ++x, accS += stepS)
+            {
+                const u8 * const srcTexel = srcRow + (static_cast<int>(accS >> 16) * bytesPerTexel);
+                u8 * const       dstTexel = dstRow + (x * bytesPerTexel);
+                for (int b = 0; b < bytesPerTexel; ++b)
+                {
+                    dstTexel[b] = srcTexel[b];
+                }
             }
         }
+
+        srcLevel += levelSrcH * srcPitch;
+        dstLevel += levelDstH * dstPitch;
     }
 
-    ps2::heap::Free(pixels, static_cast<size_t>(srcW * srcH * bytesPerTexel), ps2::heap::MemTag::TexImage);
+    ps2::heap::Free(pixels, static_cast<size_t>(MipChainBytes(srcW, srcH, mipLevels, bytesPerTexel)),
+                    ps2::heap::MemTag::TexImage);
 
     *width  = dstW;
     *height = dstH;
     return scaled;
+}
+
+// A WAL image's pixel buffer: level 0 and the first 'mipLevels' of the file's mip levels
+// after it, packed as MipChainBytes lays them out, each at the size the file has it.
+u8 * CopyWalLevels(const WalFile & wal, const int mipLevels)
+{
+    PS2_Assert(mipLevels >= 0 && mipLevels < wal.numLevels);
+
+    u8 * const chain = static_cast<u8 *>(
+        ps2::heap::AllocAligned(ps2::heap::MemAlign(16),
+                                static_cast<size_t>(MipChainBytes(wal.width, wal.height, mipLevels, 1)),
+                                ps2::heap::MemTag::TexImage));
+
+    u8 * dst = chain;
+    for (int level = 0; level <= mipLevels; ++level)
+    {
+        const int levelBytes = (wal.width >> level) * (wal.height >> level);
+        std::memcpy(dst, wal.levels[level], static_cast<size_t>(levelBytes));
+        dst += levelBytes;
+    }
+    return chain;
 }
 
 // Checkerboards for the DebugTexture() variants, RGB16. Variant 0 (pink) is
@@ -436,9 +486,10 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         return nullptr;
     }
 
-    u8 * pixels = nullptr;
-    int width   = 0;
-    int height  = 0;
+    u8 * pixels   = nullptr;
+    int width     = 0;
+    int height    = 0;
+    int mipLevels = 0; // levels 'pixels' carries after level 0 (WAL walls only)
     PixelFormat format;
     TexComponents components;
 
@@ -448,12 +499,35 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         // the global-palette CLUT uploaded at init, at a quarter of the RGBA32
         // footprint in RAM and VRAM.
         u8 * pic8 = nullptr;
-        const bool loaded = (extension[1] == 'p')
-            ? img::LoadPcx(fullname, &pic8, &width, &height)
-            : img::LoadWal(fullname, &pic8, &width, &height);
-        if (!loaded)
+        if (extension[1] == 'p')
         {
-            return nullptr;
+            if (!LoadPcx(fullname, &pic8, &width, &height))
+            {
+                return nullptr;
+            }
+        }
+        else
+        {
+            WalFile wal;
+            if (!LoadWal(fullname, &wal))
+            {
+                return nullptr;
+            }
+
+            // A wall's mip levels are the file's own. They go up to the power-of-two extent
+            // below along with level 0, so that is the size the count follows; a file whose
+            // chain comes up short of it loads without any.
+            if (type == ImageType::Wall && s_wallMipmaps)
+            {
+                const int wanted = MipLevelsFor(1 << tex::Log2(static_cast<u32>(wal.width)),
+                                                1 << tex::Log2(static_cast<u32>(wal.height)));
+                mipLevels = (wal.numLevels - 1 >= wanted) ? wanted : 0;
+            }
+
+            width  = wal.width;
+            height = wal.height;
+            pic8   = CopyWalLevels(wal, mipLevels);
+            FreeWal(wal);
         }
 
         if (type == ImageType::Sky && s_skyDownsample)
@@ -509,7 +583,7 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
     {
         u8 * pic32 = nullptr;
         bool hasAlpha = false;
-        if (!img::LoadTga(fullname, &pic32, &width, &height, &hasAlpha))
+        if (!LoadTga(fullname, &pic32, &width, &height, &hasAlpha))
         {
             return nullptr;
         }
@@ -541,12 +615,16 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
     const int srcHeight = height;
     if (type == ImageType::Wall)
     {
-        pixels = ResampleToPowerOfTwo(pixels, &width, &height, BytesPerTexel(format));
+        pixels = ResampleToPowerOfTwo(pixels, &width, &height, BytesPerTexel(format), mipLevels);
     }
 
-    Texture & texture = Register(fullname, pixels, width, height, format, components, type, TexFlags::None);
+    Texture & texture = Register(fullname, pixels, width, height, format, components, type,
+                                 (mipLevels > 0) ? TexFlags::Mipmapped : TexFlags::None);
     texture.srcWidth  = static_cast<s16>(srcWidth);
     texture.srcHeight = static_cast<s16>(srcHeight);
+
+    // The flag and the size are all that record how many levels there are.
+    PS2_Assert(MipLevels(texture) == mipLevels);
     return &texture;
 }
 
@@ -565,8 +643,8 @@ void TextureCache::Unload(u16 slot)
     // policy ever changes.
     if (texture.atlas == nullptr)
     {
-        const int pixelBytes = texture.width * texture.height * BytesPerTexel(texture.format);
-        ps2::heap::Free(const_cast<void *>(texture.pixels), static_cast<size_t>(pixelBytes), ps2::heap::MemTag::TexImage);
+        ps2::heap::Free(const_cast<void *>(texture.pixels), static_cast<size_t>(PixelBytes(texture)),
+                        ps2::heap::MemTag::TexImage);
     }
 
     m_texturePool.Free(slot); // resets the slot; its type reads Null again
@@ -818,6 +896,24 @@ const Texture * Find(const char * name, const ImageType type)
 void SetSkyDownsample(const bool enable)
 {
     s_skyDownsample = enable;
+}
+
+bool WallMipmaps()
+{
+    return s_wallMipmaps;
+}
+
+void SetWallMipmaps(const bool enable)
+{
+    if (enable == s_wallMipmaps)
+    {
+        return;
+    }
+    s_wallMipmaps = enable;
+
+    // Nothing is stamped yet this early in a registration, so this is every wall. Not an early
+    // free as the touch pass means it: these reload by design, and are no miss to report.
+    s_cache.FreeUnregistered(ImageType::Wall, /*early=*/false);
 }
 
 void TouchTexture(const Texture & texture)

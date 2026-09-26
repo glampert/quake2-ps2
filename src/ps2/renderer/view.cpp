@@ -82,6 +82,14 @@ static const cvar_t * s_polyblend         = nullptr;
 // (cl_main.c), which forwards it to the server in each usercmd.
 static cvar_t * s_lightLevel = nullptr;
 
+// ps2_mip_filter picks the filtering of the walls and model skins by name, as ref_gl's
+// gl_texturemode did: nearest, bilinear or trilinear. Non-const to clear its 'modified' flag,
+// which is what gets a new name parsed - once, not every frame. ps2_mip_bias shifts the mip
+// levels the walls sample, in levels; positive is blurrier. See SetUpTextureSampling.
+static cvar_t *       s_mipFilter     = nullptr;
+static const cvar_t * s_mipBias       = nullptr;
+static gs::MipFilter  s_mipFilterMode = gs::MipFilter::Bilinear;
+
 // ------------------------------------------------------------------------------------------------
 // Frame state
 // ------------------------------------------------------------------------------------------------
@@ -238,6 +246,57 @@ Q_ALWAYS_INLINE int SignBitsForPlane(const cplane_t & plane)
         }
     }
     return bits;
+}
+
+// The frame's texture filtering and the constant that picks the walls' mip levels.
+//
+// A wall texel spans one world unit - 2085 of the 2118 walls are powers of two, and nearly every
+// texinfo is unscaled - and at view depth w a world unit covers f / w pixels, where
+// f = (screen height / 2) * cot(fovY / 2) is the projection's focal length in pixels (see
+// PerspectiveProjection; 320 at 640x448 and fov 90). So texels shrink to a pixel at w = f, and
+// the level that keeps them about a pixel wide is log2(w / f): with the GS measuring log2(1/Q)
+// and Q = 1/w, that makes K = -log2(f). The GS goes by depth alone, not by how slanted the
+// surface is, so a floor seen at a grazing angle gets a sharper level than its texel density on
+// screen calls for; ps2_mip_bias is the knob for that.
+void SetUpTextureSampling(const refdef_t & viewDef)
+{
+    if (s_mipFilter->modified)
+    {
+        s_mipFilter->modified = false;
+
+        static const char * const kFilterNames[] = { "nearest", "bilinear", "trilinear" };
+        int filter = -1;
+        for (int i = 0; i < ArrayLength(kFilterNames); ++i)
+        {
+            if (Q_stricmp(s_mipFilter->string, kFilterNames[i]) == 0)
+            {
+                filter = i;
+            }
+        }
+
+        if (filter >= 0)
+        {
+            s_mipFilterMode = static_cast<gs::MipFilter>(filter);
+        }
+        else
+        {
+            const char * const current = kFilterNames[static_cast<int>(s_mipFilterMode)];
+            Com_Printf("ps2_mip_filter: '%s' is not nearest, bilinear or trilinear; keeping %s.\n",
+                       s_mipFilter->string, current);
+            Cvar_Set(s_mipFilter->name, current);
+            s_mipFilter->modified = false;
+        }
+    }
+
+    const float halfFovY    = math::DegToRad(viewDef.fov_y) * 0.5f;
+    const float focalPixels = 0.5f * static_cast<float>(gs::Height()) * math::Cosf(halfFovY) / math::Sinf(halfFovY);
+    const float lodK        = s_mipBias->value - std::log2(focalPixels);
+
+    // TEX1.K is signed fixed point with four fraction bits, in 12 bits.
+    int lodK16 = static_cast<int>((lodK * 16.0f) + ((lodK < 0.0f) ? -0.5f : 0.5f));
+    lodK16 = (lodK16 < -2048) ? -2048 : ((lodK16 > 2047) ? 2047 : lodK16);
+
+    rs::SetTextureSampling({ s_mipFilterMode, lodK16 });
 }
 
 // Builds the four frustum side planes by rotating the view direction around
@@ -420,6 +479,8 @@ void SetupFrame(const refdef_t & viewDef)
     const float warpTurns = s_frameTime * (1.0f / (2.0f * math::kPI));
     const float halfTime  = s_frameTime * 0.5f;
     rs::SetWarpAnimation(warpTurns - std::floor(warpTurns), -64.0f * (halfTime - std::floor(halfTime)));
+
+    SetUpTextureSampling(viewDef);
 
     // Camera basis vectors from the view angles.
     math::AngleVectors(viewDef.viewangles, s_forwardVec, s_rightVec, s_upVec);
@@ -2430,6 +2491,8 @@ void Init()
     s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.
     s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1",   0); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
     s_polyblend         = Cvar_Get("ps2_polyblend",           "1",   0); // ref_gl's gl_polyblend: the full screen damage/powerup/underwater tint.
+    s_mipFilter         = Cvar_Get("ps2_mip_filter",   "bilinear",   CVAR_ARCHIVE); // nearest, bilinear or trilinear: walls and model skins.
+    s_mipBias           = Cvar_Get("ps2_mip_bias",            "0",   CVAR_ARCHIVE); // Wall mip level bias, in levels; positive is blurrier.
 
     // Registered by the lightmap manager, which owns it; this resolves the same
     // object so the entity lighting can scale by it too.

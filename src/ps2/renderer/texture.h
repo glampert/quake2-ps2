@@ -50,8 +50,9 @@ constexpr bool TakesIntensity(ImageType type)
 // Bit-flag texture properties, orthogonal to the ImageType.
 enum class TexFlags : u8
 {
-    None    = 0,
-    Builtin = 1 << 0 // Embedded in the ELF; always available, never unloaded.
+    None      = 0,
+    Builtin   = 1 << 0, // Embedded in the ELF; always available, never unloaded.
+    Mipmapped = 1 << 1  // 'pixels' carries mip levels after level 0; see MipLevels.
 };
 
 constexpr TexFlags operator|(TexFlags lhs, TexFlags rhs)
@@ -132,13 +133,44 @@ struct Texture final
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
     // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
     void MarkPixelsDirty() const { dirtyPixels = true; }
-
-    // TODO: Consider texture mipmaps support.
-    // TODO: Separate texture heap with defragmentation support?
-    // We could place all textures on their own heap, sized for
-    // the largest map's working set, with defrag support
-    // between levels. Might open enough room to fit mipmaps.
 };
+
+// Mip levels, beyond level 0, a power-of-two image of 'width' x 'height' can carry: the
+// three a WAL file holds, cut short where a level would drop below 8 texels on either
+// side - the GS needs 8 for bilinear filtering (see the GS manual's MIPMAP section),
+// so a 16x16 wall keeps one level and a 64x16 one keeps one too.
+constexpr int kMaxMipLevels = 3;
+
+constexpr int MipLevelsFor(const int width, const int height)
+{
+    const int minDim = (width < height) ? width : height;
+    int levels = 0;
+    while (levels < kMaxMipLevels && (minDim >> (levels + 1)) >= 8)
+    {
+        ++levels;
+    }
+    return levels;
+}
+
+// Mip levels 'pixels' carries after level 0. Only mipmapped walls have any, and those
+// are powers of two, so the count follows from the size and needs no field of its own.
+inline int MipLevels(const Texture & texture)
+{
+    return HasFlag(texture.flags, TexFlags::Mipmapped) ? MipLevelsFor(texture.width, texture.height) : 0;
+}
+
+// Bytes of an image and 'mipLevels' levels after it, packed one after another, each half
+// the size of the one before in both dimensions. Every level of a mip chain is at least
+// 8x8, so each starts 16-byte aligned, as the upload DMA needs.
+constexpr int MipChainBytes(const int width, const int height, const int mipLevels, const int bytesPerTexel)
+{
+    int bytes = 0;
+    for (int level = 0; level <= mipLevels; ++level)
+    {
+        bytes += (width >> level) * (height >> level) * bytesPerTexel;
+    }
+    return bytes;
+}
 
 // Mappings from the strongly typed enums above to the plain integer constants
 // libdraw/GS registers expect. SDK constants stay out of the rest of the backend.
@@ -185,6 +217,23 @@ inline int BytesPerTexel(PixelFormat format)
     case PixelFormat::Alpha8   : return 1;
     }
     return 4; // Unreachable; keeps GCC's -Wreturn-type happy.
+}
+
+// Whether ps2_mip_filter decides the texture's filtering (see gs::MakeTex1): the walls and
+// model skins, the images ref_gl's gl_texturemode covered that sample linear here. Sprites
+// keep nearest, which keeps their cutouts free of fringes; the sky, the pics and the
+// lightmap atlases - walls by type, but lighting sampled linear whatever the setting, as
+// ref_gl's lightmaps were - keep what they were given.
+inline bool FollowsFilterSetting(const Texture & texture)
+{
+    return (texture.type == ImageType::Wall || texture.type == ImageType::Skin) &&
+           texture.format != PixelFormat::Alpha8;
+}
+
+// Bytes of EE RAM the texture's pixel buffer occupies: level 0 and any mip levels after it.
+inline int PixelBytes(const Texture & texture)
+{
+    return MipChainBytes(texture.width, texture.height, MipLevels(texture), BytesPerTexel(texture.format));
 }
 
 // Pixel stride the texture occupies VRAM with (the TEX0 TBW and transfer DBW).
@@ -259,6 +308,14 @@ const Texture * Find(const char * name, ImageType type);
 // a sky already resident from an earlier map keeps whichever size it loaded
 // at; sky.cpp reads the face's real width back rather than assuming.
 void SetSkyDownsample(bool enable);
+
+// Whether WAL walls load with their mip levels (ps2_mipmaps). Off, they load level 0 alone,
+// exactly as before mipmapping existed. Walls already cached keep the mode they loaded
+// with, so switching it frees every wall for the next world to load again the new way -
+// call it between BeginRegistration and the world load, with the old world already
+// released, since its surfaces point at them (see PS2_BeginRegistration).
+bool WallMipmaps();
+void SetWallMipmaps(bool enable);
 
 // Re-stamps an already-resolved texture as used in the current registration
 // cycle, so EndRegistration() won't evict it. The model cache calls this when

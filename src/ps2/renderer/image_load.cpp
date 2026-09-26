@@ -18,7 +18,7 @@ extern "C" {
     #include "common/q_files.h" // pcx_t / miptex_t
 }
 
-namespace ps2::img {
+namespace ps2::tex {
 namespace {
 
 // The GS TEX0 W/H fields are log2-encoded with a maximum of 10 (1024 pixels);
@@ -70,7 +70,7 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
     u8 * fileData = nullptr;
     const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
-    if (fileData == nullptr || fileLen <= static_cast<int>(sizeof(pcx_t)))
+    if (fileData == nullptr || fileLen <= static_cast<int>(sizeof(pcx_t))) [[unlikely]]
     {
         Com_DPrintf("WARNING: Can't load PCX file '%s'\n", filename);
         return false;
@@ -85,7 +85,7 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     const int ymax = pcx->ymax;
 
     if (pcx->manufacturer != 0x0A || pcx->version != 5 || pcx->encoding != 1 ||
-        pcx->bits_per_pixel != 8 || xmax >= 640 || ymax >= 480)
+        pcx->bits_per_pixel != 8 || xmax >= 640 || ymax >= 480) [[unlikely]]
     {
         Com_DPrintf("WARNING: Bad PCX file '%s'. Invalid header value(s)!\n", filename);
         FS_FreeFile(fileData);
@@ -135,57 +135,12 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
     FS_FreeFile(fileData);
 
-    if (malformed)
+    if (malformed) [[unlikely]]
     {
         Com_DPrintf("WARNING: Malformed PCX file '%s'\n", filename);
         FreePixels(pic, width * height);
         return false;
     }
-
-    *outPic    = pic;
-    *outWidth  = width;
-    *outHeight = height;
-    return true;
-}
-
-// ------------------------------------------------------------------------------------------------
-// WAL
-// ------------------------------------------------------------------------------------------------
-
-bool LoadWal(const char * filename, u8 ** outPic, int * outWidth, int * outHeight)
-{
-    *outPic = nullptr;
-    *outWidth = *outHeight = 0;
-
-    u8 * fileData = nullptr;
-    const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
-    if (fileData == nullptr || fileLen <= static_cast<int>(sizeof(miptex_t)))
-    {
-        Com_DPrintf("WARNING: Can't load WAL file '%s'\n", filename);
-        return false;
-    }
-
-    // Header fields read as-is: the EE is little-endian, same as the on-disk
-    // format, so no byte-order fixups are needed. Cast through void*:
-    // FS_LoadFile buffers come from the heap, aligned well past the struct's
-    // needs (-Wcast-align).
-    const miptex_t * wal = static_cast<const miptex_t *>(static_cast<const void *>(fileData));
-    const int width  = static_cast<int>(wal->width);
-    const int height = static_cast<int>(wal->height);
-    const int offset = static_cast<int>(wal->offsets[0]);
-
-    if (width <= 0 || height <= 0 || width > kMaxImageDim || height > kMaxImageDim ||
-        offset <= 0 || (offset + width * height) > fileLen)
-    {
-        Com_DPrintf("WARNING: Bad WAL file '%s'. Invalid header value(s)!\n", filename);
-        FS_FreeFile(fileData);
-        return false;
-    }
-
-    u8 * pic = AllocPixels(width * height);
-    std::memcpy(pic, fileData + offset, static_cast<size_t>(width * height));
-
-    FS_FreeFile(fileData);
 
     *outPic    = pic;
     *outWidth  = width;
@@ -207,7 +162,7 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
     u8 * fileData = nullptr;
     const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
-    if (fileData == nullptr || fileLen <= kTgaHeaderBytes)
+    if (fileData == nullptr || fileLen <= kTgaHeaderBytes) [[unlikely]]
     {
         Com_DPrintf("WARNING: Can't load TGA file '%s'\n", filename);
         return false;
@@ -224,19 +179,19 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     const u8 * in  = fileData + kTgaHeaderBytes + idLength; // skip the image comment
     const u8 * end = fileData + fileLen;
 
-    if (imageType != 2 && imageType != 10)
+    if (imageType != 2 && imageType != 10) [[unlikely]]
     {
         Com_DPrintf("WARNING: TGA file '%s': only types 2 and 10 supported!\n", filename);
         FS_FreeFile(fileData);
         return false;
     }
-    if (colormapType != 0 || (pixelSize != 32 && pixelSize != 24))
+    if (colormapType != 0 || (pixelSize != 32 && pixelSize != 24)) [[unlikely]]
     {
         Com_DPrintf("WARNING: TGA file '%s': only 32 or 24 bit images supported (no colormaps)!\n", filename);
         FS_FreeFile(fileData);
         return false;
     }
-    if (width <= 0 || height <= 0 || width > kMaxImageDim || height > kMaxImageDim || in >= end)
+    if (width <= 0 || height <= 0 || width > kMaxImageDim || height > kMaxImageDim || in >= end) [[unlikely]]
     {
         Com_DPrintf("WARNING: Bad TGA file '%s'. Invalid header value(s)!\n", filename);
         FS_FreeFile(fileData);
@@ -333,7 +288,7 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
     FS_FreeFile(fileData);
 
-    if (malformed)
+    if (malformed) [[unlikely]]
     {
         Com_DPrintf("WARNING: Malformed TGA file '%s'\n", filename);
         FreePixels(pic, pixelCount * 4);
@@ -349,4 +304,82 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     return true;
 }
 
-} // namespace ps2::img
+// ------------------------------------------------------------------------------------------------
+// WAL
+// ------------------------------------------------------------------------------------------------
+
+static_assert(kWalLevels == MIPLEVELS, "A WAL file holds MIPLEVELS levels");
+
+bool LoadWal(const char * filename, WalFile * out)
+{
+    *out = {};
+
+    u8 * fileData = nullptr;
+    const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
+    if (fileData == nullptr || fileLen <= static_cast<int>(sizeof(miptex_t))) [[unlikely]]
+    {
+        Com_DPrintf("WARNING: Can't load WAL file '%s'\n", filename);
+        if (fileData != nullptr)
+        {
+            FS_FreeFile(fileData);
+        }
+        return false;
+    }
+
+    // Header fields read as-is: the EE is little-endian, same as the on-disk
+    // format, so no byte-order fixups are needed. Cast through void*:
+    // FS_LoadFile buffers come from the heap, aligned well past the struct's
+    // needs.
+    const miptex_t * wal = static_cast<const miptex_t *>(static_cast<const void *>(fileData));
+    const int width  = static_cast<int>(wal->width);
+    const int height = static_cast<int>(wal->height);
+
+    if (width <= 0 || height <= 0 || width > kMaxImageDim || height > kMaxImageDim) [[unlikely]]
+    {
+        Com_DPrintf("WARNING: Bad WAL file '%s'. Invalid header value(s)!\n", filename);
+        FS_FreeFile(fileData);
+        return false;
+    }
+
+    // Each level must lie wholly inside the file. Level 0 is the image, so without it the file
+    // is bad; a mip level that fails ends the chain there, and the ones after it go unused.
+    int numLevels = 0;
+    for (int level = 0; level < kWalLevels; ++level)
+    {
+        const int offset      = static_cast<int>(wal->offsets[level]);
+        const int levelWidth  = width  >> level;
+        const int levelHeight = height >> level;
+        if (levelWidth <= 0 || levelHeight <= 0 || offset <= 0 ||
+            offset > fileLen - (levelWidth * levelHeight))
+        {
+            break;
+        }
+        out->levels[level] = fileData + offset;
+        ++numLevels;
+    }
+
+    if (numLevels == 0) [[unlikely]]
+    {
+        Com_DPrintf("WARNING: Bad WAL file '%s'. Invalid header value(s)!\n", filename);
+        FS_FreeFile(fileData);
+        *out = {};
+        return false;
+    }
+
+    out->fileData  = fileData;
+    out->width     = width;
+    out->height    = height;
+    out->numLevels = numLevels;
+    return true;
+}
+
+void FreeWal(WalFile & wal)
+{
+    if (wal.fileData != nullptr)
+    {
+        FS_FreeFile(wal.fileData);
+    }
+    wal = {};
+}
+
+} // namespace ps2::tex

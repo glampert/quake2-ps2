@@ -11,7 +11,7 @@
 
 #include <tamtypes.h>
 
-namespace ps2::img {
+namespace ps2::tex {
 
 // On success every loader hands back a pixel buffer allocated with
 // ps2::heap::AllocAligned(16, ...) - DMA-ready - that the caller
@@ -28,13 +28,28 @@ namespace ps2::img {
 // ref_gl decoded through d_8to24table.
 bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeight);
 
-// WAL: mip level 0 as 8-bit palette indices, 1 byte/texel (the GS pipeline has
-// no mipmapping set up; the smaller mips in the file are skipped).
-bool LoadWal(const char * filename, u8 ** outPic, int * outWidth, int * outHeight);
-
 // TGA (types 2 and 10, 24/32 bpp, no colormaps - all Quake II ever shipped):
 // RGBA32 texels, 4 bytes/texel. *outHasAlpha is set when the file carried an
 // alpha channel (32 bpp source); 24 bpp texels get alpha 255.
 bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeight, bool * outHasAlpha);
 
-} // namespace ps2::img
+// WAL: 8-bit palette indices, 1 byte/texel, followed in the file by three mip levels
+// the tools that wrote it box-filtered down from it, each half the size of the one
+// before. Unlike the loaders above, this one hands back the file itself, with the
+// levels checked and located in it, and leaves the pixel buffer to the caller: only
+// the texture cache knows how many levels it wants and at what size, and building from
+// here copies each level straight into place. Release it with FreeWal.
+constexpr int kWalLevels = 4; // q_files.h's MIPLEVELS
+
+struct WalFile
+{
+    void *     fileData;           // FS_LoadFile's buffer, which 'levels' point into
+    const u8 * levels[kWalLevels]; // level 0 first; level L is (width >> L) x (height >> L)
+    int        width, height;      // level 0's
+    int        numLevels;          // 1 + the mip levels the file holds intact, in order
+};
+
+bool LoadWal(const char * filename, WalFile * out);
+void FreeWal(WalFile & wal);
+
+} // namespace ps2::tex

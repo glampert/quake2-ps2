@@ -26,6 +26,7 @@
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/texture.h"
 
+#include <cstring> // memset
 #include <tamtypes.h>
 #include <gs_psm.h>
 
@@ -37,6 +38,159 @@ constexpr int kVramTotalWords = 1024 * 1024; // 4 MB of GS VRAM, in 32-bit words
 // Debug knob: nonzero clamps the heap to this many words so eviction can be
 // exercised without loading more textures than VRAM holds. Keep 0 normally.
 constexpr int kDebugHeapLimitWords = 0;
+
+// GS VRAM granularity. A block is the unit a texture's base pointer (TEX0's TBP,
+// BITBLTBUF's DBP) addresses, and a page is 32 of them, arranged as the format's own
+// grid of blocks.
+constexpr int kBlockWords = 64;
+constexpr int kPageBlocks = 32;
+constexpr int kPageWords  = kBlockWords * kPageBlocks; // 8 KB
+
+// Block descriptors in the pool, which bounds how many blocks the list can hold. Every
+// resident texture can leave at most one free block before it, so this covers 255
+// resident textures - the most any capture has seen is 129. Past it, TryAllocate hands
+// out a free block whole rather than splitting it (see NewBlock).
+constexpr int kBlockPoolCapacity = 512;
+
+// Where each 16x16-texel block of a PSMT8 page sits within it: the 128x64-texel page is
+// 8 blocks across and 4 down, numbered in this order. It is PSMCT32's order too, over
+// its 8x8-texel blocks - PCSX2's GS tables have _blockTable8 == _blockTable32. Every row
+// and every column increases, which is what lets Psmt8ExtentBlocks read a rectangle's
+// highest block straight off its far corner.
+constexpr u8 kPsmt8BlockOrder[4][8] =
+{
+    {  0,  1,  4,  5, 16, 17, 20, 21 },
+    {  2,  3,  6,  7, 18, 19, 22, 23 },
+    {  8,  9, 12, 13, 24, 25, 28, 29 },
+    { 10, 11, 14, 15, 26, 27, 30, 31 },
+};
+
+// Blocks a PSMT8 image of 'width' x 'height' texels occupies from its base pointer, laid
+// out at 'stridePixels' (its TBW, a multiple of 128): one past the highest block any of
+// its texels lands in.
+//
+// The GS finds a texel's block as base + page * 32 + kPsmt8BlockOrder[y][x], a plain
+// add, so a base need only be block-aligned and an image at any base covers exactly
+// [base, base + this). Pages number row-major across the stride. The highest one the
+// image touches is its far corner's, and within that page the highest block is the
+// corner's own entry, since the order increases along both axes. Blocks inside the range
+// that the image does not touch - the right half of a page under a 64-wide image - go
+// unused, which is the price of a contiguous allocation.
+int Psmt8ExtentBlocks(const int width, const int height, const int stridePixels)
+{
+    PS2_Assert(width > 0 && height > 0 && stridePixels >= width && (stridePixels % 128) == 0);
+
+    const int lastBlockX = (width  - 1) / 16; // the far corner's block column and row
+    const int lastBlockY = (height - 1) / 16;
+
+    const int pagesPerRow = stridePixels / 128;
+    const int lastPage    = ((lastBlockY / 4) * pagesPerRow) + (lastBlockX / 8);
+
+    return (lastPage * kPageBlocks) + kPsmt8BlockOrder[lastBlockY % 4][lastBlockX % 8] + 1;
+}
+
+// Mip layouts, one per power-of-two size from 8 to 1024 on each side (log2 3..10), laid
+// out the first time a texture of that size asks. Walls come in about twenty sizes.
+static_assert(kMipChainLevels == tex::kMaxMipLevels + 1, "A layout holds level 0 and every mip level");
+
+constexpr int kMinMipLayoutLog2 = 3;
+constexpr int kMipLayoutSizes   = 8;
+
+struct MipLayoutSlot
+{
+    MipLayout layout;
+    bool      laidOut;
+};
+static MipLayoutSlot s_mipLayouts[kMipLayoutSizes][kMipLayoutSizes];
+
+// Blocks the layout search can place into: a 1024x1024 chain covers 5440 of them.
+constexpr int kMaxLayoutBlocks = 8192;
+
+// Calls 'visit' with every block a PSMT8 image of 'width' x 'height' at 'stridePixels' covers
+// from base 0, stopping early when it returns false. The same addressing Psmt8ExtentBlocks
+// reads the highest of.
+template<typename Visit>
+bool ForEachPsmt8Block(const int width, const int height, const int stridePixels, Visit && visit)
+{
+    const int blocksX     = (width  + 15) / 16;
+    const int blocksY     = (height + 15) / 16;
+    const int pagesPerRow = stridePixels / 128;
+
+    for (int by = 0; by < blocksY; ++by)
+    {
+        for (int bx = 0; bx < blocksX; ++bx)
+        {
+            const int page = ((by / 4) * pagesPerRow) + (bx / 8);
+            if (!visit((page * kPageBlocks) + kPsmt8BlockOrder[by % 4][bx % 8]))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// First fit over blocks: level 0 at the base, then each level at the lowest offset where every
+// block it covers is still free. A level's buffer width is its own width, or the 128 a PSMT8
+// buffer cannot go below (TBW must be even), so a small level still lays out 128 wide - which is
+// exactly what lets it tuck into the part of a page a narrower level 0 leaves unused.
+MipLayout LayOutMipChain(const int width, const int height, const int mipLevels)
+{
+    static u32 s_used[kMaxLayoutBlocks / 32];
+    std::memset(s_used, 0, sizeof(s_used));
+
+    const auto isUsed = [](const int block) { return (s_used[block >> 5] & (1u << (block & 31))) != 0; };
+
+    MipLayout layout = {};
+    int extent = 0;
+
+    for (int level = 0; level <= mipLevels; ++level)
+    {
+        const int levelWidth  = width  >> level;
+        const int levelHeight = height >> level;
+        const int stride      = (levelWidth > 128) ? levelWidth : 128;
+
+        int offset = 0;
+        for (;;)
+        {
+            const bool fits = ForEachPsmt8Block(levelWidth, levelHeight, stride, [&](const int block) {
+                PS2_Assert(offset + block < kMaxLayoutBlocks);
+                return !isUsed(offset + block);
+            });
+            if (fits)
+            {
+                break;
+            }
+            ++offset;
+        }
+
+        ForEachPsmt8Block(levelWidth, levelHeight, stride, [&](const int block) {
+            s_used[(offset + block) >> 5] |= 1u << ((offset + block) & 31);
+            return true;
+        });
+
+        const int levelExtent = offset + Psmt8ExtentBlocks(levelWidth, levelHeight, stride);
+        extent = (levelExtent > extent) ? levelExtent : extent;
+
+        layout.blockOffset[level] = static_cast<u16>(offset);
+        layout.strideUnits[level] = static_cast<u8>(stride / 64);
+    }
+
+    layout.extentBlocks = static_cast<u16>(extent);
+    return layout;
+}
+
+// A size's first request. The level count follows from the size, so one layout serves every
+// texture of it. Out of line: the search is the rare half of MipLayoutFor, and inlined it would
+// cost every lookup its register saves.
+[[gnu::noinline]] Q_COLD_FUNC void LayOutSlot(MipLayoutSlot & slot, const tex::Texture & texture)
+{
+    PS2_AssertMsg(tex::MipLevels(texture) > 0 && tex::GsPsm(texture.format) == GS_PSM_8,
+                  "Mip layouts are for mipmapped PSMT8 textures!");
+
+    slot.layout  = LayOutMipChain(texture.width, texture.height, tex::MipLevels(texture));
+    slot.laidOut = true;
+}
 
 struct Block
 {
@@ -53,11 +207,7 @@ struct Block
 // address, so a block's list neighbours are always its VRAM neighbours. That is
 // what makes splitting and coalescing a pointer fixup instead of an array shift,
 // and it keeps Block pointers stable for as long as the block lives.
-//
-// The pool is sized by Init() from the heap it is handed, since how much VRAM
-// is left over depends on the framebuffer format (see gs::Init).
-static Block * s_blockPool         = nullptr;
-static int     s_blockPoolCapacity = 0;
+static Block   s_blockPool[kBlockPoolCapacity];
 static Block * s_unusedBlocks      = nullptr;
 static Block * s_blockList         = nullptr; // null until Init()
 static int     s_blockCount        = 0;       // blocks currently in s_blockList
@@ -79,8 +229,8 @@ static int s_oomSyncsThisFrame = 0;
 //
 // Running dry is not an error: the only caller that can hit it is the split in
 // TryAllocate, which just hands out the whole block instead. The pool is sized
-// at one descriptor per GS page (see Init), which is the most the list can ever
-// hold, so this is belt-and-braces rather than an expected path.
+// well past any working set seen (see kBlockPoolCapacity), so this is a fallback
+// rather than an expected path.
 Block * NewBlock(Address addrWords, int sizeWords)
 {
     if (s_unusedBlocks == nullptr)
@@ -145,10 +295,10 @@ void LinkAfter(Block * after, Block * block)
 // Callers deal with the owners first - this only rebuilds the bookkeeping.
 void ResetHeap()
 {
-    for (int i = 0; i < s_blockPoolCapacity; ++i)
+    for (int i = 0; i < kBlockPoolCapacity; ++i)
     {
         s_blockPool[i].owner = nullptr; // no stale Texture pointers left in the pool
-        s_blockPool[i].next  = (i + 1 < s_blockPoolCapacity) ? &s_blockPool[i + 1] : nullptr;
+        s_blockPool[i].next  = (i + 1 < kBlockPoolCapacity) ? &s_blockPool[i + 1] : nullptr;
     }
 
     s_unusedBlocks = &s_blockPool[0];
@@ -280,7 +430,7 @@ void DumpAllBlocks()
                usedBlocks,
                pinnedBlocks,
                s_blockCount - usedBlocks,
-               s_blockCount, s_blockPoolCapacity);
+               s_blockCount, kBlockPoolCapacity);
 
     Com_Printf("Heap     : %d KB total, %d KB used, %d KB free (largest free block %d KB)\n",
                stats.totalWords * 4 / 1024,
@@ -309,20 +459,10 @@ void Init(int heapBaseWords)
     s_heapBaseWords  = heapBaseWords;
     s_heapTotalWords = heapEndWords - heapBaseWords;
 
-    // One descriptor per GS page bounds the list: every block spans at least a
-    // whole page, since the heap base is page-aligned and TextureFootprintWords
-    // is page-granular, so every split remainder is page-aligned too. The spare
-    // few cost nothing and keep the bound from being exactly tight. Allocated
-    // rather than fixed because how much VRAM is left for the heap depends on
-    // the framebuffer format (see gs::Init); Init runs once and the renderer
-    // has no teardown, so the pool lives for the length of the process.
-    s_blockPoolCapacity = (s_heapTotalWords / 2048) + 8;
-    s_blockPool = new Block[static_cast<size_t>(s_blockPoolCapacity)];
-
     ResetHeap();
 
     Com_Printf("GS texture heap: %d KB of VRAM (%d block descriptors).\n",
-               s_heapTotalWords * 4 / 1024, s_blockPoolCapacity);
+               s_heapTotalWords * 4 / 1024, kBlockPoolCapacity);
 }
 
 void BeginFrame()
@@ -332,15 +472,48 @@ void BeginFrame()
     s_oomSyncsThisFrame = 0;
 }
 
-int TextureFootprintWords(int width, int height, int psm)
+const MipLayout & MipLayoutFor(const tex::Texture & texture)
 {
-    PS2_Assert(width > 0 && height > 0);
+    // Every 3D batch of a mipmapped wall comes through here, so the hit is a table read. Mipmapped
+    // textures are powers of two (LoadFromFile resamples them to one), which makes Log2 exact.
+    PS2_Assert((texture.width & (texture.width - 1)) == 0 && (texture.height & (texture.height - 1)) == 0);
 
-    // A texture occupies every GS page its pixel rectangle touches: pages tile
-    // the *texture space* in fixed pixel dimensions, and the swizzled layout
-    // scatters texels across the whole page grid. libgraph's graph_vram_size
-    // counts linear width*height words instead, which undercounts textures with
-    // non-page-multiple dimensions and would let the next allocation overlap.
+    const int log2W = tex::Log2(static_cast<u32>(texture.width));
+    const int log2H = tex::Log2(static_cast<u32>(texture.height));
+    PS2_Assert(log2W >= kMinMipLayoutLog2 && log2W < kMinMipLayoutLog2 + kMipLayoutSizes &&
+               log2H >= kMinMipLayoutLog2 && log2H < kMinMipLayoutLog2 + kMipLayoutSizes);
+
+    MipLayoutSlot & slot = s_mipLayouts[log2W - kMinMipLayoutLog2][log2H - kMinMipLayoutLog2];
+    if (!slot.laidOut) [[unlikely]]
+    {
+        LayOutSlot(slot, texture);
+    }
+    return slot.layout;
+}
+
+int TextureFootprintWords(const tex::Texture & texture)
+{
+    PS2_Assert(texture.width > 0 && texture.height > 0);
+
+    const int psm = tex::GsPsm(texture.format);
+    if (tex::MipLevels(texture) > 0)
+    {
+        return MipLayoutFor(texture).extentBlocks * kBlockWords;
+    }
+    if (psm == GS_PSM_8)
+    {
+        return Psmt8ExtentBlocks(texture.width, texture.height,
+                                 tex::TextureStridePixels(texture, psm)) * kBlockWords;
+    }
+
+    // The direct-colour formats keep whole pages: nothing the game ships uses them (only the debug
+    // checkerboards and .tga replacements do), so their block orders are not worth carrying.
+    //
+    // A texture occupies every GS page its pixel rectangle touches: pages tile the *texture
+    // space* in fixed pixel dimensions, and the swizzled layout scatters texels across the whole
+    // page grid. libgraph's graph_vram_size counts linear width*height words instead, which
+    // undercounts textures with non-page-multiple dimensions and would let the next allocation
+    // overlap.
     int pageWidth, pageHeight;
     switch (psm)
     {
@@ -353,18 +526,14 @@ int TextureFootprintWords(int width, int height, int psm)
         pageWidth  = 64;
         pageHeight = 64;
         break;
-    case GS_PSM_8:
-        pageWidth  = 128;
-        pageHeight = 64;
-        break;
     default:
         PS2_AssertMsg(false, "Unsupported texture PSM!");
         return 0;
     }
 
-    const int pagesX = (width  + pageWidth  - 1) / pageWidth;
-    const int pagesY = (height + pageHeight - 1) / pageHeight;
-    return pagesX * pagesY * 2048; // one GS page = 8 KB = 2048 words
+    const int pagesX = (texture.width  + pageWidth  - 1) / pageWidth;
+    const int pagesY = (texture.height + pageHeight - 1) / pageHeight;
+    return pagesX * pagesY * kPageWords;
 }
 
 int HeapTotalWords()

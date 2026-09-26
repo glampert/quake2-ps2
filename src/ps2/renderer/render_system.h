@@ -387,6 +387,10 @@ void SetDynamicLights(const vu1::DynamicLight * lights, int count);
 // takes it from the batch's own texture.
 void SetWarpAnimation(float phaseTurns, float scrollTexels);
 
+// The frame's texture filtering (ps2_mip_filter) and its mip level constant, which every batch's
+// TEX1 takes from here (gs::MakeTex1). Call before the frame's first 3D draw.
+void SetTextureSampling(const gs::TextureSampling & sampling);
+
 // ------------------------------------------------------------------------------------------------
 // Vertex streams
 // ------------------------------------------------------------------------------------------------

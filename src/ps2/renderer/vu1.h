@@ -135,7 +135,7 @@ static_assert(kWindowSpillAddr >= kClipScratchAddr &&
 // lerp path will want somewhere to put its keyframe scales when it merges in too.
 constexpr int kBatchParamsAddr = 1;
 
-constexpr int kGifTagsAddr     = 2; // 7 qwords: GIF set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
+constexpr int kGifTagsAddr     = 2; // 7 qwords: GIF set tag, MIPTBP1/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag
 constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy loops
 
 // Batch header .x: where a vertex's colour comes from.

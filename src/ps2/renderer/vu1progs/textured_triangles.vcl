@@ -23,7 +23,7 @@
 ;   +0    header: colour mode .x, warp flag .y, vertex format .z,
 ;         vertex count .w
 ;   +1    parameters for the warp
-;   +2    7 GIF tag qwords (set tag, TEST/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
+;   +2    7 GIF tag qwords (set tag, MIPTBP1/TEX1/TEX0/ALPHA/ZBUF A+D, prim tag)
 ;   +9    vertices, in one of two formats:
 ;           DrawVertex  2 qwords: position, then (rgba, s, t, q)
 ;           keyframes   3 qwords: two keyframes' bytes, then the

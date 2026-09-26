@@ -9,6 +9,8 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include <tamtypes.h>
+
 namespace ps2::tex { struct Texture; }
 
 namespace ps2::vram {
@@ -27,9 +29,28 @@ void Init(int heapBaseWords);
 // Call once per frame, from rs::BeginFrame().
 void BeginFrame();
 
-// VRAM words the texture occupies: the whole GS page grid it covers. libgraph's
-// graph_vram_size undercounts here - see the .cpp for why.
-int TextureFootprintWords(int width, int height, int psm);
+// VRAM words the texture occupies from its base: up to and including the last GS block
+// any of its texels lands in (a block is 64 words). Always a whole number of blocks,
+// since that is the unit TEX0's base pointer addresses. libgraph's graph_vram_size
+// undercounts here - see the .cpp for why.
+int TextureFootprintWords(const tex::Texture & texture);
+
+// Where a mipmapped texture's levels sit inside its block of VRAM, laid out once per
+// size: level 0 at the base, and each level after it at the lowest block where it misses
+// every level already placed - which for most sizes is space level 0's pages leave
+// unused, so the levels cost few blocks or none. What the upload writes each level to
+// and what MIPTBP1 tells the GS, so the two cannot disagree.
+constexpr int kMipChainLevels = 4; // level 0 plus tex::kMaxMipLevels
+
+struct MipLayout
+{
+    u16 blockOffset[kMipChainLevels]; // from the texture's base, in 64-word GS blocks
+    u8  strideUnits[kMipChainLevels]; // the level's buffer width (TBW), in 64-texel units
+    u16 extentBlocks;                 // blocks the whole chain covers from the base
+};
+
+// The layout for a mipmapped texture (tex::MipLevels > 0: a power-of-two PSMT8 wall).
+const MipLayout & MipLayoutFor(const tex::Texture & texture);
 
 // Size of the heap handed to Init(), in words. The largest request that can
 // ever be serviced, since Defragment() can always remake the heap as one block.

@@ -60,6 +60,11 @@ static const cvar_t * s_showProfileStats = nullptr;
 static const cvar_t * s_gsLatency        = nullptr;
 static const cvar_t * s_enableDither     = nullptr;
 
+// ps2_mipmaps: whether walls load with the mip levels their WAL files carry. Read when a map
+// loads, not live, since it decides what loads: 0 is exactly the renderer before mipmapping, in
+// memory and VRAM as well as on screen.
+static const cvar_t * s_wallMipmaps      = nullptr;
+
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
 static const ps2::tex::Texture * s_texBacktile = nullptr;
@@ -502,6 +507,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
     s_gsLatency        = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
     s_enableDither     = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+    s_wallMipmaps      = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
     s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
     s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
     s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
@@ -569,10 +575,38 @@ void PS2_AppActivate(qboolean activate) { (void)activate; }
 // longer references. Same for models.
 // ------------------------------------------------------------------------------------------------
 
+// Called by the server just before it builds the next map's collision model,
+// so the old world's hunk and lightmap atlases are not still held through
+// the whole of server init.
+//
+// The atlases go if and only if the world went. ReleaseWorldModel keeps the world
+// when the new map is the one already loaded (a restart, or a savegame load),
+// and then LoadWorldModel finds it in the cache and never needs to reload it.
+void PS2_ReleaseWorldModel(const char * bspName)
+{
+    if (ps2::mod::ReleaseWorldModel(bspName))
+    {
+        ps2::lm::ReleaseAtlases();
+    }
+}
+
 void PS2_BeginRegistration(const char * mapName)
 {
     ps2::debug::FrameLogMarkMap(mapName);
     ps2::tex::BeginRegistration();
+
+    // A ps2_mipmaps change applies from here. The walls cached so far loaded the other way, so
+    // they all go, and the world with them - its surfaces point at them. Releasing it is also
+    // what makes the change reach a restart or savegame load of the same map, which would
+    // otherwise keep its world and walls as they are. Nothing reuses the memory before the world
+    // load drains the GS, the same interlock the server's own release relies on.
+    const bool wallMipmaps = (s_wallMipmaps->value != 0.0f);
+    if (wallMipmaps != ps2::tex::WallMipmaps())
+    {
+        PS2_ReleaseWorldModel(nullptr);
+        ps2::tex::SetWallMipmaps(wallMipmaps);
+    }
+
     ps2::mod::BeginRegistration(mapName);
     ps2::view::BeginRegistration();
     ps2::sky::BeginRegistration();
@@ -605,21 +639,6 @@ void PS2_FreeUnregistered()
     // Models first, as EndRegistration does: a model's skins are stamped only if the model was.
     ps2::mod::FreeUnregistered();
     ps2::tex::FreeUnregistered();
-}
-
-// Called by the server just before it builds the next map's collision model,
-// so the old world's hunk and lightmap atlases are not still held through
-// the whole of server init.
-//
-// The atlases go if and only if the world went. ReleaseWorldModel keeps the world
-// when the new map is the one already loaded (a restart, or a savegame load),
-// and then LoadWorldModel finds it in the cache and never needs to reload it.
-void PS2_ReleaseWorldModel(const char * bspName)
-{
-    if (ps2::mod::ReleaseWorldModel(bspName))
-    {
-        ps2::lm::ReleaseAtlases();
-    }
 }
 
 void PS2_SetSky(const char * name, float rotate, vec3_t axis)

@@ -151,7 +151,7 @@ Q_ALWAYS_INLINE u64 MakeAlphaBlend(const BlendMode mode)
     }
 }
 
-// TEX1: the texture's filter modes.
+// TEX1: the texture's own filter modes, and level 0 only. What every 2D bind uses.
 Q_ALWAYS_INLINE u64 MakeTex1(const tex::Texture & texture)
 {
     return GS_SET_TEX1(LOD_USE_K, 0,
@@ -159,6 +159,56 @@ Q_ALWAYS_INLINE u64 MakeTex1(const tex::Texture & texture)
                        tex::GsMinFilter(texture.minFilter),
                        LOD_MIPMAP_REGISTER, 0, 0);
 }
+
+// How a frame filters the textures ps2_mip_filter governs (tex::FollowsFilterSetting), in
+// ref_gl's gl_texturemode terms.
+enum class MipFilter : u8
+{
+    Nearest,   // the nearest texel of the nearest level: the cheapest, Quake2's software renderer classic look.
+    Bilinear,  // bilinear within the nearest level.
+    Trilinear, // bilinear in the two nearest levels, blended - the one that costs the most GS fill rate.
+};
+
+struct TextureSampling
+{
+    MipFilter filter;
+    int       lodK16; // TEX1.K for the mipmapped walls, in 1/16 levels; see rs::SetTextureSampling
+};
+
+// TEX1 for a 3D batch under the frame's sampling. A texture the setting governs takes its
+// filter from it rather than from its own fields, and a mipmapped one samples its levels too:
+// LCM 0 has the GS work the level out per pixel as log2(1/Q) + K, which with Q = 1/w and one K
+// for the frame is the view depth measured in texel-per-pixel steps. The rest keep MakeTex1's.
+Q_ALWAYS_INLINE u64 MakeTex1(const tex::Texture & texture, const TextureSampling & sampling)
+{
+    if (!tex::FollowsFilterSetting(texture))
+    {
+        return MakeTex1(texture);
+    }
+
+    const bool linear    = (sampling.filter != MipFilter::Nearest);
+    const int  mipLevels = tex::MipLevels(texture);
+    if (mipLevels == 0)
+    {
+        return GS_SET_TEX1(LOD_USE_K, 0,
+                           linear ? LOD_MAG_LINEAR : LOD_MAG_NEAREST,
+                           linear ? LOD_MIN_LINEAR : LOD_MIN_NEAREST,
+                           LOD_MIPMAP_REGISTER, 0, 0);
+    }
+
+    const int minFilter = (sampling.filter == MipFilter::Nearest)  ? LOD_MIN_NEAR_MIPMAP_NEAR :
+                          (sampling.filter == MipFilter::Bilinear) ? LOD_MIN_LINE_MIPMAP_NEAR :
+                                                                     LOD_MIN_LINE_MIPMAP_LINE;
+    return GS_SET_TEX1(LOD_FORMULAIC, mipLevels,
+                       linear ? LOD_MAG_LINEAR : LOD_MAG_NEAREST,
+                       minFilter,
+                       LOD_MIPMAP_REGISTER, 0, sampling.lodK16);
+}
+
+// MIPTBP1: where a mipmapped texture's levels 1-3 sit and their buffer widths, from its mip
+// layout (see vram::MipLayout). Zero for a texture without mips, which the GS never reads then -
+// TEX1's MXL is 0. The texture must be resident.
+u64 MakeMipTbp1(const tex::Texture & texture);
 
 // GS VRAM word address of the 256-entry CLUT an indexed format samples through. Palette8 takes
 // the global palette, or the intensity-brightened copy of it when 'lit' - an image something is
@@ -260,6 +310,7 @@ constexpr int kFillRectQwords     = 64;
 constexpr int kTextureBindQwords  = 16;
 constexpr int kTexturedRectQwords = 8;
 constexpr int kBegin2DQwords      = 8;
+constexpr int kEnd2DQwords        = 2;
 
 // Colour + depth clear of the whole framebuffer, as a z=0 sprite with an always-pass z-test.
 // Re-arms depth writes and sets the dither enable, neither of which the clear itself touches.
@@ -268,6 +319,11 @@ void EmitClear(GifWriter & w, DrawContext ctx, const u8 color[3], bool dither);
 // The state a 2D overlay section opens with: always-pass z-test so it lands on top of the 3D,
 // and a re-armed ZBUF write mask in case a blended 3D batch masked it.
 void EmitBegin2D(GifWriter & w, DrawContext ctx);
+
+// What a 2D section closes with: TEST back to the 3D pixel tests. VU1 batches do not write TEST
+// themselves - their register block has MIPTBP1 in that slot - so the clear and this are what put
+// it back after the only thing that changes it, a 2D section's always-pass z-test.
+void EmitEnd2D(GifWriter & w, DrawContext ctx);
 
 // A solid rectangle. Alpha below 255 blends with the framebuffer (255 = opaque, unblended).
 void EmitFillRect(GifWriter & w, DrawContext ctx, int x, int y, int width, int height,

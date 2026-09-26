@@ -17,8 +17,11 @@
  *  need no syncing between them: MSCAL stalls the VIF while a program runs, and each program's
  *  XGKICK stalls until the previous one drained.
  *
- *  The A+D block every batch opens with programs TEST, ALPHA and ZBUF as well as TEX0/TEX1, so a
- *  batch draws correctly whatever the surrounding 2D sections left behind.
+ *  The A+D block every batch opens with programs ALPHA and ZBUF as well as TEX0/TEX1/MIPTBP1, so a
+ *  batch draws correctly whatever the surrounding 2D sections left behind. TEST is the exception:
+ *  it is the same for every batch, and the block has no room for it next to MIPTBP1 (it is copied
+ *  into every output window, whose VU memory is spoken for), so the two things that change it put
+ *  it back instead - the clear, and every 2D section as it closes (gs::EmitEnd2D).
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -461,6 +464,9 @@ void FlushPending2D()
     }
     s_in2D = false;
 
+    // TEST back to the 3D pixel tests, since the batches that follow do not write it.
+    gs::EmitEnd2D(GifData(gs::kEnd2DQwords), s_drawCtx);
+
     CloseGifBlock();
 
     // Closed, not sent: the block goes out with the frame. 3D that follows lands after it in the
@@ -527,8 +533,7 @@ void EnsureTextureResident(const tex::Texture & texture)
     }
     else
     {
-        const int psm = tex::GsPsm(texture.format);
-        const int sizeWords = vram::TextureFootprintWords(texture.width, texture.height, psm);
+        const int sizeWords = vram::TextureFootprintWords(texture);
 
         // Nothing below can service a texture bigger than the whole heap, and trying would evict
         // the entire working set first and then report it as a working-set problem. Say what is
@@ -692,6 +697,9 @@ static vu1::LightConstants s_lightConstants;
 static float s_warpPhaseTurns   = 0.0f;
 static float s_warpScrollTexels = 0.0f;
 
+// The frame's filtering and mip level bias (rs::SetTextureSampling), which every batch's TEX1 takes.
+static gs::TextureSampling s_textureSampling = { gs::MipFilter::Bilinear, 0 };
+
 // Which blend equation the batch's ALPHA register gets. The three flags pick alternatives rather
 // than combine, which this asserts.
 //
@@ -738,8 +746,9 @@ inline void DepthRangeFor(DrawFlags flags, float * outScale, float * outOffset)
 }
 
 // The 6 qwords of state every batch opens with: a GIF tag announcing five A+D register writes,
-// then TEST, TEX1, TEX0, ALPHA and ZBUF for this context. The triangle and particle paths share
-// it and differ only in the drawing tag each appends after.
+// then MIPTBP1, TEX1, TEX0, ALPHA and ZBUF for this context. The triangle and particle paths share
+// it and differ only in the drawing tag each appends after. TEST is not among them - see the note
+// at the top of this file.
 //
 // Built into 'out' - 2 * kStateBlockQwords 64-bit halves, low first - once per draw rather than
 // into the chain per chunk: all of it is a property of the texture, the context and the flags,
@@ -758,12 +767,12 @@ bool BuildBatchStateBlock(const tex::Texture & texture, gs::DrawContext drawCtx,
                       || HasDrawFlag(flags, DrawFlags::Additive)
                       || HasDrawFlag(flags, DrawFlags::Modulate);
 
-    // Pixel tests, the texture bind, the blend function and the depth-write mask...
+    // The texture bind with its mip levels, the blend function and the depth-write mask...
     out[0]  = GIF_SET_TAG(5, 0, 0, 0, GIF_FLG_PACKED, 1);
     out[1]  = GIF_REG_AD;
-    out[2]  = gs::MakePixelTests();
-    out[3]  = gs::ContextReg(GS_REG_TEST, drawCtx);
-    out[4]  = gs::MakeTex1(texture);
+    out[2]  = gs::MakeMipTbp1(texture);
+    out[3]  = gs::ContextReg(GS_REG_MIPTBP1, drawCtx);
+    out[4]  = gs::MakeTex1(texture, s_textureSampling);
     out[5]  = gs::ContextReg(GS_REG_TEX1, drawCtx);
     out[6]  = gs::MakeTex0(texture, tex::TakesIntensity(texture.type));
     out[7]  = gs::ContextReg(GS_REG_TEX0, drawCtx);
@@ -1192,6 +1201,11 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
         const int chunkCount = (remaining < vu1::kMaxParticlesPerBatch) ? remaining : vu1::kMaxParticlesPerBatch;
         AddParticleChunk(head, particles + first, chunkCount, program);
     }
+}
+
+void SetTextureSampling(const gs::TextureSampling & sampling)
+{
+    s_textureSampling = sampling;
 }
 
 void SetDynamicLights(const vu1::DynamicLight * lights, const int count)

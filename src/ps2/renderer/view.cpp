@@ -2485,11 +2485,11 @@ void Init()
     s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0); // Debug: skips drawing particles.
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
     s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
-    s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   0); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
-    s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", 0); // Brightness of the VU1 point lights.
+    s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   CVAR_ARCHIVE); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).
+    s_dlightScale       = Cvar_Get("ps2_dlight_scale",        "0.1", CVAR_ARCHIVE); // Brightness of the VU1 point lights.
     s_lightmaps         = Cvar_Get("ps2_lightmaps",           "1",   0); // Debug: 0 drops the lightmap pass, leaving the world fullbright.
     s_lightmapOnly      = Cvar_Get("ps2_lightmap_only",       "0",   0); // Debug: 1 drops the diffuse textures, showing the lighting alone.
-    s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1",   0); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
+    s_lightmapColor     = Cvar_Get("ps2_lightmap_color",      "1",   CVAR_ARCHIVE); // Debug: 0 drops the per-vertex luxel chroma, leaving lighting monochrome.
     s_polyblend         = Cvar_Get("ps2_polyblend",           "1",   0); // ref_gl's gl_polyblend: the full screen damage/powerup/underwater tint.
     s_mipFilter         = Cvar_Get("ps2_mip_filter",   "bilinear",   CVAR_ARCHIVE); // nearest, bilinear or trilinear: walls and model skins.
     s_mipBias           = Cvar_Get("ps2_mip_bias",            "0",   CVAR_ARCHIVE); // Wall mip level bias, in levels; positive is blurrier.

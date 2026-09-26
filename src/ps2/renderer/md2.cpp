@@ -723,10 +723,10 @@ const tex::Texture & SkinForEntity(const entity_t & entity, const mod::ModelInst
 
 void Init()
 {
-    s_lerpModels = Cvar_Get("ps2_md2_lerp_on",     "1", 0);
-    s_vuLerp     = Cvar_Get("ps2_md2_vu_lerp",     "1", 0);
-    s_cullFace   = Cvar_Get("ps2_md2_cullface",    "1", 0);
-    s_shadows    = Cvar_Get("ps2_md2_shadows",     "1", 0);
+    s_lerpModels = Cvar_Get("ps2_md2_lerp_on",  "1", 0);
+    s_vuLerp     = Cvar_Get("ps2_md2_vu_lerp",  "1", 0);
+    s_cullFace   = Cvar_Get("ps2_md2_cullface", "1", 0);
+    s_shadows    = Cvar_Get("ps2_md2_shadows",  "1", CVAR_ARCHIVE);
 
     for (u32 & color : s_colorLUT)
     {

@@ -114,10 +114,6 @@ void NoteTextureUpload();
 // heap and the renderer traded pipelining for it.
 void NoteOomSync();
 
-// --------------------------------------------------------------------------------------------
-// Reuse hazard
-// --------------------------------------------------------------------------------------------
-
 // Whether VRAM has been handed out again, or given back, since this was last cleared - by an
 // eviction inside TryAllocate, by Free, or by Defragment. While it is set, draws already built
 // (or still rasterising) may reference a range something else now owns, so anything about to

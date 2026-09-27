@@ -354,6 +354,7 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
 # VU1 microprograms.
 # TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
+# TODO: Consolidate VU/opencvl check scripts into 1 or 2 scripts. Consider putting them on GH or under the vclpp repo.
 # The six checks are not optional, and every one of them exists because the
 # toolchain fails silently. openvcl allocates VI registers by liveness and gets
 # it wrong on control flow past a single counted loop - it hands a live register

@@ -31,4 +31,12 @@ void IN_Frame(void);
 void IN_Commands(void);        // opportunity for devices to stick commands on the script buffer
 void IN_Move(usercmd_t * cmd); // add additional movement on top of the keyboard move cmd
 
+// [PS2_QUAKE] 2026-09-27
+// Force feedback: the client reports what happens to the local player, and the input
+// backend decides how the controller responds, if at all.
+void IN_RumbleMuzzleFlash(int weapon);       // the player fired: MZ_*, silenced bit stripped
+void IN_RumbleItemSound(const char * sound); // a sound on the player's CHAN_ITEM: item pickups
+void IN_RumbleFrame(void);                   // a valid frame was parsed: damage, powerups...
+void IN_RumbleStop(void);                    // stop the motors now, e.g. ahead of a load
+
 #endif // CL_INPUT_H

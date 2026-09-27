@@ -750,6 +750,8 @@ void CL_ParseFrame(void)
         // fire entity events
         CL_FireEntityEvents(&cl.frame);
         CL_CheckPredictionError();
+
+        IN_RumbleFrame(); // [PS2_QUAKE]
     }
 }
 

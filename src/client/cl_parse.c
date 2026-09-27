@@ -642,6 +642,11 @@ void CL_ParseStartSoundPacket(void)
     else // use entity number
         pos = NULL;
 
+    // [PS2_QUAKE]: item pickups play on the player's item channel. Ahead of the precache
+    // check so the rumble doesn't depend on the sound system.
+    if (ent == cl.playernum + 1 && channel == CHAN_ITEM)
+        IN_RumbleItemSound(cl.configstrings[CS_SOUNDS + sound_num]);
+
     if (!cl.sound_precache[sound_num])
         return;
 

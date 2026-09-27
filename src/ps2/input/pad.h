@@ -3,8 +3,9 @@
  * File: pad.h
  * Brief: DualShock gamepad abstraction over libpad. The GamePad class owns the pad
  *        connection lifecycle and per-frame polling, exposing the button mask and
- *        the normalised analog sticks. The Quake input seam (input.cpp) drives a
- *        single static instance and maps its state onto key events and movement.
+ *        the normalised analog sticks, and drives the two vibration motors. The Quake
+ *        input seam (input.cpp) drives a single static instance and maps its state
+ *        onto key events and movement; rumble.cpp decides what the motors do.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -43,14 +44,24 @@ public:
     float RightStickX() const;
     float RightStickY() const;
 
+    // Runs the vibration motors: the small one is either on or off, the large one
+    // spins at a speed (0 = stopped). A no-op for pads without motors. Only reaches
+    // the IOP when the values change, since each call there is a blocking RPC.
+    void SetMotors(bool smallOn, u8 largeSpeed);
+
 private:
     enum class Status : u8
     {
-        Unavailable,  // IOP modules or the port failed - pad permanently off
-        Disconnected, // waiting for a pad to connect and stabilise
-        SettingMode,  // analog (DualShock) mode requested, awaiting completion
-        Ready         // connected and delivering data
+        Unavailable,   // IOP modules or the port failed - pad permanently off
+        Disconnected,  // waiting for a pad to connect and stabilise
+        SettingMode,   // analog (DualShock) mode requested, awaiting completion
+        SettingMotors, // vibration motor mapping requested, awaiting completion
+        Ready          // connected and delivering data
     };
+
+    // m_sentSmall value meaning "not known": nothing guarantees what padman drives
+    // the motors with after a (re)connect, so the next SetMotors always goes out.
+    static constexpr u8 kMotorsUnknown = 0xFF;
 
     static bool Connected(int state);
 
@@ -58,6 +69,10 @@ private:
     padButtonStatus m_data{};    // last good padRead() result
     u16 m_buttons = 0; // active-high pressed mask
     bool m_analogValid = false;
+
+    bool m_hasMotors = false;
+    u8 m_sentSmall = kMotorsUnknown; // motor values last sent to the IOP
+    u8 m_sentLarge = 0;
 
     // libpad DMA transfer area: 256 bytes, 64-byte aligned.
     alignas(64) char m_dmaArea[256];

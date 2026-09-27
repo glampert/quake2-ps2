@@ -559,6 +559,7 @@ void SCR_BeginLoadingPlaque(void)
     Com_DPrintf("*** SCR_BeginLoadingPlaque ***\n");
 
     S_StopAllSounds();
+    IN_RumbleStop(); // [PS2_QUAKE]: no frames run during the load, the motors would keep going.
     cl.sound_prepped = false; // don't play ambients
     CDAudio_Stop();
 

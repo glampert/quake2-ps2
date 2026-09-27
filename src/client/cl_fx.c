@@ -285,6 +285,9 @@ void CL_ParseMuzzleFlash(void)
     silenced = weapon & MZ_SILENCED;
     weapon &= ~MZ_SILENCED;
 
+    if (i == cl.playernum + 1)
+        IN_RumbleMuzzleFlash(weapon); // [PS2_QUAKE]
+
     pl = &cl_entities[i];
 
     dl = CL_AllocDlight(i);

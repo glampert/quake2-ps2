@@ -1,7 +1,8 @@
 /* ================================================================================================
  * File: pad.cpp
  * Brief: GamePad implementation - the libpad connection lifecycle, per-frame
- *        polling and analog stick normalisation. See pad.h for the interface.
+ *        polling, analog stick normalisation and the vibration motors. See pad.h
+ *        for the interface.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -18,6 +19,13 @@ namespace {
 constexpr int kPadPort = 0; // Controller connector 1
 constexpr int kPadSlot = 0; // First (only) slot - no multitap
 
+// Motor mapping for padSetActAlign: byte 0 of the padSetActDirect array drives
+// actuator 0 (the small motor), byte 1 actuator 1 (the large one); 0xFF leaves
+// the other four bytes unmapped.
+constexpr char kMotorAlign[6] = {
+    0, 1, static_cast<char>(0xFF), static_cast<char>(0xFF), static_cast<char>(0xFF), static_cast<char>(0xFF)
+};
+
 // Maps a raw 0..255 stick byte (centre ~128) to a normalised -1..+1 axis.
 inline float NormalizeAxis(unsigned char raw)
 {
@@ -28,8 +36,6 @@ inline float NormalizeAxis(unsigned char raw)
 }
 
 } // namespace
-
-// TODO: Pad actuators for controller rumble!
 
 bool GamePad::Connected(int state)
 {
@@ -67,6 +73,7 @@ void GamePad::Shutdown()
 {
     if (m_status != Status::Unavailable)
     {
+        SetMotors(false, 0);
         padPortClose(kPadPort, kPadSlot);
         padEnd();
         m_status = Status::Unavailable;
@@ -109,15 +116,41 @@ void GamePad::Update()
         if ((request == PAD_RSTAT_COMPLETE || request == PAD_RSTAT_FAILED) && Connected(state))
         {
             Com_DPrintf("Gamepad connected.\n");
-            m_status = Status::Ready;
+
+            // Only a pad with an analog mode can have motors, and they take their
+            // mapping after the mode is set - the mode switch resets it.
+            if (padInfoAct(kPadPort, kPadSlot, -1, 0) > 0 &&
+                padSetActAlign(kPadPort, kPadSlot, kMotorAlign) == 1)
+            {
+                m_status = Status::SettingMotors;
+            }
+            else
+            {
+                m_status = Status::Ready;
+            }
         }
         break;
     }
+
+    case Status::SettingMotors:
+        if (state == PAD_STATE_DISCONN)
+        {
+            m_status = Status::Disconnected;
+        }
+        else if (Connected(state)) // No longer executing the request.
+        {
+            m_hasMotors = (padGetReqState(kPadPort, kPadSlot) == PAD_RSTAT_COMPLETE);
+            m_sentSmall = kMotorsUnknown;
+            m_status = Status::Ready;
+            Com_DPrintf("Gamepad vibration motors %s.\n", m_hasMotors ? "enabled" : "failed to enable");
+        }
+        break;
 
     case Status::Ready:
         if (state == PAD_STATE_DISCONN)
         {
             m_buttons = 0; // The input layer releases anything still held.
+            m_hasMotors = false;
             m_status = Status::Disconnected;
         }
         else if (padRead(kPadPort, kPadSlot, &m_data) != 0)
@@ -139,5 +172,27 @@ float GamePad::LeftStickX()  const { return NormalizeAxis(m_data.ljoy_h); }
 float GamePad::LeftStickY()  const { return NormalizeAxis(m_data.ljoy_v); }
 float GamePad::RightStickX() const { return NormalizeAxis(m_data.rjoy_h); }
 float GamePad::RightStickY() const { return NormalizeAxis(m_data.rjoy_v); }
+
+void GamePad::SetMotors(bool smallOn, u8 largeSpeed)
+{
+    if (m_status != Status::Ready || !m_hasMotors)
+    {
+        return;
+    }
+
+    const u8 small = smallOn ? 1 : 0;
+    if (small == m_sentSmall && largeSpeed == m_sentLarge)
+    {
+        return;
+    }
+
+    // Laid out per kMotorAlign. Not a request like padSetActAlign: padman just
+    // stores the values and sends them to the motors with every poll from then on.
+    const char direct[6] = { static_cast<char>(small), static_cast<char>(largeSpeed), 0, 0, 0, 0 };
+    padSetActDirect(kPadPort, kPadSlot, direct);
+
+    m_sentSmall = small;
+    m_sentLarge = largeSpeed;
+}
 
 } // namespace ps2::input

@@ -5,6 +5,7 @@
  *        events routed by input focus (menu/console navigation vs. rebindable game
  *        action keys), the right stick rotates the camera and the left stick moves
  *        the player - following the axis handling of the original win32/in_win.c.
+ *        The pad's vibration motors play the force feedback from rumble.cpp.
  *
  *        A USB keyboard (see keyboard.h) is optional and gated by the in_keyboard
  *        cvar: when present its keys are forwarded verbatim, so the stock default.cfg
@@ -17,6 +18,7 @@
 #include "ps2/common.h"
 #include "ps2/input/keyboard.h"
 #include "ps2/input/pad.h"
+#include "ps2/input/rumble.h"
 
 // The input backend is client code (the engine's own win32/in_win.c is the same):
 // sticks write straight into cl.viewangles and the outgoing usercmd_t, and button
@@ -206,6 +208,8 @@ void IN_Init()
     s_sideThreshold      = Cvar_Get("joy_sidethreshold",      "0.15", 0);
     s_inKeyboard         = Cvar_Get("in_keyboard",            "1",    CVAR_ARCHIVE);
 
+    ps2::input::InitRumble(s_gamepad);
+
     if (s_gamepad.Init())
     {
         InstallDefaultBinds();
@@ -230,6 +234,7 @@ void IN_Shutdown()
 void IN_Frame()
 {
     s_gamepad.Update();
+    ps2::input::UpdateRumble();
 
     SyncKeyboardEnabled();
     if (s_keyboardEnabled)

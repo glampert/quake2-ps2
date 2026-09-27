@@ -32,8 +32,8 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   frame time.
 - **Sound.** The stock portable Quake mixer painting into a ring buffer that is streamed to
   the SPU2 through the `audsrv` IOP driver, including cinematic audio.
-- **Input.** DualShock gamepad (analog sticks + full button mapping) and an optional USB
-  keyboard through `ps2kbd`, usable simultaneously.
+- **Input.** DualShock gamepad (analog sticks + full button mapping + rumble) and an optional
+  USB keyboard through `ps2kbd`, usable simultaneously.
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
   GS VRAM texture heap with LRU eviction and defragmentation.
 - Runs on both the **PCSX2 emulator** (game data over `host:`) and **real hardware**
@@ -259,7 +259,7 @@ src/
     renderer/                     GS front-end, VRAM heap, textures, models, VU1 path
       vu1progs/                   VU1 microprograms (.vcl)
     audio/                        SNDDMA_* seam, audsrv device, mix ring
-    input/                        IN_* seam, DualShock pad, USB keyboard
+    input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
     builtin/                      images baked into the ELF (font, palette, HUD tiles)
@@ -396,8 +396,8 @@ turns it off deliberately.
 `ps2kbd` driver. Both devices can be used at the same time.
 
 **Gamepad.** [`GamePad`](src/ps2/input/pad.h) owns the connection state machine (connect →
-request analog mode → ready) and per-frame polling, exposing the button mask and sticks
-normalised to [-1, +1]. [input.cpp](src/ps2/input/input.cpp) maps that onto the engine: the
+request analog mode → map the vibration motors → ready) and per-frame polling, exposing the
+button mask and sticks normalised to [-1, +1], and runs the two motors. [input.cpp](src/ps2/input/input.cpp) maps that onto the engine: the
 right stick rotates the camera and the left stick moves the player, with the same
 sensitivity/threshold cvars (`joy_yawsensitivity` and friends) the original win32 joystick
 code used — negate a sensitivity to invert that axis.
@@ -420,6 +420,27 @@ them already:
 | L3 / R3 | (same key as in game) | unbound / `centerview` |
 | Start | Escape | Escape (menu toggle) |
 | Select | `` ` `` | `` ` `` (console toggle) |
+
+**Rumble.** [rumble.cpp](src/ps2/input/rumble.cpp) plays force feedback on the pad's two
+motors: the small one is on/off, a light buzz, and the large one has a variable speed for
+the heavy rumble. The client reports the local player's events through four `IN_Rumble*`
+hooks (tagged `[PS2_QUAKE]` in `cl_fx.c`, `cl_parse.c`, `cl_ents.c` and `cl_scrn.c`). Each
+event is read from what the server already sends, so the game module and the network
+protocol are unchanged:
+
+| Event | Read from | Strength |
+| --- | --- | --- |
+| Weapon fire | the player's muzzle flash (`MZ_*`) | per weapon, from the blaster's buzz up to the railgun and super shotgun |
+| Hand grenade throw | the view weapon stepping off its throw frame (no muzzle flash) | medium |
+| Damage taken | `STAT_FLASHES`, sized by the health + armor drop | scales up to 50 damage |
+| Item pickup | the pickup sound on the player's item channel | ammo/health tick, then armor, weapons, powerups/keys/packs |
+| Powerup switched on | the HUD timer icon appearing, or its timer jumping up | strongest |
+
+Overlapping effects mix: the small motor runs while any effect wants it, the large one at the
+highest speed asked for. Motor values only go to the IOP when they change. Rumble stops in
+menus, the console, pause, the loading plaque and demos. `in_rumble 0` (archived; also
+"gamepad rumble" in the Options menu) turns it off, and `in_rumbledebug 1` echoes each effect
+as it starts. The per-event tuning is in the tables at the top of rumble.cpp.
 
 **Keyboard.** [`Keyboard`](src/ps2/input/keyboard.h) starts `usbd.irx` + `ps2kbd.irx` on
 demand and reads the driver in raw scan-code mode, translating USB HID usages into Quake key

@@ -45,11 +45,12 @@ constexpr u8 kYellow[3]       = { 128, 128, 0   };
 constexpr u8 kGreen[3]        = { 0,   128, 0   };
 constexpr u8 kRed[3]          = { 128, 0,   0   };
 
-static const cvar_t * s_showFpsCount     = nullptr;
-static const cvar_t * s_showMemStats     = nullptr;
-static const cvar_t * s_showVramStats    = nullptr;
-static const cvar_t * s_showDrawStats    = nullptr;
-static const cvar_t * s_showProfileStats = nullptr;
+static const cvar_t * s_showDebugOverlays = nullptr; // Master switch that turns all overlays on/off.
+static const cvar_t * s_showFpsCount      = nullptr;
+static const cvar_t * s_showMemStats      = nullptr;
+static const cvar_t * s_showVramStats     = nullptr;
+static const cvar_t * s_showDrawStats     = nullptr;
+static const cvar_t * s_showProfileStats  = nullptr;
 
 // How the frame is steered, sampled every frame and handed to rs::Begin/EndFrame so both can be
 // flipped live and judged on hardware.
@@ -57,13 +58,13 @@ static const cvar_t * s_showProfileStats = nullptr;
 // ps2_gs_latency leaves the frame drawing at EndFrame and shows it at the next one, at the cost of
 // one frame of input lag. ps2_fb_dither hides the banding a 16-bit framebuffer shows on gradients
 // (the skybox looks worse with it on, which is why it is off by default).
-static const cvar_t * s_gsLatency        = nullptr;
-static const cvar_t * s_enableDither     = nullptr;
+static const cvar_t * s_gsLatency    = nullptr;
+static const cvar_t * s_enableDither = nullptr;
 
 // ps2_mipmaps: whether walls load with the mip levels their WAL files carry. Read when a map
 // loads, not live, since it decides what loads: 0 is exactly the renderer before mipmapping, in
 // memory and VRAM as well as on screen.
-static const cvar_t * s_wallMipmaps      = nullptr;
+static const cvar_t * s_wallMipmaps = nullptr;
 
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
@@ -485,11 +486,16 @@ void DrawDebugOverlays()
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Overlay);
 
+    // FPS counter can be toggled separately from the debug overlays.
     DrawFpsCounter();
-    DrawProfileOverlay();
-    DrawMemUsageOverlay();
-    DrawVramUsageOverlay();
-    DrawDrawStatsOverlay();
+
+    if (s_showDebugOverlays->value != 0.0f)
+    {
+        DrawProfileOverlay();
+        DrawMemUsageOverlay();
+        DrawVramUsageOverlay();
+        DrawDrawStatsOverlay();
+    }
 }
 
 } // namespace
@@ -505,14 +511,15 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     (void)hinstance;
     (void)wndproc;
 
-    s_gsLatency        = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
-    s_enableDither     = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
-    s_wallMipmaps      = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
-    s_showFpsCount     = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showMemStats     = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showVramStats    = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showDrawStats    = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", 0);
-    s_showProfileStats = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", 0);
+    s_gsLatency         = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
+    s_enableDither      = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+    s_wallMipmaps       = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
+    s_showDebugOverlays = Cvar_Get("ps2_debug_overlays", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showFpsCount      = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showMemStats      = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showVramStats     = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showDrawStats     = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    s_showProfileStats  = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
 
     const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
     const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);

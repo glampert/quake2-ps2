@@ -394,7 +394,7 @@ void Init()
 {
     s_skipSky    = Cvar_Get("ps2_skip_sky",        "0", 0); // Debug: drop the sky pass entirely.
     s_fullBounds = Cvar_Get("ps2_sky_full_bounds", "0", 0); // Debug: draw all six faces whole, ignoring what is visible.
-    s_skyMip     = Cvar_Get("ps2_skymip",          "0", 0); // Load sky faces at half resolution (ref_gl's gl_skymip).
+    s_skyMip     = Cvar_Get("ps2_skymip",          "0", CVAR_ARCHIVE); // Load sky faces at half resolution (ref_gl's gl_skymip).
 
     ClearBounds();
 }

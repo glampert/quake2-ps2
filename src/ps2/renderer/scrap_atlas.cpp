@@ -144,7 +144,7 @@ void DumpUsage()
         return;
     }
 
-    static const cvar_t * s_developer = Cvar_Get("developer", "0", 0);
+    static const cvar_t * s_developer = Cvar_Get("developer", PS2_QUAKE_DEBUG ? "1" : "0", 0);
     if (s_developer->value == 0.0f)
     {
         return;

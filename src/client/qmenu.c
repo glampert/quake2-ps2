@@ -419,6 +419,9 @@ void Menu_Draw(menuframework_s * menu)
 
 void Menu_DrawStatusBar(const char * string)
 {
+    // [PS2_QUAKE]: Adding 4px padding so the status bar doesn't get cut at the bottom of the screen.
+    const int statusbar_pad_y = 4;
+
     if (string)
     {
         int l = strlen(string);
@@ -426,12 +429,12 @@ void Menu_DrawStatusBar(const char * string)
         int maxcol = viddef.width / 8;
         int col = maxcol / 2 - l / 2;
 
-        re.DrawFill(0, viddef.height - 8, viddef.width, 8, 4);
-        Menu_DrawString(col * 8, viddef.height - 8, string);
+        re.DrawFill(0, viddef.height - (8 + statusbar_pad_y), viddef.width, 8, 4);
+        Menu_DrawString(col * 8, viddef.height - (8 + statusbar_pad_y), string);
     }
     else
     {
-        re.DrawFill(0, viddef.height - 8, viddef.width, 8, 0);
+        re.DrawFill(0, viddef.height - (8 + statusbar_pad_y), viddef.width, 8, 0);
     }
 }
 

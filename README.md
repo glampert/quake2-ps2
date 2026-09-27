@@ -433,7 +433,7 @@ protocol are unchanged:
 | Weapon fire | the player's muzzle flash (`MZ_*`) | per weapon, from the blaster's buzz up to the railgun and super shotgun |
 | Hand grenade throw | the view weapon stepping off its throw frame (no muzzle flash) | medium |
 | Damage taken | `STAT_FLASHES`, sized by the health + armor drop | scales up to 50 damage |
-| Item pickup | the pickup sound on the player's item channel | ammo/health tick, then armor, weapons, powerups/keys/packs |
+| Item pickup | the pickup sound on the player's item channel | light for ammo/health, then armor, weapons, powerups/keys/packs |
 | Powerup switched on | the HUD timer icon appearing, or its timer jumping up | strongest |
 
 Overlapping effects mix: the small motor runs while any effect wants it, the large one at the

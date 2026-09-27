@@ -8,6 +8,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/hash.h"
 #include "ps2/input/pad.h"
 #include "ps2/input/rumble.h"
 
@@ -38,8 +39,6 @@ namespace {
 // One burst of vibration. The pad has two motors: a small one that is either on or
 // off - a light, high-pitched buzz - and a large one with a variable speed for the
 // heavy rumble. An effect can use either or both; a zero duration leaves one out.
-// Low large-motor speeds are barely felt on a real DualShock, so the lightest
-// effects buzz the small motor instead.
 struct RumbleEffect
 {
     const char * name; // what in_rumbledebug prints
@@ -64,14 +63,14 @@ struct WeaponRumble
 constexpr WeaponRumble kWeaponRumbles[] = {
     //                                      large  large  small
     //                                      speed     ms     ms
-    { MZ_BLASTER,      { "blaster",          0x00,     0,    80 } },
-    { MZ_HYPERBLASTER, { "hyperblaster",     0x00,     0,   120 } },
-    { MZ_MACHINEGUN,   { "machinegun",       0x80,    60,    60 } },
+    { MZ_BLASTER,      { "blaster",          0x80,    90,    80 } },
+    { MZ_HYPERBLASTER, { "hyperblaster",     0x60,   120,   120 } },
+    { MZ_MACHINEGUN,   { "machinegun",       0xE1,    80,    70 } },
     { MZ_CHAINGUN1,    { "chaingun x1",      0x90,   120,   120 } },
     { MZ_CHAINGUN2,    { "chaingun x2",      0xB0,   120,   120 } },
     { MZ_CHAINGUN3,    { "chaingun x3",      0xD0,   120,   120 } },
-    { MZ_SHOTGUN,      { "shotgun",          0xB0,   150,   100 } },
-    { MZ_SSHOTGUN,     { "super shotgun",    0xFF,   220,   150 } },
+    { MZ_SHOTGUN,      { "shotgun",          0xD0,   180,   120 } },
+    { MZ_SSHOTGUN,     { "super shotgun",    0xFF,   280,   180 } },
     { MZ_GRENADE,      { "grenade launcher", 0xA0,   150,    80 } },
     { MZ_ROCKET,       { "rocket launcher",  0xD0,   200,   120 } },
     { MZ_RAILGUN,      { "railgun",          0xFF,   250,   200 } },
@@ -84,26 +83,28 @@ constexpr RumbleEffect kGrenadeThrowRumble = { "hand grenade", 0x90, 120, 60 };
 // Sounds on the local player's item channel, which is where Touch_Item plays the
 // pickup sound (g_items.c), from everyday pickups to rare finds. The channel also
 // carries powerup warnings and quad damage shots, which aren't listed and play nothing.
+// Keyed by the name's hash alone, with no name check on a match: the channel only
+// carries the game's own couple dozen sounds.
 struct ItemSoundRumble
 {
-    const char * sound;
+    u64 soundHash; // ps2::HashStr64 of the sound's name
     RumbleEffect effect;
 };
 
 constexpr ItemSoundRumble kItemSoundRumbles[] = {
-    //                                       large large small
-    //                                       speed    ms    ms
-    { "misc/am_pkup.wav",   { "ammo",         0x00,   0,  80 } },
-    { "misc/ar2_pkup.wav",  { "armor shard",  0x00,   0,  80 } },
-    { "items/s_health.wav", { "small health", 0x00,   0,  80 } },
-    { "items/n_health.wav", { "health",       0x00,   0, 100 } },
-    { "items/l_health.wav", { "large health", 0x70, 120, 100 } },
-    { "misc/ar1_pkup.wav",  { "armor",        0x90, 150, 120 } },
-    { "misc/ar3_pkup.wav",  { "power armor",  0x90, 150, 120 } },
-    { "misc/w_pkup.wav",    { "weapon",       0xA0, 180, 120 } },
-    { "items/m_health.wav", { "mega health",  0xC0, 300, 200 } },
+    //                                                       large large small
+    //                                                       speed    ms    ms
+    { ps2::HashStr64("misc/am_pkup.wav"),   { "ammo",         0x60, 100, 100 } },
+    { ps2::HashStr64("misc/ar2_pkup.wav"),  { "armor shard",  0x60, 100, 100 } },
+    { ps2::HashStr64("items/s_health.wav"), { "small health", 0x60, 100, 100 } },
+    { ps2::HashStr64("items/n_health.wav"), { "health",       0x70, 120, 120 } },
+    { ps2::HashStr64("items/l_health.wav"), { "large health", 0x80, 150, 120 } },
+    { ps2::HashStr64("misc/ar1_pkup.wav"),  { "armor",        0x90, 150, 120 } },
+    { ps2::HashStr64("misc/ar3_pkup.wav"),  { "power armor",  0x90, 150, 120 } },
+    { ps2::HashStr64("misc/w_pkup.wav"),    { "weapon",       0xA0, 180, 120 } },
+    { ps2::HashStr64("items/m_health.wav"), { "mega health",  0xC0, 300, 200 } },
     // Powerups, keys, adrenaline, the bandolier, the ammo pack and the ancient head.
-    { "items/pkup.wav",     { "special item", 0xC0, 300, 200 } },
+    { ps2::HashStr64("items/pkup.wav"),     { "special item", 0xC0, 300, 200 } },
 };
 
 // A timed powerup coming on: quad damage, invulnerability, the environment suit or
@@ -354,9 +355,11 @@ void IN_RumbleItemSound(const char * sound)
     {
         return;
     }
+
+    const u64 soundHash = ps2::HashStr64(sound);
     for (const ItemSoundRumble & entry : kItemSoundRumbles)
     {
-        if (std::strcmp(entry.sound, sound) == 0)
+        if (entry.soundHash == soundHash)
         {
             Play(entry.effect);
             return;

@@ -8,7 +8,8 @@
 #    make release     -> optimized   -> build/release/quake2.elf
 #    make run         -> build + launch in PCSX2  (VSCode: F5)
 #    make release run -> the same, with the release build
-#    make tools       -> build host tools (imgdump, unpak, bspinfo) into build/tools/
+#    make tools       -> build host tools (imgdump, unpak, bspinfo, musenc) into build/tools/
+#    make music       -> encode baseq2/music/trackNN.wav into the trackNN.adp files the game streams
 #    make clean       -> remove build artifacts (both configs)
 #    make clean_vu    -> remove only assembled VU microprograms
 #
@@ -80,6 +81,8 @@ PS2_CXX_SRC =                         \
 	ps2/audio/snd.cpp                 \
 	ps2/audio/audsrv_device.cpp       \
 	ps2/audio/mix_ring.cpp            \
+	ps2/audio/music_stream.cpp        \
+	ps2/audio/cd_audio.cpp            \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
@@ -118,9 +121,9 @@ PS2_CXX_SRC =                         \
 PS2_C_SRC = ps2/system/dlmalloc/dlmalloc.c
 
 # Stock Quake II engine / game / server - untouched C, statically linked.
-# The null/* stub stands in for CD audio: Quake II streams its music off CDDA tracks
-# and this port has no CDVD path at all - game data comes from host: or mass:.
-# Sound output itself is implemented, see ps2/audio/.
+# Sound output and the CD audio module are implemented in the backend, see ps2/audio/:
+# with no CDVD path in this port (game data comes from host: or mass:), the CD tracks
+# are streamed from baseq2/music/trackNN.adp files instead (cd_audio.cpp).
 ENGINE_C_SRC = \
 	client/cl_cin.c    client/cl_ents.c   client/cl_fx.c     client/cl_input.c \
 	client/cl_inv.c    client/cl_main.c   client/cl_newfx.c  client/cl_parse.c \
@@ -142,7 +145,6 @@ ENGINE_C_SRC = \
 	game/m_insane.c    game/m_medic.c     game/m_move.c      game/m_mutant.c   \
 	game/m_parasite.c  game/m_soldier.c   game/m_supertank.c game/m_tank.c     \
 	game/p_client.c    game/p_hud.c       game/p_trail.c     game/p_view.c     \
-	null/cd_null.c                                                             \
 	server/sv_ccmds.c  server/sv_ents.c   server/sv_game.c   server/sv_init.c  \
 	server/sv_main.c   server/sv_send.c   server/sv_user.c   server/sv_world.c
 
@@ -201,7 +203,7 @@ VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 # (not the EE toolchain) since they run on the development machine. Being host
 # binaries they are config-independent, so they live outside build/<config>/.
 TOOLS_PATH     = $(SRC_DIR)/tools
-TOOLS_CXX_BINS = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo)
+TOOLS_CXX_BINS = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo musenc)
 TOOLS_PY_BINS  = $(addprefix $(BUILD_DIR)/tools/, symbolize)
 TOOLS_BINS     = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
 HOST_CXX      ?= c++
@@ -306,7 +308,7 @@ EE_LIBS += -lkernel -ldraw -lgraph -lpacket2 -ldma -lpad -lkbd -laudsrv -lpatche
 #  Rules
 # ----------------------------------------------------------------------------
 
-.PHONY: all release run tools clean clean_vu compiledb
+.PHONY: all release run tools music clean clean_vu compiledb
 
 all: $(GAME_ELF) tools
 
@@ -396,6 +398,26 @@ tools: $(TOOLS_BINS)
 $(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(TOOLS_PATH)/%.cpp
 	@mkdir -p $(dir $@)
 	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
+
+# musenc shares the ADPCM decoder with the game, so it plays back exactly what it measured.
+$(BUILD_DIR)/tools/musenc: $(SRC_DIR)/ps2/audio/spu_adpcm.h
+
+# The soundtrack for the CD audio module (ps2/audio/cd_audio.cpp): every trackNN.wav in
+# MUSIC_DIR, any case, is encoded to a lowercase trackNN.adp beside it, skipping the ones
+# already newer than both their .wav and the encoder. The .wav files are only the source;
+# the game never reads them, so they needn't go onto the USB stick.
+MUSIC_DIR ?= baseq2/music
+
+music: $(BUILD_DIR)/tools/musenc
+	@found=0; \
+	for wav in $(MUSIC_DIR)/[Tt]rack*.wav; do \
+		[ -e "$$wav" ] || continue; \
+		found=1; \
+		adp="$(MUSIC_DIR)/$$(basename "$$wav" .wav | tr 'A-Z' 'a-z').adp"; \
+		if [ "$$adp" -nt "$$wav" ] && [ "$$adp" -nt $(BUILD_DIR)/tools/musenc ]; then continue; fi; \
+		$(BUILD_DIR)/tools/musenc "$$wav" "$$adp" || exit 1; \
+	done; \
+	[ $$found = 1 ] || { echo "No trackNN.wav files in $(MUSIC_DIR)/"; exit 1; }
 
 # Script tools are published into build/tools/ under the same extensionless names
 # as the compiled ones, so everything in there is invoked the same way.

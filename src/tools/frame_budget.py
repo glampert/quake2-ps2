@@ -79,8 +79,9 @@ def report_budget(rows, maps):
         r['ee'] = r['Frame'] - r['VSync']
         r['map'] = map_of(r['frame'], maps)
         # Sound nests inside SndMix when the engine probes exist; older logs lack them.
+        # Music (CDAudio_Update) runs after S_Update, outside it.
         eng = sum(r.get(c, 0) for c in ('Server', 'ClParse', 'ClScene'))
-        snd = r['SndMix'] if 'SndMix' in r else r['Sound']
+        snd = (r['SndMix'] if 'SndMix' in r else r['Sound']) + r.get('Music', 0)
         r['rest'] = r['ee'] - r['View'] - r['Ui'] - r['Overlay'] - snd - eng
 
     view = [r for r in rows if r['View'] > 0]
@@ -139,7 +140,7 @@ def report_budget(rows, maps):
     bad = d + o
     cols = ['ee', 'View', 'World', 'TexChains', 'LmChains', 'LmChain', 'BspWalk', 'MarkLeaves',
             'Entities', 'EntGeom', 'EntShadow', 'EntBrush', 'EntShade', 'Particles', 'AlphaSurfs',
-            'TurbSurfs', 'Sky', 'Ui', 'Overlay', 'Sound', 'SndMix', 'Server', 'ClParse', 'ClScene',
+            'TurbSurfs', 'Sky', 'Ui', 'Overlay', 'Sound', 'SndMix', 'Music', 'Server', 'ClParse', 'ClScene',
             'GsWait', 'DmaSend', 'DmaFlush', 'rest',
             'tris', 'batches', 'entities', 'particles', 'dlights', 'lmDynamic', 'lmStyle',
             'vramUploads', 'vramOomSyncs', 'chainKB', 'chainDrains', 'surfs', 'nodes']

@@ -32,6 +32,8 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   frame time.
 - **Sound.** The stock portable Quake mixer painting into a ring buffer that is streamed to
   the SPU2 through the `audsrv` IOP driver, including cinematic audio.
+- **Music.** The CD soundtrack, streamed from loose SPU2 ADPCM files in `baseq2/music/`
+  in place of the disc's audio tracks, with id's per-map tracks and looping rules.
 - **Input.** DualShock gamepad (analog sticks + full button mapping + rumble) and an optional
   USB keyboard through `ps2kbd`, usable simultaneously.
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
@@ -82,11 +84,19 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
        pak0.pak
        players/      (optional, loose files)
        video/        (optional, .cin cinematics)
+       music/        (optional, trackNN.adp soundtrack - see below)
        config.cfg
    ```
 
    A loose-file tree works as well as the `.pak`; [src/tools/unpak.cpp](src/tools/unpak.cpp)
    builds a small extractor for that.
+
+   The soundtrack is optional too. Rip the CD's audio tracks 2-11 to 16-bit PCM WAVs named
+   `baseq2/music/trackNN.wav` (NN = the CD track number; any case), then run `make music`
+   to encode them into the `trackNN.adp` files the game streams - SPU2 ADPCM at 22050 Hz,
+   about 1.5 MB a minute, ~41 MB for the whole soundtrack. Only the `.adp` files need to go
+   onto a USB stick. Input must be at 22050 Hz or exactly twice that (a CD rip); convert
+   anything else first, e.g. `afconvert -f WAVE -d LEI16@22050 -c 2 in.flac out.wav` on macOS.
 
 ### Building
 
@@ -127,6 +137,7 @@ with `STRIP_ELF=0` to ship the unstripped ELF as `quake2.elf` instead.
 | `make release` | The same, optimized, into `build/release/quake2.elf`. |
 | `make run` | Builds, symlinks `build/<config>/baseq2` → `baseq2/`, and launches PCSX2 with the ELF. |
 | `make tools` | Builds the host-side command line tools into `build/tools/` (see below). |
+| `make music` | Encodes every `baseq2/music/trackNN.wav` into the `trackNN.adp` file beside it, skipping up-to-date ones. |
 | `make compiledb` | Regenerates `compile_commands.json` from the Makefile, for IntelliSense/clangd. Run after adding or removing source files. |
 | `make clean` | Removes all build artifacts, both configs. |
 | `make clean_vu` | Removes only the assembled VU microprograms (`build/vu/`). |
@@ -147,6 +158,10 @@ and is simply copied into place):
   function names, files and line numbers. See [Reading a stack trace](#reading-a-stack-trace)
   below.
 - `build/tools/unpak` — extracts a Quake II `.pak` archive into a normal directory.
+- `build/tools/musenc` — encodes a 16-bit PCM `.wav` into a streamed music file (`.adp`,
+  SPU2 ADPCM), and `musenc -d` decodes one back to `.wav` for listening. It shares the
+  decoder with the game ([spu_adpcm.h](src/ps2/audio/spu_adpcm.h)), so the SNR it reports is
+  of exactly what the console plays.
 - `build/tools/imgdump` — dumps `.pcx` images into C++ byte arrays (RGB or raw 8-bit
   palettized), which is how the built-in console font, console background, HUD backtile and
   the global palette under [src/ps2/builtin/](src/ps2/builtin/) were generated. Those are
@@ -252,13 +267,13 @@ source files are added or removed.
 ```
 src/
   client/ common/ game/ server/   id's original Quake II C code
-  null/                           cd_null.c - the only remaining null stub (no CD audio)
-  tools/                          host-side command line tools (imgdump, unpak, bspinfo, symbolize)
+  null/                           id's null driver stubs - none are built any more
+  tools/                          host-side command line tools (imgdump, unpak, bspinfo, musenc, symbolize)
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
     renderer/                     GS front-end, VRAM heap, textures, models, VU1 path
       vu1progs/                   VU1 microprograms (.vcl)
-    audio/                        SNDDMA_* seam, audsrv device, mix ring
+    audio/                        SNDDMA_* seam, audsrv device, mix ring, CD music streaming
     input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
@@ -389,6 +404,19 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
 
 Audio bring-up failure is not fatal: a missing IOP driver just costs sound. `ps2_disable_sound 1`
 turns it off deliberately.
+
+**CD music.** Quake II plays its soundtrack from the disc's audio tracks, and this port has
+no CDVD path, so [cd_audio.cpp](src/ps2/audio/cd_audio.cpp) implements the `CDAudio_*`
+module over loose `baseq2/music/trackNN.adp` files instead. They are SPU2 ADPCM - the PS2's
+native sample format, 3.5x smaller than 16-bit PCM - chunk-interleaved so the same files
+could later be streamed straight into SPU2 voices. [`MusicStream`](src/ps2/audio/music_stream.h)
+keeps just two 8 KB read buffers in flight (~650 ms of audio; ~25 KB of RAM in all) and
+decodes on demand; the file reads are issued from a reader thread at the main thread's
+priority, since a blocking read off a USB stick could otherwise cost a frame. The decoded
+music is fed into the mixer's raw-sample channel (the one cinematics use), so it reaches the
+SPU2 inside the existing audsrv stream at no extra SIF bandwidth. It costs about 0.15-0.2 ms
+of EE time per frame as measured in PCSX2. Behaviour follows id's `cd_win.c`: a map's track
+loops `cd_loopcount` times, then the ambient `cd_looptrack` loops for good.
 
 ### Input
 
@@ -525,6 +553,12 @@ unwinder uses cannot read code it has no symbols for.
 **Commands:** `ps2_dump_iop_mods` lists the currently loaded IOP modules;
 `in_keyboardmap <usage> <key>` remaps a USB scan code.
 
+**CD music:** `cd_nocd` (the Options menu's "CD music" toggle), `cd_volume` (0-1, the "music
+volume" slider), `cd_loopcount` / `cd_looptrack` (id's loop-to-ambient rule, default 4 and 11).
+The `cd` command drives it by hand: `cd play N`, `cd loop N`, `cd stop`, `cd pause`,
+`cd resume`, `cd on`, `cd off`, and `cd info` for the current track, position and settings.
+With `developer 1` it also logs track starts, loops, missing files and stream underruns.
+
 **Loading an empty map for renderer work:** `deathmatch 1` is the switch that frees every monster at spawn. Both it and `cheats` are latched, so they must be set *before* `map`:
 
 ```
@@ -574,16 +608,12 @@ against a release ELF you get function names from the symbol table but no file o
 
 **Rendering**
 
-- No texture mipmaps; minification aliasing is visible on distant world geometry.
 - CLUT reloads could be skipped with `CLUT_COMPARE_CBP0`.
 - General performance work — the target is a solid 60 fps "performance mode" in real gameplay.
 
 **Engine features**
 
-- **Background music.** There is no CDVD path at all, so `null/cd_null.c` still stands in for
-  CD audio. Streaming OGG/ADPCM tracks off the game data would be the way in.
-- **Save games** have not been exercised — the filesystem write path on `mass:`/`host:`
-  needs checking.
+- **Save games** have not been exercised — the filesystem write path on `mass:`/`host:` needs checking.
 - **Memory card support** for configs and saves.
 
 **Build and project**

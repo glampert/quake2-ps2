@@ -50,6 +50,9 @@ PS2_PROFILE_DECLARE_EVENT(ClScene);
 PS2_PROFILE_DECLARE_EVENT(SndMix);
 PS2_PROFILE_DECLARE_EVENT(FsIo);
 
+// CDAudio_Update: the music stream's decode and raw-sample top-up (ps2/audio/cd_audio.cpp).
+PS2_PROFILE_DECLARE_EVENT(Music);
+
 } // namespace ps2::prof_evt
 
 // ------------------------------------------------------------------------------------------------

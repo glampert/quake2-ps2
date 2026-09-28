@@ -81,7 +81,7 @@
 ;
 ; Invoke it in the same basic block as the clipw it reads. The flags land four
 ; cycles after a clipw and openvcl pads for that only within a block; across a
-; branch or label it reads them early. check_vu_latency.py enforces this.
+; branch or label it reads them early. check_vu_code.py enforces this.
 #macro JudgeTriangleAdc
     fcand  vi01, 0x3FFFF
     iaddiu iADC, vi01, 0x7FFF

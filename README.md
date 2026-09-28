@@ -271,9 +271,9 @@ src/
   null/                           id's null driver stubs - none are built any more
   tools/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc)
-    scripts/                      Python helpers (symbolize, compile_commands.json generator)
+    scripts/                      Python helpers (symbolize, compile_commands.json generator,
+                                  check_vu_code - the openvcl/dvp-as output checks run by every VU build)
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
-      vu_checks/                  openvcl/dvp-as output checks run by every VU build
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
@@ -378,7 +378,7 @@ straddled across the perf demos. The sky is the one thing still cut on the EE
 ([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
 
 The VU toolchain fails silently in several ways that only show up on screen, so every VU
-build runs six checks from [src/tools/scripts/vu_checks/](src/tools/scripts/vu_checks/) over its output: register allocation (by reaching
+build runs the six checks in [check_vu_code.py](src/tools/scripts/check_vu_code.py) over its output: register allocation (by reaching
 definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
 reuse, immediate truncation, and branch reach.
 

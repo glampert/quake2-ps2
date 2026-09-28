@@ -618,7 +618,7 @@
         ; signed, and dvp-as truncates anything larger without a word - -18
         ; assembles to exactly the same instruction as +14, which made this
         ; test always pass and walked the GIF straight out of the window.
-        ; check_vu_immediates.py now fails the build on it.
+        ; check_vu_code.py now fails the build on it.
         iaddiu iRoom, vi00,       18
         isub   iRoom, iVertsLeft, iRoom
         ibgez iRoom, lWindowHasRoom

@@ -199,15 +199,20 @@ VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 # here because the pattern rule below would not otherwise see them change.
 VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 
-# Standalone command line tools under src/tools, built with the HOST C++ compiler
-# (not the EE toolchain) since they run on the development machine. Being host
-# binaries they are config-independent, so they live outside build/<config>/.
-TOOLS_PATH     = $(SRC_DIR)/tools
-TOOLS_CXX_BINS = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo musenc)
-TOOLS_PY_BINS  = $(addprefix $(BUILD_DIR)/tools/, symbolize)
-TOOLS_BINS     = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
-HOST_CXX      ?= c++
-HOST_CXXFLAGS ?= -std=gnu++20 -O2 -Wall
+# The openvcl/dvp-as output checks every VU build runs (see the rule below).
+VU_CHECKS_PATH = $(SRC_DIR)/tools/scripts/vu_checks
+
+# Standalone command line tools: the C++ ones under src/tools/host, built with the
+# HOST C++ compiler (not the EE toolchain) since they run on the development
+# machine, and the Python ones under src/tools/scripts. Being host binaries they
+# are config-independent, so they live outside build/<config>/.
+HOST_TOOLS_PATH = $(SRC_DIR)/tools/host
+SCRIPTS_PATH    = $(SRC_DIR)/tools/scripts
+TOOLS_CXX_BINS  = $(addprefix $(BUILD_DIR)/tools/, imgdump unpak bspinfo musenc)
+TOOLS_PY_BINS   = $(addprefix $(BUILD_DIR)/tools/, symbolize)
+TOOLS_BINS      = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
+HOST_CXX       ?= c++
+HOST_CXXFLAGS  ?= -std=gnu++20 -O2 -Wall
 
 # IOP/IRX modules embedded into the ELF: the BDM USB mass-storage stack, booted
 # by ps2/system/iop_boot.cpp when the game data isn't on host: (real hardware),
@@ -376,15 +381,15 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 $(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS)
 	@mkdir -p $(dir $@)
 	cd $(VCL_PATH) && vclpp $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
-	@python3 $(SRC_DIR)/tools/check_vu_crossloop.py $(basename $@).pp.vcl
+	@python3 $(VU_CHECKS_PATH)/check_vu_crossloop.py $(basename $@).pp.vcl
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
 	@openvcl -c -o $(basename $@).c.vsm $(basename $@).pp.vcl
-	@python3 $(SRC_DIR)/tools/check_vu_regalloc.py $(basename $@).c.vsm $(basename $@).vsm
-	@python3 $(SRC_DIR)/tools/check_vu_loopvar.py $(basename $@).vsm
-	@python3 $(SRC_DIR)/tools/check_vu_immediates.py $(basename $@).vsm
-	@python3 -B $(SRC_DIR)/tools/check_vu_latency.py $(basename $@).vsm
+	@python3 $(VU_CHECKS_PATH)/check_vu_regalloc.py $(basename $@).c.vsm $(basename $@).vsm
+	@python3 $(VU_CHECKS_PATH)/check_vu_loopvar.py $(basename $@).vsm
+	@python3 $(VU_CHECKS_PATH)/check_vu_immediates.py $(basename $@).vsm
+	@python3 -B $(VU_CHECKS_PATH)/check_vu_latency.py $(basename $@).vsm
 	dvp-as $(basename $@).vsm -o $@
-	@python3 $(SRC_DIR)/tools/check_vu_branches.py $(basename $@).vsm $@ || { rm -f $@; exit 1; }
+	@python3 $(VU_CHECKS_PATH)/check_vu_branches.py $(basename $@).vsm $@ || { rm -f $@; exit 1; }
 
 # IOP modules embedded via bin2c.
 $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
@@ -395,7 +400,7 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 # Host tools: each is a single self-contained .cpp compiled straight to a binary.
 tools: $(TOOLS_BINS)
 
-$(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(TOOLS_PATH)/%.cpp
+$(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(HOST_TOOLS_PATH)/%.cpp
 	@mkdir -p $(dir $@)
 	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
 
@@ -421,7 +426,7 @@ music: $(BUILD_DIR)/tools/musenc
 
 # Script tools are published into build/tools/ under the same extensionless names
 # as the compiled ones, so everything in there is invoked the same way.
-$(TOOLS_PY_BINS): $(BUILD_DIR)/tools/%: $(TOOLS_PATH)/%.py
+$(TOOLS_PY_BINS): $(BUILD_DIR)/tools/%: $(SCRIPTS_PATH)/%.py
 	@mkdir -p $(dir $@)
 	cp -f $< $@
 	@chmod +x $@
@@ -438,7 +443,7 @@ run: all $(OUTPUT_DIR)/baseq2
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact
 # per-file compile flags. Run after adding/removing source files.
 compiledb:
-	@$(MAKE) -Bnk | python3 src/tools/gen_compile_commands.py
+	@$(MAKE) -Bnk | python3 $(SCRIPTS_PATH)/gen_compile_commands.py
 
 # Both configs, not just the selected one.
 clean:

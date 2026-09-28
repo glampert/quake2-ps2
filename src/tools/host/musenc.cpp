@@ -34,7 +34,7 @@
 #include <string>
 #include <vector>
 
-#include "../ps2/audio/spu_adpcm.h"
+#include "../../ps2/audio/spu_adpcm.h"
 
 namespace adpcm = ps2::audio::spu_adpcm;
 namespace music = ps2::audio::music_file;

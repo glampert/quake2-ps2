@@ -15,7 +15,7 @@ Usage: compare_flog.py <before> <after> [--threshold 3.0]
 import sys, statistics
 
 # summarize_flog lives beside this; keep the import from leaving a __pycache__
-# in src/tools.
+# in src/tools/scripts/frame_log.
 sys.dont_write_bytecode = True
 from summarize_flog import extract
 

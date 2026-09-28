@@ -118,7 +118,7 @@ using AliasVertex = vu1::LerpDrawAttrib;
 using PolyVertex = vu1::DrawVertex;
 
 // See comment below on ModelSurface about why we need this.
-static_assert(sizeof(PolyVertex) == 32, "Update SZ_POLY_VERTEX in src/tools/bspinfo.cpp!");
+static_assert(sizeof(PolyVertex) == 32, "Update SZ_POLY_VERTEX in src/tools/host/bspinfo.cpp!");
 
 //
 // Model triangle vertex indexes, into the owning ModelPoly's vertexes[].
@@ -204,11 +204,11 @@ struct ModelSurface
     int lightmapDynamicFrame;
 };
 
-// The world hunk is sized from these two in src/tools/bspinfo.cpp, which cannot
+// The world hunk is sized from these two in src/tools/host/bspinfo.cpp, which cannot
 // include this header (it is a host build, 64-bit pointers). Asserted here so a
 // layout change breaks the build rather than silently invalidating the world
 // arena reservation.
-static_assert(sizeof(ModelSurface) == 76, "Update SZ_MODEL_SURFACE in src/tools/bspinfo.cpp!");
+static_assert(sizeof(ModelSurface) == 76, "Update SZ_MODEL_SURFACE in src/tools/host/bspinfo.cpp!");
 
 //
 // BSP world node.

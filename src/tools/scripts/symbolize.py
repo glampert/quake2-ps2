@@ -39,8 +39,10 @@ ARG_ADDR_RE = re.compile(r"^(?:0x)?[0-9a-fA-F]{4,8}$")
 
 
 def repo_root():
-    """Repo root, whether this runs from src/tools/ or installed in build/tools/."""
-    return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    """Repo root, whether this runs from src/tools/scripts/ or installed in build/tools/."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    depth = 3 if os.path.basename(here) == "scripts" else 2
+    return os.path.abspath(os.path.join(here, *[".."] * depth))
 
 
 def find_default_elf():

@@ -3,7 +3,7 @@
  * File: spu_adpcm.h
  * Brief: SPU2 ADPCM - the PS1/PS2 sound chip's native 4-bit sample encoding, the payload of
  *        Sony's .VAG files - and the layout of the music files streamed from it
- *        (baseq2/music/trackNN.adp: written by src/tools/musenc.cpp, played by
+ *        (baseq2/music/trackNN.adp: written by src/tools/host/musenc.cpp, played by
  *        music_stream.cpp for the CD audio replacement in cd_audio.cpp).
  *
  *        Header-only and free of ps2sdk types on purpose: the EE runtime and the host

@@ -88,7 +88,7 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
        config.cfg
    ```
 
-   A loose-file tree works as well as the `.pak`; [src/tools/unpak.cpp](src/tools/unpak.cpp)
+   A loose-file tree works as well as the `.pak`; [src/tools/host/unpak.cpp](src/tools/host/unpak.cpp)
    builds a small extractor for that.
 
    The soundtrack is optional too. Rip the CD's audio tracks 2-11 to 16-bit PCM WAVs named
@@ -151,7 +151,8 @@ and skip autodetection.
 
 #### Host tools
 
-Built with the *host* C++ compiler, not the EE toolchain (`symbolize` is a Python 3 script
+Built from [src/tools/host/](src/tools/host/) with the *host* C++ compiler, not the EE
+toolchain (`symbolize` is a Python 3 script from [src/tools/scripts/](src/tools/scripts/)
 and is simply copied into place):
 
 - `build/tools/symbolize` — turns a stack trace dump printed by the running game into
@@ -268,7 +269,12 @@ source files are added or removed.
 src/
   client/ common/ game/ server/   id's original Quake II C code
   null/                           id's null driver stubs - none are built any more
-  tools/                          host-side command line tools (imgdump, unpak, bspinfo, musenc, symbolize)
+  tools/
+    host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc)
+    scripts/                      Python helpers (symbolize, compile_commands.json generator)
+      frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
+      vu_checks/                  openvcl/dvp-as output checks run by every VU build
+    vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
     renderer/                     GS front-end, VRAM heap, textures, models, VU1 path
@@ -372,7 +378,7 @@ straddled across the perf demos. The sky is the one thing still cut on the EE
 ([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
 
 The VU toolchain fails silently in several ways that only show up on screen, so every VU
-build runs six checks from `src/tools/` over its output: register allocation (by reaching
+build runs six checks from [src/tools/scripts/vu_checks/](src/tools/scripts/vu_checks/) over its output: register allocation (by reaching
 definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
 reuse, immediate truncation, and branch reach.
 

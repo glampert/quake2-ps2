@@ -1,0 +1,3 @@
+[submodule "src/tools/vclpp"]
+	path = src/tools/vclpp
+	url = https://github.com/glampert/vclpp.git

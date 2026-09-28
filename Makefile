@@ -202,6 +202,13 @@ VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 # The openvcl/dvp-as output checks every VU build runs (see the rule below).
 VU_CHECK = $(SRC_DIR)/tools/scripts/check_vu_code.py
 
+# vclpp is not part of the ps2dev distribution: it comes in as a git submodule
+# (https://github.com/glampert/vclpp) and is built by its own Makefile, so every
+# VU build runs the pinned version rather than whatever is on PATH - an older
+# vclpp silently mangles macro bodies that have comments in them.
+VCLPP_PATH = $(SRC_DIR)/tools/vclpp
+VCLPP      = $(BUILD_DIR)/tools/vclpp
+
 # Standalone command line tools: the C++ ones under src/tools/host, built with the
 # HOST C++ compiler (not the EE toolchain) since they run on the development
 # machine, and the Python ones under src/tools/scripts. Being host binaries they
@@ -361,8 +368,18 @@ $(CXX_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
 # specific variables are inherited by the rule above, so only these objects see it.
 $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 
+# The vclpp submodule, through its own Makefile. That one recompiles on every
+# run, so the up-to-date check is made here instead: it runs again only when the
+# submodule's sources or Makefile change, as checking out a new commit does.
+# BIN_TARGET puts the binary under build/tools/ rather than in the submodule's
+# work tree, where git would report it as untracked content. Every VU program
+# depends on the binary, so a new vclpp rebuilds them all.
+$(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/*.cpp $(VCLPP_PATH)/*.h $(VCLPP_PATH)/*.hpp)
+	@test -f $(VCLPP_PATH)/Makefile || { echo "$(VCLPP_PATH) is empty - run 'git submodule update --init'"; exit 1; }
+	@mkdir -p $(dir $@)
+	@$(MAKE) --no-print-directory -C $(VCLPP_PATH) CXX=$(HOST_CXX) BIN_TARGET=$(abspath $@)
+
 # VU1 microprograms.
-# TODO: vclpp has to be made a project dependency and added to the repo sync (https://github.com/glampert/vclpp).
 # TODO: Consider putting check_vu_code.py on GH or under the vclpp repo.
 # The checks in check_vu_code.py are not optional, and every one of them exists
 # because the toolchain fails silently. openvcl allocates VI registers by
@@ -378,9 +395,9 @@ $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
 # done and a failure deletes the object - otherwise the next make would take the
 # bad object as up to date. The 'operand out of range' warnings from dvp-as are
 # expected; see the branch check for why they are harmless.
-$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS)
+$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(VCLPP)
 	@mkdir -p $(dir $@)
-	cd $(VCL_PATH) && vclpp $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
+	cd $(VCL_PATH) && $(abspath $(VCLPP)) $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
 	@openvcl -c -o $(basename $@).c.vsm $(basename $@).pp.vcl
 	dvp-as $(basename $@).vsm -o $@

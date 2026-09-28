@@ -53,7 +53,7 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
    | Tool | Comes from | Typical location |
    | --- | --- | --- |
    | `mips64r5900el-ps2-elf-gcc` / `-g++` | ps2toolchain | `$PS2DEV/ee/bin` |
-   | `vclpp`, `openvcl` | openvcl | `$PS2DEV/bin` |
+   | `openvcl` | openvcl | `$PS2DEV/bin` |
    | `dvp-as` | ps2toolchain (dvp) | `$PS2DEV/dvp/bin` |
    | `bin2c` | ps2sdk | `$PS2SDK/bin` |
 
@@ -99,6 +99,11 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
    anything else first, e.g. `afconvert -f WAVE -d LEI16@22050 -c 2 in.flac out.wav` on macOS.
 
 ### Building
+
+[vclpp](https://github.com/glampert/vclpp), the preprocessor the VU microprograms go
+through, is a git submodule at [src/tools/vclpp/](src/tools/vclpp/) that the build compiles
+with its own Makefile. Clone with `--recursive`, or run `git submodule update --init` in an
+existing clone.
 
 ```sh
 make            # debug build -> build/debug/quake2.elf (+ host tools)
@@ -274,6 +279,7 @@ src/
     scripts/                      Python helpers (symbolize, compile_commands.json generator,
                                   check_vu_code - the openvcl/dvp-as output checks run by every VU build)
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
+    vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap

@@ -129,7 +129,6 @@ SV_CheckForSavegame
 void SV_CheckForSavegame(void)
 {
     char name[MAX_OSPATH];
-    FILE * f;
     int i;
 
     if (sv_noreload->value)
@@ -142,14 +141,12 @@ void SV_CheckForSavegame(void)
         return;
     }
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/%s.sav", FS_Gamedir(), sv.name);
-    f = fopen(name, "rb");
-    if (!f)
+    // [PS2_QUAKE]: the save working set is in RAM, see Sys_SaveOpen
+    Com_sprintf(name, sizeof(name), "%s.sav", sv.name);
+    if (!Sys_SaveExists(name))
     {
         return; // no savegame
     }
-
-    fclose(f);
 
     SV_ClearWorld();
 

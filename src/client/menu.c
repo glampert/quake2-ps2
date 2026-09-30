@@ -382,6 +382,96 @@ void M_DrawTextBox(int x, int y, int width, int lines)
 /*
 =======================================================================
 
+[PS2_QUAKE]: POPUP MESSAGE BOX
+
+A message drawn over everything - the game, other menus, the full-screen
+console after an error drop - until any button is pressed. It is how the
+player learns why saving or loading failed: the console can't be read or
+typed into from a gamepad. Laid out like the video menu's notice
+(ps2/renderer/vid.cpp).
+
+=======================================================================
+*/
+
+enum
+{
+    POPUP_CHARS = 36,    // inner width of the box
+    POPUP_MAX_LINES = 12 // message lines
+};
+
+static char m_popup_title[POPUP_CHARS + 1];
+static char m_popup_lines[POPUP_MAX_LINES][POPUP_CHARS + 1];
+static int m_popup_numlines;
+
+// Breaks the text into lines at spaces, and at every '\n' ("\n\n" for a blank line).
+static void M_Popup_Wrap(const char * text)
+{
+    m_popup_numlines = 0;
+
+    while (*text && m_popup_numlines < POPUP_MAX_LINES)
+    {
+        int len = 0;
+        int lastSpace = -1;
+
+        while (text[len] && text[len] != '\n' && len < POPUP_CHARS)
+        {
+            if (text[len] == ' ')
+                lastSpace = len;
+            len++;
+        }
+
+        // the line is full and the word goes on: break at its start instead
+        if (text[len] && text[len] != '\n' && text[len] != ' ' && lastSpace > 0)
+            len = lastSpace;
+
+        memcpy(m_popup_lines[m_popup_numlines], text, len);
+        m_popup_lines[m_popup_numlines][len] = 0;
+        m_popup_numlines++;
+
+        text += len;
+        if (*text == '\n' || *text == ' ')
+            text++;
+    }
+}
+
+static void M_Popup_Draw(void)
+{
+    static const char * prompt = "press any button";
+
+    // title, blank, the message, blank, prompt
+    const int lines = m_popup_numlines + 4;
+    const int boxX = (320 - (POPUP_CHARS + 2) * 8) / 2;
+    const int boxY = (240 - (lines + 2) * 8) / 2;
+    const int textX = ((viddef.width - 320) / 2) + boxX + 8;
+    const int textY = ((viddef.height - 240) / 2) + boxY + 8;
+    int i;
+
+    M_DrawTextBox(boxX, boxY, POPUP_CHARS, lines);
+
+    Menu_DrawStringDark(textX + (POPUP_CHARS - (int)strlen(m_popup_title)) * 4, textY, m_popup_title);
+
+    for (i = 0; i < m_popup_numlines; i++)
+        Menu_DrawString(textX, textY + (i + 2) * 8, m_popup_lines[i]);
+
+    Menu_DrawStringDark(textX + (POPUP_CHARS - (int)strlen(prompt)) * 4, textY + (lines - 1) * 8, prompt);
+}
+
+static const char * M_Popup_Key(int key)
+{
+    M_PopMenu();
+    return NULL; // M_PopMenu played the sound
+}
+
+void M_Popup(const char * title, const char * text)
+{
+    Com_sprintf(m_popup_title, sizeof(m_popup_title), "%s", title);
+    M_Popup_Wrap(text);
+    M_PushMenu(M_Popup_Draw, M_Popup_Key);
+}
+
+/*
+=======================================================================
+
 MAIN MENU
 
 =======================================================================
@@ -1962,6 +2052,7 @@ static menuaction_s s_load_game_action;
 static menuaction_s s_save_game_action;
 static menuaction_s s_credits_action;
 static menuseparator_s s_blankline;
+static menulist_s s_save_device_box; // [PS2_QUAKE]
 
 static void StartGame(void)
 {
@@ -2008,6 +2099,14 @@ static void SaveGameFunc(void * unused)
 static void CreditsFunc(void * unused)
 {
     M_Menu_Credits_f();
+}
+
+// [PS2_QUAKE]: Where saves go (ps2/save/save_api.cpp). The spin control's order.
+static const char * save_device_values[] = { "mc", "host" };
+
+static void SaveDeviceFunc(void * unused)
+{
+    Cvar_Set("ps2_savedevice", save_device_values[s_save_device_box.curvalue]);
 }
 
 void Game_MenuInit(void)
@@ -2067,12 +2166,32 @@ void Game_MenuInit(void)
     s_credits_action.generic.name = "credits";
     s_credits_action.generic.callback = CreditsFunc;
 
+    // [PS2_QUAKE] 2026-09-29
+    // Running from the emulator's host filesystem, saves can go to plain files instead of the
+    // memory card (ps2_savedevice). Only offered there; credits move down a row for it.
+    if (Sys_SaveHostFilesAvailable())
+    {
+        static const char * save_device_names[] = { "memory card", "host files", 0 };
+
+        s_save_device_box.generic.type = MTYPE_SPINCONTROL;
+        s_save_device_box.generic.x = 0;
+        s_save_device_box.generic.y = 60;
+        s_save_device_box.generic.name = "saves";
+        s_save_device_box.generic.callback = SaveDeviceFunc;
+        s_save_device_box.itemnames = save_device_names;
+        s_save_device_box.curvalue = !Q_stricmp(Cvar_VariableString("ps2_savedevice"), "host") ? 1 : 0;
+
+        s_credits_action.generic.y = 80;
+    }
+
     Menu_AddItem(&s_game_menu, (void *)&s_easy_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_medium_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_hard_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_load_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_save_game_action);
+    if (Sys_SaveHostFilesAvailable())
+        Menu_AddItem(&s_game_menu, (void *)&s_save_device_box);
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_credits_action);
 
@@ -2118,36 +2237,70 @@ static menuaction_s s_loadgame_actions[MAX_SAVEGAMES];
 char m_savestrings[MAX_SAVEGAMES][32];
 qboolean m_savevalid[MAX_SAVEGAMES];
 
+// [PS2_QUAKE]: Why a slot that isn't empty can't be loaded, and where saves go (or why they
+// can't), shown under the slot list.
+static saveslotstate_t m_savestate[MAX_SAVEGAMES];
+static char m_savestatus[64];
+
 void Create_Savestrings(void)
 {
+    // [PS2_QUAKE]: The slots are archives on the memory card or in host files; only their
+    // headers are read here (ps2/save/slot_archive.cpp).
+    saveslotinfo_t info[MAX_SAVEGAMES];
     int i;
-    FILE * f;
-    char name[MAX_OSPATH];
+
+    Sys_SaveListSlots("save", MAX_SAVEGAMES, info);
+    Com_sprintf(m_savestatus, sizeof(m_savestatus), "%s", Sys_SaveDeviceStatus());
 
     for (i = 0; i < MAX_SAVEGAMES; i++)
     {
-        Com_sprintf(name, sizeof(name), "%s/save/save%i/server.ssv", FS_Gamedir(), i);
-        f = fopen(name, "rb");
-        if (!f)
+        m_savestate[i] = info[i].state;
+        m_savevalid[i] = (info[i].state == SAVESLOT_VALID);
+
+        switch (info[i].state)
         {
+        case SAVESLOT_VALID:
+            Com_sprintf(m_savestrings[i], sizeof(m_savestrings[i]), "%s", info[i].comment);
+            break;
+        case SAVESLOT_CORRUPT:
+            strcpy(m_savestrings[i], "<CORRUPT>");
+            break;
+        case SAVESLOT_INCOMPATIBLE:
+            strcpy(m_savestrings[i], "<INCOMPATIBLE>");
+            break;
+        default:
             strcpy(m_savestrings[i], "<EMPTY>");
-            m_savevalid[i] = false;
-        }
-        else
-        {
-            FS_Read(m_savestrings[i], sizeof(m_savestrings[i]), f);
-            fclose(f);
-            m_savevalid[i] = true;
+            break;
         }
     }
+}
+
+// [PS2_QUAKE]: The device status line under a save slot list.
+static void M_DrawSaveStatus(const menuframework_s * menu)
+{
+    const int y = menu->y + (MAX_SAVEGAMES + 1) * 10 + 8;
+    Menu_DrawStringDark((viddef.width - (int)strlen(m_savestatus) * 8) / 2, y, m_savestatus);
 }
 
 void LoadGameCallback(void * self)
 {
     menuaction_s * a = (menuaction_s *)self;
+    const int slot = a->generic.localdata[0];
 
-    if (m_savevalid[a->generic.localdata[0]])
-        Cbuf_AddText(va("load save%i\n", a->generic.localdata[0]));
+    // [PS2_QUAKE]: say why a slot that isn't empty won't load, rather than doing nothing
+    if (m_savestate[slot] == SAVESLOT_CORRUPT)
+    {
+        M_Popup("Can't load", "This save game is damaged.");
+        return;
+    }
+    if (m_savestate[slot] == SAVESLOT_INCOMPATIBLE)
+    {
+        M_Popup("Can't load", "This save was made by a different version of the game, and can't be loaded.");
+        return;
+    }
+
+    if (m_savevalid[slot])
+        Cbuf_AddText(va("load save%i\n", slot));
     M_ForceMenuOff();
 }
 
@@ -2184,6 +2337,7 @@ void LoadGame_MenuDraw(void)
     M_Banner("m_banner_load_game");
     //  Menu_AdjustCursor( &s_loadgame_menu, 1 );
     Menu_Draw(&s_loadgame_menu);
+    M_DrawSaveStatus(&s_loadgame_menu); // [PS2_QUAKE]
 }
 
 const char * LoadGame_MenuKey(int key)
@@ -2227,6 +2381,7 @@ void SaveGame_MenuDraw(void)
     M_Banner("m_banner_save_game");
     Menu_AdjustCursor(&s_savegame_menu, 1);
     Menu_Draw(&s_savegame_menu);
+    M_DrawSaveStatus(&s_savegame_menu); // [PS2_QUAKE]
 }
 
 void SaveGame_MenuInit(void)
@@ -2272,9 +2427,10 @@ void M_Menu_SaveGame_f(void)
     if (!Com_ServerState())
         return; // not playing a game
 
+    // [PS2_QUAKE]: SaveGame_MenuInit already read the slots; id read them a second time here,
+    // which on a memory card is a noticeable wait.
     SaveGame_MenuInit();
     M_PushMenu(SaveGame_MenuDraw, SaveGame_MenuKey);
-    Create_Savestrings();
 }
 
 /*

@@ -83,6 +83,12 @@ PS2_CXX_SRC =                         \
 	ps2/audio/mix_ring.cpp            \
 	ps2/audio/music_stream.cpp        \
 	ps2/audio/cd_audio.cpp            \
+	ps2/save/save_api.cpp             \
+	ps2/save/working_set.cpp          \
+	ps2/save/slot_archive.cpp         \
+	ps2/save/save_device.cpp          \
+	ps2/save/memcard.cpp              \
+	ps2/save/mc_icon.cpp              \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
@@ -106,6 +112,7 @@ PS2_CXX_SRC =                         \
 	ps2/tests/cinematics.cpp          \
 	ps2/tests/map_cycle.cpp           \
 	ps2/tests/perf_run.cpp            \
+	ps2/tests/save_test.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/pipeline_dump.cpp       \
@@ -170,10 +177,16 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/input/pad.cpp                 \
 	ps2/input/rumble.cpp              \
 	ps2/renderer/vid.cpp              \
+	ps2/save/save_api.cpp             \
+	ps2/save/slot_archive.cpp         \
+	ps2/save/save_device.cpp          \
+	ps2/save/memcard.cpp              \
+	ps2/save/mc_icon.cpp              \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \
 	ps2/tests/map_cycle.cpp           \
 	ps2/tests/perf_run.cpp            \
+	ps2/tests/save_test.cpp           \
 	ps2/debug/scr_print.cpp           \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/pipeline_dump.cpp       \
@@ -209,6 +222,24 @@ VU_CHECK = $(SRC_DIR)/tools/scripts/check_vu_code.py
 VCLPP_PATH = $(SRC_DIR)/tools/vclpp
 VCLPP      = $(BUILD_DIR)/tools/vclpp
 
+# miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
+# compressed with (ps2/save/working_set.cpp). A git submodule like vclpp; only the raw
+# deflate/inflate and CRC-32 sources are built, straight from the submodule. Its headers
+# include a miniz_export.h that miniz's CMake would generate: the one in MINIZ_CFG_PATH
+# stands in for it and also carries the build configuration, so the library and every
+# file including miniz.h agree on it (struct sizes depend on TDEFL_LESS_MEMORY).
+MINIZ_PATH     = $(SRC_DIR)/tools/miniz
+MINIZ_CFG_PATH = $(SRC_DIR)/ps2/save/miniz_cfg
+MINIZ_SRC      = miniz.c miniz_tdef.c miniz_tinfl.c
+MINIZ_OBJS     = $(addprefix $(OUTPUT_DIR)/miniz/, $(MINIZ_SRC:.c=.o))
+
+# The name tables the game saves function and mmove_t pointers through (game/g_save.c),
+# generated from the compiled game objects - see the script for the details.
+SAVE_TABLES_GEN = $(SRC_DIR)/tools/scripts/gen_save_tables.py
+SAVE_TABLES_C   = $(OUTPUT_DIR)/gen/g_save_tables.c
+SAVE_TABLES_O   = $(OUTPUT_DIR)/gen/g_save_tables.o
+GAME_C_OBJS     = $(filter $(OUTPUT_DIR)/$(SRC_DIR)/game/%.o, $(C_OBJS))
+
 # Standalone command line tools: the C++ ones under src/tools/host, built with the
 # HOST C++ compiler (not the EE toolchain) since they run on the development
 # machine, and the Python ones under src/tools/scripts. Being host binaries they
@@ -232,8 +263,8 @@ IRX_FILES = iomanX.irx fileXio.irx \
 
 IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o))
 
-EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS)
-DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d)
+EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS) $(MINIZ_OBJS) $(SAVE_TABLES_O)
+DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d) $(MINIZ_OBJS:.o=.d)
 
 # ----------------------------------------------------------------------------
 #  Compiler / linker flags (appended to the SDK defaults from Makefile.eeglobal)
@@ -302,7 +333,8 @@ EE_CXX_WARNFLAGS = -Wall -Wextra -Werror \
 # (e.g. redundant redeclarations in kernel.h) don't trip our -Werror. The same
 # dirs are still added via -I by Makefile.eeglobal; GCC then ignores the -I copy
 # and treats them as system. Our own headers stay under -Isrc (warnings enforced).
-EE_CXX_SYSINCS = -isystem $(PS2SDK)/ee/include -isystem $(PS2SDK)/common/include
+EE_CXX_SYSINCS = -isystem $(PS2SDK)/ee/include -isystem $(PS2SDK)/common/include \
+	-isystem $(MINIZ_PATH) -isystem $(MINIZ_CFG_PATH)
 
 # Lean, embedded C++ for the new backend.
 EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
@@ -314,7 +346,7 @@ EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
 # hangs its post-mortem off. It contributes nothing to a release build - the whole
 # handler is behind PS2_QUAKE_DEBUG - but the linker only pulls in what is referenced,
 # so leaving it on the line for both configs costs nothing.
-EE_LIBS += -lkernel -ldraw -lgraph -lpacket2 -ldma -lpad -lkbd -laudsrv -lpatches -lfileXio -leedebug
+EE_LIBS += -lkernel -ldraw -lgraph -lpacket2 -ldma -lpad -lkbd -laudsrv -lpatches -lfileXio -lmc -leedebug
 
 # ----------------------------------------------------------------------------
 #  Rules
@@ -367,6 +399,29 @@ $(CXX_OBJS): $(OUTPUT_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.cpp
 # wins, since the last -O on the command line is the one GCC applies. Target-
 # specific variables are inherited by the rule above, so only these objects see it.
 $(SIZE_OPT_OBJS): CXX_OPTFLAGS_FOR = -Os
+
+# miniz, straight out of the submodule. Always -O3, in the debug config too: deflating
+# a level's state is a few hundred KB of work on a slow CPU, done while the player waits.
+# It is C99 (the engine's C is built as C89), and its warnings are not ours to fix.
+$(MINIZ_OBJS): $(OUTPUT_DIR)/miniz/%.o: $(MINIZ_PATH)/%.c
+	@mkdir -p $(dir $@)
+	$(EE_CC) $(EE_CFLAGS) -std=gnu11 -O3 -w -I$(MINIZ_PATH) -I$(MINIZ_CFG_PATH) -c $< -o $@
+
+# A clone without the submodule has no miniz sources, so the rule above has nothing to
+# build from; this one stops with the fix instead. It never runs while the files exist.
+$(MINIZ_PATH)/%.c:
+	@echo "$(MINIZ_PATH) is empty - run 'git submodule update --init'"; exit 1
+
+# The save tables list every function and mmove_t the game defines, so they are made
+# again whenever a game object changes. They include no game headers (see the script),
+# so they build like any other engine C file.
+$(SAVE_TABLES_C): $(GAME_C_OBJS) $(SAVE_TABLES_GEN)
+	@mkdir -p $(dir $@)
+	@echo "gen_save_tables -> $@"
+	@python3 $(SAVE_TABLES_GEN) --nm $(EE_TOOL_PREFIX)nm --src $(SRC_DIR)/game -o $@ $(GAME_C_OBJS)
+
+$(SAVE_TABLES_O): $(SAVE_TABLES_C)
+	$(EE_CC) $(EE_CFLAGS) -c $< -o $@
 
 # The vclpp submodule, through its own Makefile. That one recompiles on every
 # run, so the up-to-date check is made here instead: it runs again only when the

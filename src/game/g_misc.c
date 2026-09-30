@@ -529,7 +529,8 @@ Default _cone value is 10 (used to set size of light for spotlights)
 
 #define START_OFF 1
 
-static void light_use(edict_t * self, edict_t * other, edict_t * activator)
+// [PS2_QUAKE]: Not static: save games name their callbacks through a table (g_save.c).
+void light_use(edict_t * self, edict_t * other, edict_t * activator)
 {
     if (self->spawnflags & START_OFF)
     {

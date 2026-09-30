@@ -27,6 +27,7 @@ enum class MemTag : size_t
     WorldMdl,  // World geometry.
     Lightmap,  // Lightmap atlas buffers (see renderer/lightmap.cpp).
     Audio,     // Decoded sound cache. Its own tag because it is one of the largest pools in the game.
+    SaveData,  // The save game working set (compressed level states) and the save/load I/O buffers.
 
     TagCount,  // Number of entries in this enum. Internal use only.
 };
@@ -34,6 +35,11 @@ enum class MemTag : size_t
 enum class MemAlign : size_t {};
 
 void * Alloc(size_t sizeBytes, MemTag tag);
+
+// Like Alloc, but returns null instead of halting when the heap can't satisfy the request.
+// For callers that can fail gracefully - e.g. a save game that doesn't fit is reported to
+// the player, while the game carries on.
+void * TryAlloc(size_t sizeBytes, MemTag tag);
 void * AllocAligned(MemAlign alignment, size_t sizeBytes, MemTag tag);
 void Free(void * ptr, size_t sizeBytes, MemTag tag);
 

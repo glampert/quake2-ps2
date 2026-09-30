@@ -41,6 +41,17 @@ bool UsbStackStarted();
 // when the IOP was never reset. Both happen once, however many drivers call in.
 bool StartIopModuleFromBuffer(const char * name, void * image, u32 sizeBytes);
 
+// Loads a module from the console's ROM ("rom0:SIO2MAN", ...) the first time any caller asks
+// for it, and returns that first result to every later caller - several drivers share the
+// ROM's serial port manager, and a second copy of it must not be loaded. Best-effort, like
+// StartIopModuleFromBuffer.
+bool LoadRomModuleOnce(const char * path);
+
+// Whether the ROM FILEIO module's remove() has been patched (sbv_patch_fileio, applied on the
+// host: fast path). Unpatched, every remove() falls through into a mkdir() of the same path,
+// so a deleted file comes back as an empty directory; callers deleting on host: undo that.
+bool FileIoRemovePatched();
+
 // Debug helper - lists all currently loaded IOP modules.
 void PrintLoadedIopModules(int maxModules, void (*printer)(const char *, ...));
 

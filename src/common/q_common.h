@@ -864,6 +864,65 @@ void Sys_CopyProtect(void);
 /*
 ==============================================================
 
+[PS2_QUAKE]: SAVE GAME STORAGE (src/ps2/save/)
+
+id's save/current/ directory is a working set kept in RAM, and each save
+slot is one archive file on the memory card - or, running from the
+emulator's host filesystem, optionally in <gamedir>/save/. The save file
+names and contents are still id's; only where they live changed.
+
+Everything that can fail records a line for the player, which
+Sys_SaveLastError returns.
+
+==============================================================
+*/
+
+// A working set file ("base1.sav", "server.ssv", ...) as a stdio stream,
+// "rb" or "wb". A written file replaces the old one only when closed with
+// keep = true and all of it made it; Sys_SaveClose returns whether it did
+// (for a read, whether all of it checked out).
+FILE * Sys_SaveOpen(const char * name, const char * mode);
+qboolean Sys_SaveClose(FILE * f, qboolean keep);
+qboolean Sys_SaveExists(const char * name);
+void Sys_SaveClearCurrent(void);
+
+// Closes any save stream still open, discarding writes: an error drop
+// unwinds past the code that opened them.
+void Sys_SaveAbortStreams(void);
+
+// Copies the working set to a save slot, and back. Restoring reads and
+// checks the whole slot before it replaces the working set.
+qboolean Sys_SaveStoreSlot(const char * slot, const char * comment);
+qboolean Sys_SaveRestoreSlot(const char * slot);
+
+typedef enum
+{
+    SAVESLOT_EMPTY,
+    SAVESLOT_VALID,
+    SAVESLOT_CORRUPT,
+    SAVESLOT_INCOMPATIBLE // written by a build with a different save format
+} saveslotstate_t;
+
+typedef struct
+{
+    saveslotstate_t state;
+    char comment[32];
+} saveslotinfo_t;
+
+// The slots named <prefix>0 .. <prefix><count - 1>, for the load/save
+// menus. False, with every slot empty, if the save device can't be used.
+qboolean Sys_SaveListSlots(const char * prefix, int count, saveslotinfo_t * info);
+
+qboolean Sys_SaveTargetIsCard(void);       // Saves go to the memory card (slow to write).
+qboolean Sys_SaveHostFilesAvailable(void); // Running from host:, so host files are an option.
+const char * Sys_SaveDeviceStatus(void);   // Where saves go, or why they can't, for the menus.
+
+void Sys_SaveSetError(const char * message);
+const char * Sys_SaveLastError(void);
+
+/*
+==============================================================
+
 CLIENT / SERVER SYSTEMS
 
 ==============================================================
@@ -876,6 +935,14 @@ void CL_Frame(int msec);
 void Con_Print(char * text);
 void SCR_BeginLoadingPlaque(void);
 
+// [PS2_QUAKE]: Client-side feedback the server gives the player about saving and loading.
+// M_Popup shows a message box over everything, until any button is pressed; SCR_SetBusyNotice
+// puts a notice on screen at once (for a slow operation about to block the frame), or takes
+// it down again with NULL. See menu.c and cl_scrn.c.
+void M_Popup(const char * title, const char * text);
+void SCR_SetBusyNotice(const char * text);
+void SCR_CenterPrint(const char * str);
+
 // [PS2_QUAKE] 2026-08-29
 // Frees the refresh's world model before the next map is built, unless it is
 // already the one named. See the definition in cl_view.c; SV_SpawnServer is the
@@ -885,5 +952,9 @@ void CL_ReleaseWorldModel(const char * bsp_name);
 void SV_Init(void);
 void SV_Shutdown(char * finalmsg, qboolean reconnect);
 void SV_Frame(int msec);
+
+// [PS2_QUAKE]: For Com_Error's drop: whether it interrupted reading a save game back, which
+// the player is then told about. Clears that state. See sv_ccmds.c.
+qboolean SV_AbortSaveRead(void);
 
 #endif // Q_COMMON_H

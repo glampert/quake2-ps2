@@ -209,6 +209,12 @@ void Com_Error(int code, const char * fmt, ...)
         Com_Printf("********************\nERROR: %s\n********************\n", msg);
         SV_Shutdown(va("Server crashed: %s\n", msg), false);
         CL_Drop();
+
+        // [PS2_QUAKE]: the console that shows this can't be read or typed into from a
+        // gamepad, so a save that failed to load is also reported in a message box.
+        if (SV_AbortSaveRead())
+            M_Popup("Load failed", msg);
+
         recursive = false;
         longjmp(abortframe, -1);
     }

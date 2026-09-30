@@ -1985,7 +1985,9 @@ and recalculates the area connections
 */
 void CM_ReadPortalState(FILE * f)
 {
-    FS_Read(portalopen, sizeof(portalopen), f);
+    // [PS2_QUAKE]: a short read drops back to the console instead of halting (FS_Read's ERR_FATAL)
+    if (fread(portalopen, sizeof(portalopen), 1, f) != 1)
+        Com_Error(ERR_DROP, "CM_ReadPortalState: the save game is damaged");
     FloodAreaConnections();
 }
 

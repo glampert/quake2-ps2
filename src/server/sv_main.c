@@ -1016,6 +1016,9 @@ before Sys_Quit or Sys_Error
 */
 void SV_Shutdown(char * finalmsg, qboolean reconnect)
 {
+    // [PS2_QUAKE]: an error drop can unwind out of a save or load with its streams still open
+    Sys_SaveAbortStreams();
+
     if (svs.clients)
         SV_FinalMessage(finalmsg, reconnect);
 

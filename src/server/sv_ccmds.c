@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "server.h"
 
+#include <ctype.h> // [PS2_QUAKE]: isalnum, SV_SaveNameIsValid
+
 /*
 ===============================================================================
 
@@ -144,155 +146,145 @@ qboolean SV_SetPlayer(void)
 
 SAVEGAME FILES
 
+[PS2_QUAKE]: These files no longer live in <gamedir>/save/<savedir>/. "current" is
+the save working set, kept in RAM, and any other savedir is a save slot on the
+memory card or in host files; see Sys_SaveOpen in q_common.h and src/ps2/save/.
+The file names and what goes in them are still id's.
+
 ===============================================================================
 */
+
+// [PS2_QUAKE]: The comment SV_WriteServerFile wrote last, which a slot keeps for the menus.
+static char sv_savecomment[32];
+
+// [PS2_QUAKE]: Set once the player has been told an autosave failed; see SV_AutosaveFailed.
+static qboolean sv_autosave_warned;
+
+// [PS2_QUAKE]: Set while a save game is being read back; see SV_AbortSaveRead.
+static qboolean sv_reading_save;
+
+/*
+=====================
+SV_AbortSaveRead
+
+[PS2_QUAKE]: Called by Com_Error when a drop unwinds the frame. Whatever read the
+save never finishes, so the state is cleared here.
+=====================
+*/
+qboolean SV_AbortSaveRead(void)
+{
+    const qboolean wasReading = sv_reading_save;
+    sv_reading_save = false;
+    return wasReading;
+}
+
+/*
+=====================
+SV_SaveReadBlock
+
+[PS2_QUAKE]: A read that drops back to the console when the save runs short, where
+FS_Read would halt the game (ERR_FATAL).
+=====================
+*/
+static void SV_SaveReadBlock(void * buffer, int len, FILE * f)
+{
+    if (fread(buffer, 1, len, f) != (size_t)len)
+        Com_Error(ERR_DROP, "The save game is damaged.");
+}
+
+/*
+=====================
+SV_SaveNameIsValid
+
+[PS2_QUAKE]: A savedir becomes a file name on a memory card: short, and only plain
+characters. Replaces id's check for "..", "/" and "\", which also forgot to return.
+=====================
+*/
+static qboolean SV_SaveNameIsValid(const char * name)
+{
+    int len;
+
+    for (len = 0; name[len]; len++)
+    {
+        if (!isalnum((unsigned char)name[len]) && name[len] != '_')
+            return false;
+    }
+    return len > 0 && len <= 24;
+}
 
 /*
 =====================
 SV_WipeSavegame
 
 Delete save/<XXX>/
+
+[PS2_QUAKE]: Only "current" is ever wiped. A slot is replaced whole when written.
 =====================
 */
 void SV_WipeSavegame(const char * savename)
 {
-    char name[MAX_OSPATH];
-    char * s;
-
     Com_DPrintf("SV_WipeSaveGame(%s)\n", savename);
 
-    Com_sprintf(name, sizeof(name), "%s/save/%s/server.ssv", FS_Gamedir(), savename);
-    remove(name);
-    Com_sprintf(name, sizeof(name), "%s/save/%s/game.ssv", FS_Gamedir(), savename);
-    remove(name);
-
-    Com_sprintf(name, sizeof(name), "%s/save/%s/*.sav", FS_Gamedir(), savename);
-    s = Sys_FindFirst(name, 0, 0);
-    while (s)
-    {
-        remove(s);
-        s = Sys_FindNext(0, 0);
-    }
-    Sys_FindClose();
-    Com_sprintf(name, sizeof(name), "%s/save/%s/*.sv2", FS_Gamedir(), savename);
-    s = Sys_FindFirst(name, 0, 0);
-    while (s)
-    {
-        remove(s);
-        s = Sys_FindNext(0, 0);
-    }
-    Sys_FindClose();
-}
-
-/*
-================
-CopyFile
-================
-*/
-void CopyFile(char * src, char * dst)
-{
-    FILE *f1, *f2;
-    int l;
-    byte buffer[65536];
-
-    Com_DPrintf("CopyFile (%s, %s)\n", src, dst);
-
-    f1 = fopen(src, "rb");
-    if (!f1)
-        return;
-    f2 = fopen(dst, "wb");
-    if (!f2)
-    {
-        fclose(f1);
-        return;
-    }
-
-    while (1)
-    {
-        l = fread(buffer, 1, sizeof(buffer), f1);
-        if (!l)
-            break;
-        fwrite(buffer, 1, l, f2);
-    }
-
-    fclose(f1);
-    fclose(f2);
+    if (!strcmp(savename, "current"))
+        Sys_SaveClearCurrent();
 }
 
 /*
 ================
 SV_CopySaveGame
+
+[PS2_QUAKE]: Writes the working set out to a slot, or reads a slot into it, and
+returns whether that worked; Sys_SaveLastError says why not.
 ================
 */
-void SV_CopySaveGame(const char * src, const char * dst)
+qboolean SV_CopySaveGame(const char * src, const char * dst)
 {
-    char name[MAX_OSPATH], name2[MAX_OSPATH];
-    int l, len;
-    char * found;
-
     Com_DPrintf("SV_CopySaveGame(%s, %s)\n", src, dst);
 
-    SV_WipeSavegame(dst);
+    if (!strcmp(src, "current"))
+        return Sys_SaveStoreSlot(dst, sv_savecomment);
+    if (!strcmp(dst, "current"))
+        return Sys_SaveRestoreSlot(src);
 
-    // copy the savegame over
-    Com_sprintf(name, sizeof(name), "%s/save/%s/server.ssv", FS_Gamedir(), src);
-    Com_sprintf(name2, sizeof(name2), "%s/save/%s/server.ssv", FS_Gamedir(), dst);
-    FS_CreatePath(name2);
-    CopyFile(name, name2);
-
-    Com_sprintf(name, sizeof(name), "%s/save/%s/game.ssv", FS_Gamedir(), src);
-    Com_sprintf(name2, sizeof(name2), "%s/save/%s/game.ssv", FS_Gamedir(), dst);
-    CopyFile(name, name2);
-
-    Com_sprintf(name, sizeof(name), "%s/save/%s/", FS_Gamedir(), src);
-    len = strlen(name);
-    Com_sprintf(name, sizeof(name), "%s/save/%s/*.sav", FS_Gamedir(), src);
-    found = Sys_FindFirst(name, 0, 0);
-    while (found)
-    {
-        strcpy(name + len, found + len);
-
-        Com_sprintf(name2, sizeof(name2), "%s/save/%s/%s", FS_Gamedir(), dst, found + len);
-        CopyFile(name, name2);
-
-        // change sav to sv2
-        l = strlen(name);
-        strcpy(name + l - 3, "sv2");
-        l = strlen(name2);
-        strcpy(name2 + l - 3, "sv2");
-        CopyFile(name, name2);
-
-        found = Sys_FindNext(0, 0);
-    }
-    Sys_FindClose();
+    Sys_SaveSetError("Save games can only be copied to or from 'current'.");
+    return false;
 }
 
 /*
 ==============
 SV_WriteLevelFile
 
+[PS2_QUAKE]: Returns false if the level couldn't be saved, Sys_SaveLastError says why.
 ==============
 */
-void SV_WriteLevelFile(void)
+qboolean SV_WriteLevelFile(void)
 {
     char name[MAX_OSPATH];
     FILE * f;
 
     Com_DPrintf("SV_WriteLevelFile()\n");
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/%s.sv2", FS_Gamedir(), sv.name);
-    f = fopen(name, "wb");
+    Com_sprintf(name, sizeof(name), "%s.sv2", sv.name);
+    f = Sys_SaveOpen(name, "wb");
     if (!f)
-    {
-        Com_Printf("Failed to open %s\n", name);
-        return;
-    }
+        return false;
     fwrite(sv.configstrings, sizeof(sv.configstrings), 1, f);
     CM_WritePortalState(f);
-    fclose(f);
+    if (!Sys_SaveClose(f, true))
+        return false;
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/%s.sav", FS_Gamedir(), sv.name);
-    ge->WriteLevel(name);
+    Com_sprintf(name, sizeof(name), "%s.sav", sv.name);
+    f = Sys_SaveOpen(name, "wb");
+    if (!f)
+        return false;
+    if (!ge->WriteLevel(f))
+    {
+        Sys_SaveClose(f, false);
+        if (!Sys_SaveLastError()[0])
+            Sys_SaveSetError("Part of the level could not be saved (see the console).");
+        return false;
+    }
+    return Sys_SaveClose(f, true);
 }
 
 /*
@@ -305,31 +297,42 @@ void SV_ReadLevelFile(void)
 {
     char name[MAX_OSPATH];
     FILE * f;
+    const qboolean wasReading = sv_reading_save; // [PS2_QUAKE]
 
     Com_DPrintf("SV_ReadLevelFile()\n");
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/%s.sv2", FS_Gamedir(), sv.name);
-    f = fopen(name, "rb");
+    sv_reading_save = true;
+
+    Com_sprintf(name, sizeof(name), "%s.sv2", sv.name);
+    f = Sys_SaveOpen(name, "rb");
     if (!f)
     {
-        Com_Printf("Failed to open %s\n", name);
+        Com_Printf("Failed to open %s: %s\n", name, Sys_SaveLastError());
+        sv_reading_save = wasReading;
         return;
     }
-    FS_Read(sv.configstrings, sizeof(sv.configstrings), f);
+    SV_SaveReadBlock(sv.configstrings, sizeof(sv.configstrings), f);
     CM_ReadPortalState(f);
-    fclose(f);
+    Sys_SaveClose(f, true);
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/%s.sav", FS_Gamedir(), sv.name);
-    ge->ReadLevel(name);
+    Com_sprintf(name, sizeof(name), "%s.sav", sv.name);
+    f = Sys_SaveOpen(name, "rb");
+    if (!f)
+        Com_Error(ERR_DROP, "%s", Sys_SaveLastError());
+    ge->ReadLevel(f);
+    Sys_SaveClose(f, true);
+
+    sv_reading_save = wasReading;
 }
 
 /*
 ==============
 SV_WriteServerFile
 
+[PS2_QUAKE]: Returns false if the game couldn't be saved, Sys_SaveLastError says why.
 ==============
 */
-void SV_WriteServerFile(qboolean autosave)
+qboolean SV_WriteServerFile(qboolean autosave)
 {
     FILE * f;
     cvar_t * var;
@@ -340,13 +343,10 @@ void SV_WriteServerFile(qboolean autosave)
 
     Com_DPrintf("SV_WriteServerFile(%s)\n", autosave ? "true" : "false");
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/server.ssv", FS_Gamedir());
-    f = fopen(name, "wb");
+    f = Sys_SaveOpen("server.ssv", "wb");
     if (!f)
-    {
-        Com_Printf("Couldn't write %s\n", name);
-        return;
-    }
+        return false;
+
     // write the comment field
     memset(comment, 0, sizeof(comment));
 
@@ -365,6 +365,7 @@ void SV_WriteServerFile(qboolean autosave)
         Com_sprintf(comment, sizeof(comment), "ENTERING %s", sv.configstrings[CS_NAME]);
     }
 
+    memcpy(sv_savecomment, comment, sizeof(sv_savecomment)); // [PS2_QUAKE]
     fwrite(comment, 1, sizeof(comment), f);
 
     // write the mapcmd
@@ -391,11 +392,21 @@ void SV_WriteServerFile(qboolean autosave)
         fwrite(string, 1, sizeof(string), f);
     }
 
-    fclose(f);
+    if (!Sys_SaveClose(f, true))
+        return false;
 
     // write game state
-    Com_sprintf(name, sizeof(name), "%s/save/current/game.ssv", FS_Gamedir());
-    ge->WriteGame(name, autosave);
+    f = Sys_SaveOpen("game.ssv", "wb");
+    if (!f)
+        return false;
+    if (!ge->WriteGame(f, autosave))
+    {
+        Sys_SaveClose(f, false);
+        if (!Sys_SaveLastError()[0])
+            Sys_SaveSetError("Part of the game could not be saved (see the console).");
+        return false;
+    }
+    return Sys_SaveClose(f, true);
 }
 
 /*
@@ -413,18 +424,14 @@ void SV_ReadServerFile(void)
 
     Com_DPrintf("SV_ReadServerFile()\n");
 
-    Com_sprintf(name, sizeof(name), "%s/save/current/server.ssv", FS_Gamedir());
-    f = fopen(name, "rb");
+    f = Sys_SaveOpen("server.ssv", "rb");
     if (!f)
-    {
-        Com_Printf("Couldn't read %s\n", name);
-        return;
-    }
+        Com_Error(ERR_DROP, "%s", Sys_SaveLastError()); // [PS2_QUAKE]: id printed and carried on
     // read the comment field
-    FS_Read(comment, sizeof(comment), f);
+    SV_SaveReadBlock(comment, sizeof(comment), f);
 
     // read the mapcmd
-    FS_Read(mapcmd, sizeof(mapcmd), f);
+    SV_SaveReadBlock(mapcmd, sizeof(mapcmd), f);
 
     // read all CVAR_LATCH cvars
     // these will be things like coop, skill, deathmatch, etc
@@ -432,12 +439,13 @@ void SV_ReadServerFile(void)
     {
         if (!fread(name, 1, sizeof(name), f))
             break;
-        FS_Read(string, sizeof(string), f);
+        SV_SaveReadBlock(string, sizeof(string), f);
         Com_DPrintf("Set %s = %s\n", name, string);
         Cvar_ForceSet(name, string);
     }
 
-    fclose(f);
+    if (!Sys_SaveClose(f, true))
+        Com_Error(ERR_DROP, "%s", Sys_SaveLastError());
 
     // start a new game fresh with new cvars
     SV_InitGame();
@@ -445,8 +453,31 @@ void SV_ReadServerFile(void)
     strcpy(svs.mapcmd, mapcmd);
 
     // read game state
-    Com_sprintf(name, sizeof(name), "%s/save/current/game.ssv", FS_Gamedir());
-    ge->ReadGame(name);
+    f = Sys_SaveOpen("game.ssv", "rb");
+    if (!f)
+        Com_Error(ERR_DROP, "%s", Sys_SaveLastError());
+    ge->ReadGame(f);
+    Sys_SaveClose(f, true);
+}
+
+/*
+==============
+SV_AutosaveFailed
+
+[PS2_QUAKE]: Every failure goes to the console, but only the first one in a session
+interrupts the game with a message box: without a memory card, every level change
+would otherwise bring one up. Saving successfully re-arms it.
+==============
+*/
+static void SV_AutosaveFailed(void)
+{
+    Com_Printf("Autosave failed: %s\n", Sys_SaveLastError());
+
+    if (!sv_autosave_warned)
+    {
+        sv_autosave_warned = true;
+        M_Popup("Autosave failed", va("%s\n\nIf you die, you will go back to your last save instead.", Sys_SaveLastError()));
+    }
 }
 
 //=========================================================
@@ -496,8 +527,6 @@ void SV_GameMap_f(void)
 
     Com_DPrintf("SV_GameMap(%s)\n", Cmd_Argv(1));
 
-    FS_CreatePath(va("%s/save/current/", FS_Gamedir()));
-
     // check for clearing the current savegame
     map = Cmd_Argv(1);
     if (map[0] == '*')
@@ -519,7 +548,8 @@ void SV_GameMap_f(void)
                 cl->edict->inuse = false;
             }
 
-            SV_WriteLevelFile();
+            if (!SV_WriteLevelFile()) // [PS2_QUAKE]
+                SV_AutosaveFailed();
 
             // we must restore these for clients to transfer over correctly
             for (i = 0, cl = svs.clients; i < maxclients->value; i++, cl++)
@@ -540,8 +570,8 @@ void SV_GameMap_f(void)
     // copy off the level to the autosave slot
     if (!dedicated->value)
     {
-        SV_WriteServerFile(true);
-        SV_CopySaveGame("current", "save0");
+        if (!SV_WriteServerFile(true) || !SV_CopySaveGame("current", "save0")) // [PS2_QUAKE]
+            SV_AutosaveFailed();
     }
 }
 
@@ -591,8 +621,6 @@ SV_Loadgame_f
 */
 void SV_Loadgame_f(void)
 {
-    char name[MAX_OSPATH];
-    FILE * f;
     const char * dir;
 
     if (Cmd_Argc() != 2)
@@ -604,28 +632,31 @@ void SV_Loadgame_f(void)
     Com_Printf("Loading game...\n");
 
     dir = Cmd_Argv(1);
-    if (strstr(dir, "..") || strstr(dir, "/") || strstr(dir, "\\"))
+    if (!SV_SaveNameIsValid(dir))
     {
         Com_Printf("Bad savedir.\n");
-    }
-
-    // make sure the server.ssv file exists
-    Com_sprintf(name, sizeof(name), "%s/save/%s/server.ssv", FS_Gamedir(), Cmd_Argv(1));
-    f = fopen(name, "rb");
-    if (!f)
-    {
-        Com_Printf("No such savegame: %s\n", name);
         return;
     }
-    fclose(f);
 
-    SV_CopySaveGame(Cmd_Argv(1), "current");
+    // [PS2_QUAKE]: The slot is read and checked in full before the working set - and the
+    // game in progress with it - is touched, so a missing, damaged or incompatible save
+    // leaves everything as it was. That also covers id's "No such savegame" check.
+    if (!SV_CopySaveGame(dir, "current"))
+    {
+        Com_Printf("Couldn't load %s: %s\n", dir, Sys_SaveLastError());
+        M_Popup("Load failed", Sys_SaveLastError());
+        return;
+    }
+
+    sv_reading_save = true; // [PS2_QUAKE]
 
     SV_ReadServerFile();
 
     // go to the map
     sv.state = ss_dead; // don't save current level when changing
     SV_Map(false, svs.mapcmd, true);
+
+    sv_reading_save = false; // [PS2_QUAKE]
 }
 
 /*
@@ -637,6 +668,7 @@ SV_Savegame_f
 void SV_Savegame_f(void)
 {
     const char * dir;
+    qboolean ok;
 
     if (sv.state != ss_game)
     {
@@ -669,25 +701,43 @@ void SV_Savegame_f(void)
     }
 
     dir = Cmd_Argv(1);
-    if (strstr(dir, "..") || strstr(dir, "/") || strstr(dir, "\\"))
+    if (!SV_SaveNameIsValid(dir))
     {
         Com_Printf("Bad savedir.\n");
+        return;
     }
 
     Com_Printf("Saving game...\n");
 
+    // [PS2_QUAKE]: Writing to a memory card takes a moment and must not be interrupted.
+    // The frame is blocked meanwhile, so put the warning up before starting.
+    if (Sys_SaveTargetIsCard())
+        SCR_SetBusyNotice("Saving...\n\nDo not remove the memory card\nor switch off the console.");
+
     // archive current level, including all client edicts.
     // when the level is reloaded, they will be shells awaiting
     // a connecting client
-    SV_WriteLevelFile();
+    ok = SV_WriteLevelFile();
 
     // save server state
-    SV_WriteServerFile(false);
+    ok = ok && SV_WriteServerFile(false);
 
     // copy it off
-    SV_CopySaveGame("current", dir);
+    ok = ok && SV_CopySaveGame("current", dir);
 
+    SCR_SetBusyNotice(NULL);
+
+    // [PS2_QUAKE]: Say so when it didn't work, rather than printing "Done." regardless.
+    if (!ok)
+    {
+        Com_Printf("Save failed: %s\n", Sys_SaveLastError());
+        M_Popup("Save failed", Sys_SaveLastError());
+        return;
+    }
+
+    sv_autosave_warned = false;
     Com_Printf("Done.\n");
+    SCR_CenterPrint(Sys_SaveTargetIsCard() ? "Game saved to the memory card." : "Game saved.");
 }
 
 //===============================================================

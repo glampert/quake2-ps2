@@ -2,7 +2,8 @@
  * File: sys.cpp
  * Brief: Sys_* platform seam for the PS2 - timing, fatal-error handling, console
  *        output and the (static) game-module hookup. Filesystem enumeration and
- *        console input are not available on the target and are stubbed.
+ *        console input are not available on the target and are stubbed. The save
+ *        game hooks (Sys_Save*) live in ps2/save/save_api.cpp.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -11,10 +12,13 @@
 #include "ps2/debug/scr_print.h"
 #include "ps2/debug/profile.h"
 #include "ps2/system/iop_boot.h"
+#include "ps2/save/save_system.h"
 
 #include <cstdio>
 #include <cstdarg>
 #include <cstdlib>
+
+#include <sys/stat.h> // mkdir
 
 #include <kernel.h> // SleepThread
 #include <timer.h>  // GetTimerSystemTime / kBUSCLKBY256
@@ -88,6 +92,8 @@ void Sys_Init()
     Cmd_AddCommand("ps2_dump_iop_mods", []() {
         ps2::sys::PrintLoadedIopModules(40, &Com_Printf);
     });
+
+    ps2::save::Init();
 
 #if PS2_QUAKE_PROFILE
     // Learn the real COP0 Count rate before any probe can fire (~8ms spin).
@@ -173,7 +179,13 @@ void Sys_AppActivate() {}
 void Sys_CopyProtect() {}
 char * Sys_GetClipboardData() { return nullptr; }
 
-void Sys_Mkdir(const char * path) { (void)path; }
+// FS_CreatePath calls this for every directory along a path, the device root ("host:")
+// included, so failures - that one, and directories that already exist - are expected
+// and ignored. newlib's mkdir reaches host: through the ROM FILEIO and mass: through fileXio.
+void Sys_Mkdir(const char * path)
+{
+    mkdir(path, 0777);
+}
 
 char * Sys_FindFirst(const char * path, unsigned musthave, unsigned canthave)
 {

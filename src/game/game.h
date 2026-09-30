@@ -211,13 +211,17 @@ typedef struct
     // about the world state and the clients.
     // WriteGame is called every time a level is exited.
     // ReadGame is called on a loadgame.
-    void (*WriteGame)(char * filename, qboolean autosave);
-    void (*ReadGame)(char * filename);
+    //
+    // [PS2_QUAKE]: These take a stream the server opened (a save working set entry, see
+    // Sys_SaveOpen) rather than a file name. The writers return false if anything could
+    // not be saved, and leave the game running; the readers still Com_Error on a bad save.
+    qboolean (*WriteGame)(FILE * f, qboolean autosave);
+    void (*ReadGame)(FILE * f);
 
     // ReadLevel is called after the default map information has been
     // loaded with SpawnEntities
-    void (*WriteLevel)(char * filename);
-    void (*ReadLevel)(char * filename);
+    qboolean (*WriteLevel)(FILE * f);
+    void (*ReadLevel)(FILE * f);
 
     qboolean (*ClientConnect)(edict_t * ent, char * userinfo);
     void (*ClientBegin)(edict_t * ent);
@@ -249,3 +253,11 @@ typedef struct
 } game_export_t;
 
 game_export_t * GetGameAPI(game_import_t * import);
+
+#ifdef GAME_HARD_LINKED
+// [PS2_QUAKE]: A hash of the layout the game's save files are written with (g_save.c).
+// A save whose recorded fingerprint differs cannot be loaded by this build. Linked in
+// statically, so the server can check a save slot before any game is running.
+unsigned int G_SaveFingerprint(void);
+#endif
+

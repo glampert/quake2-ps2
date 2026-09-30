@@ -36,6 +36,9 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   in place of the disc's audio tracks, with id's per-map tracks and looping rules.
 - **Input.** DualShock gamepad (analog sticks + full button mapping + rumble) and an optional
   USB keyboard through `ps2kbd`, usable simultaneously.
+- **Save games** on the memory card (MEMORY CARD slot 1, with a PS2 browser icon), or as
+  host files under the emulator. A save made by one build loads in the next unless the saved
+  structures changed, and every failure is explained in an on-screen message box.
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
   GS VRAM texture heap with LRU eviction and defragmentation.
 - Runs on both the **PCSX2 emulator** (game data over `host:`) and **real hardware**
@@ -100,10 +103,12 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 
 ### Building
 
-[vclpp](https://github.com/glampert/vclpp), the preprocessor the VU microprograms go
-through, is a git submodule at [src/tools/vclpp/](src/tools/vclpp/) that the build compiles
-with its own Makefile. Clone with `--recursive`, or run `git submodule update --init` in an
-existing clone.
+Two dependencies come in as git submodules: [vclpp](https://github.com/glampert/vclpp), the
+preprocessor the VU microprograms go through, at [src/tools/vclpp/](src/tools/vclpp/) (built
+with its own Makefile), and [miniz](https://github.com/richgel999/miniz), the deflate codec
+the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/) (its sources are
+compiled straight into the game). Clone with `--recursive`, or run
+`git submodule update --init` in an existing clone.
 
 ```sh
 make            # debug build -> build/debug/quake2.elf (+ host tools)
@@ -277,9 +282,11 @@ src/
   tools/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc)
     scripts/                      Python helpers (symbolize, compile_commands.json generator,
-                                  check_vu_code - the openvcl/dvp-as output checks run by every VU build)
+                                  check_vu_code - the openvcl/dvp-as output checks run by every VU build,
+                                  gen_save_tables - the save games' function/animation name tables)
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
+    miniz/                        deflate codec for the save games (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
@@ -289,9 +296,11 @@ src/
     input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
+    save/                         Sys_Save* seam: save working set, slot archives, memory card
     builtin/                      images baked into the ELF (font, palette, HUD tiles)
     debug/                        simple on-screen printing for fatal errors, stack trace, HW exception handling
-    tests/                        standalone bring-up scenes (test cube, cinematics, map cycle)
+    tests/                        standalone bring-up scenes and tests (test cube, cinematics,
+                                  map cycle, save games, perf run)
 ```
 
 Every file carries a header comment explaining what it does and *why* it does it that way.
@@ -505,6 +514,34 @@ Built with `-fno-exceptions`, so a failed allocation is a fatal `Sys_Error`, not
 Networking is loopback only ([net/net.cpp](src/ps2/net/net.cpp)) — enough for a local
 single-player/listen-server game; remote sends are dropped.
 
+### Save games
+
+The engine and game still write id's save files through stdio, but not into
+`<gamedir>/save/` any more ([save_system.h](src/ps2/save/save_system.h) has the picture):
+
+- **The working set** - id's `save/current/` directory, the state of every level visited in
+  the current unit, which the server writes on each level change and reads back on a return -
+  lives in RAM as one deflated blob per file ([working_set.cpp](src/ps2/save/working_set.cpp)).
+  The streams are `fopencookie` FILEs, so `fwrite`/`fread` work on them unchanged. A level
+  deflates from ~450 KB (mostly zeros) to ~25-30 KB; saving needs a 164 KB compressor while it runs.
+- **A save slot** is one archive file: a header, an entry table, and the working set's blobs
+  as they are ([slot_archive.cpp](src/ps2/save/slot_archive.cpp)). It is CRC-checked
+  throughout, and written to the slot's *other* file (`<slot>_a.q2s` / `<slot>_b.q2s`) before
+  the previous copy is deleted, so a failed or interrupted save never loses the one before it.
+  A load reads and checks all of it before touching the game in progress.
+- **The device** is the memory card in MEMORY CARD slot 1, through libmc and the ROM's
+  MCMAN/MCSERV ([memcard.cpp](src/ps2/save/memcard.cpp)), in a `Q2PS2` directory with the
+  `icon.sys` and 3D icon the PS2 browser shows ([mc_icon.cpp](src/ps2/save/mc_icon.cpp)).
+  Running from `host:`, the archived `ps2_savedevice` cvar (the game menu's "saves" option)
+  can put the archives in `baseq2/save/` instead: `host` (the default there) or `mc`.
+
+The game's pointers to functions and animations are saved as a hash of the pointee's name,
+looked up in tables generated from the game's objects at build time
+([gen_save_tables.py](src/tools/scripts/gen_save_tables.py)), where id stored offsets that
+moved with every rebuild. A layout fingerprint of the saved structures stops a save from an
+incompatible build before it is read, with `SAVE_FORMAT_VERSION` in
+[g_save.c](src/game/g_save.c) for the changes it can't see.
+
 ---
 
 ## Debugging tools and Cvars
@@ -563,7 +600,14 @@ pointer - it says so and unwinds from `$ra` instead, since the backward prologue
 unwinder uses cannot read code it has no symbols for.
 
 **Commands:** `ps2_dump_iop_mods` lists the currently loaded IOP modules;
-`in_keyboardmap <usage> <key>` remaps a USB scan code.
+`in_keyboardmap <usage> <key>` remaps a USB scan code; `ps2_saveinfo` lists the save working
+set (raw and deflated sizes) and the files on the save device.
+
+**Save game test:** `ps2_testsaves 1` plays through saving, level changes, returning to a level
+and loading with the real console commands, checking the player's health comes back as saved;
+`2` repeats the save and load on the memory card; `3` only loads the slot 7 save an earlier run
+left behind, to check a save outlives a rebuild. Every step logs a `SaveTest:` line, and the
+run ends with `SaveTest: PASS` or `FAIL`. Debug builds only.
 
 **CD music:** `cd_nocd` (the Options menu's "CD music" toggle), `cd_volume` (0-1, the "music
 volume" slider), `cd_loopcount` / `cd_looptrack` (id's loop-to-ambient rule, default 4 and 11).
@@ -625,8 +669,11 @@ against a release ELF you get function names from the symbol table but no file o
 
 **Engine features**
 
-- **Save games** have not been exercised — the filesystem write path on `mass:`/`host:` needs checking.
-- **Memory card support** for configs and saves.
+- **`config.cfg` on the memory card.** It is still written to the game data's own path, which a
+  disc boot couldn't write to. The memory card device already reads, writes, lists and deletes
+  any file in the game's card directory ([save_system.h](src/ps2/save/save_system.h)); only the
+  wiring into `CL_WriteConfiguration` and the startup `exec` is missing.
+- Saving to MEMORY CARD slot 2, and formatting an unformatted card from the game.
 
 **Build and project**
 

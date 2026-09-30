@@ -84,6 +84,7 @@ static const char * const s_memTagNames[kMemTagCount] = {
     "World",
     "Lightmap",
     "Audio",
+    "SaveData",
 };
 
 static inline size_t MemTagToIndex(const MemTag tag)
@@ -242,6 +243,18 @@ void * Alloc(const size_t sizeBytes, const MemTag tag)
     }
 
     AccountAlloc(tag, n);
+    return p;
+}
+
+void * TryAlloc(const size_t sizeBytes, const MemTag tag)
+{
+    const size_t n = (sizeBytes != 0u ? sizeBytes : 1u);
+    void * p = dlmalloc(n);
+
+    if (p != nullptr)
+    {
+        AccountAlloc(tag, n);
+    }
     return p;
 }
 

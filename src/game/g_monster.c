@@ -101,13 +101,15 @@ void monster_fire_bfg(edict_t * self, vec3_t start, vec3_t aimdir, int damage, i
 // Monster utility functions
 //
 
-static void M_FliesOff(edict_t * self)
+// [PS2_QUAKE]: Not static: save games name their callbacks through a table (g_save.c).
+void M_FliesOff(edict_t * self)
 {
     self->s.effects &= ~EF_FLIES;
     self->s.sound = 0;
 }
 
-static void M_FliesOn(edict_t * self)
+// [PS2_QUAKE]: Not static: save games name their callbacks through a table (g_save.c).
+void M_FliesOn(edict_t * self)
 {
     if (self->waterlevel)
         return;

@@ -481,6 +481,77 @@ void SCR_DrawLoading(void)
     re.DrawPic((viddef.width - w) / 2, (viddef.height - h) / 2, "loading");
 }
 
+/*
+==============
+SCR_SetBusyNotice
+
+[PS2_QUAKE]: A notice put on screen right away, ahead of something that blocks the frame
+for a while - writing to the memory card, which must not be interrupted. It stays up until
+cleared with NULL. Drawn like the menus' text boxes, one line per '\n'.
+==============
+*/
+void M_DrawTextBox(int x, int y, int width, int lines); // menu.c
+void Menu_DrawString(int x, int y, const char * string); // qmenu.c
+
+static char scr_busy_notice[256];
+
+void SCR_SetBusyNotice(const char * text)
+{
+    if (!text)
+    {
+        scr_busy_notice[0] = 0;
+        return;
+    }
+
+    Com_sprintf(scr_busy_notice, sizeof(scr_busy_notice), "%s", text);
+    SCR_UpdateScreen(); // now: whatever comes next holds up the next frame
+}
+
+static void SCR_DrawBusyNotice(void)
+{
+    char line[64];
+    const char * s;
+    int lines = 1, width = 0, len = 0;
+    int boxX, boxY, textX, textY, i;
+
+    if (!scr_busy_notice[0])
+        return;
+
+    for (s = scr_busy_notice; *s; s++)
+    {
+        if (*s == '\n')
+        {
+            lines++;
+            len = 0;
+        }
+        else if (++len > width)
+        {
+            width = len;
+        }
+    }
+    width += 2;
+
+    boxX = (320 - (width + 2) * 8) / 2;
+    boxY = (240 - (lines + 2) * 8) / 2;
+    M_DrawTextBox(boxX, boxY, width, lines);
+
+    textX = ((viddef.width - 320) / 2) + boxX + 8;
+    textY = ((viddef.height - 240) / 2) + boxY + 8;
+
+    for (s = scr_busy_notice, i = 0; i < lines; i++)
+    {
+        len = 0;
+        while (*s && *s != '\n' && len < (int)sizeof(line) - 1)
+            line[len++] = *s++;
+        line[len] = 0;
+        if (*s == '\n')
+            s++;
+
+        // centred in the box
+        Menu_DrawString(textX + (width - len) * 4, textY + i * 8, line);
+    }
+}
+
 //=============================================================================
 
 /*
@@ -1401,6 +1472,7 @@ void SCR_UpdateScreen(void)
             SCR_DrawConsole();
             M_Draw();
             SCR_DrawLoading();
+            SCR_DrawBusyNotice(); // [PS2_QUAKE]
         }
     }
     re.EndFrame();

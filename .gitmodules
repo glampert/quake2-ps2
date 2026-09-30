@@ -1,3 +1,6 @@
 [submodule "src/tools/vclpp"]
 	path = src/tools/vclpp
 	url = https://github.com/glampert/vclpp.git
+[submodule "src/tools/miniz"]
+	path = src/tools/miniz
+	url = https://github.com/richgel999/miniz.git

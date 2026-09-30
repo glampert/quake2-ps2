@@ -15,6 +15,7 @@
 #include "ps2/system/iop_boot.h"
 
 #include <cstdio>
+#include <cstring>
 
 #include <kernel.h>
 #include <smod.h>
@@ -54,6 +55,20 @@ static bool s_usbStackStarted = false;
 // Set once SIF RPC is up and modules can be loaded out of an EE buffer.
 // See StartIopModuleFromBuffer().
 static bool s_moduleLoaderReady = false;
+
+// See FileIoRemovePatched().
+static bool s_fileIoRemovePatched = false;
+
+// The ROM modules LoadRomModuleOnce has been asked for, and how loading them went.
+struct RomModule
+{
+    const char * path;
+    bool         loaded;
+};
+
+constexpr int kMaxRomModules = 8;
+static RomModule s_romModules[kMaxRomModules];
+static int       s_numRomModules = 0;
 
 // The file probed for under "<base>/baseq2/" to decide a base path works.
 constexpr const char * kProbeFile = "pak0.pak";
@@ -140,6 +155,12 @@ const char * DetectBasePathAndBootIop()
         if (CanOpen(candidate.probePath))
         {
             std::printf("IOP boot: game data on %s/baseq2 (emulator host filesystem).\n", candidate.basePath);
+
+            // host: is served by the ROM's FILEIO module here, whose remove() is missing a
+            // break and runs a mkdir() of the same path after it. The save code deletes files.
+            SifInitRpc(0);
+            s_fileIoRemovePatched = (sbv_patch_fileio() == 0);
+            std::printf("IOP boot: FILEIO remove() patch %s.\n", s_fileIoRemovePatched ? "applied" : "not applicable");
             return candidate.basePath;
         }
     }
@@ -189,6 +210,41 @@ const char * DetectBasePathAndBootIop()
 bool UsbStackStarted()
 {
     return s_usbStackStarted;
+}
+
+bool LoadRomModuleOnce(const char * path)
+{
+    for (int i = 0; i < s_numRomModules; ++i)
+    {
+        if (std::strcmp(s_romModules[i].path, path) == 0)
+        {
+            return s_romModules[i].loaded;
+        }
+    }
+
+    SifInitRpc(0);
+    const int id = SifLoadModule(path, 0, nullptr);
+    const bool loaded = (id >= 0);
+
+    if (loaded)
+    {
+        Com_Printf("IOP module '%s' started (id %d).\n", path, id);
+    }
+    else
+    {
+        Com_Printf("WARNING: IOP module '%s' failed to load (%d).\n", path, id);
+    }
+
+    if (s_numRomModules < kMaxRomModules)
+    {
+        s_romModules[s_numRomModules++] = { path, loaded };
+    }
+    return loaded;
+}
+
+bool FileIoRemovePatched()
+{
+    return s_fileIoRemovePatched;
 }
 
 bool StartIopModuleFromBuffer(const char * name, void * image, u32 sizeBytes)

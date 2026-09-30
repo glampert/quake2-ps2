@@ -28,6 +28,7 @@
 #include "ps2/tests/draw_cube.h"
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
+#include "ps2/tests/save_test.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/builtin/builtin.h"
 
@@ -809,6 +810,10 @@ void PS2_EndFrame()
     // commands - but it lives here because this is the one place guaranteed to
     // be reached once per frame.
     ps2::test::RunMapCycle();
+
+    // Save game test (cvar "ps2_testsaves 1", or 2 to include the memory card): saves,
+    // loads and changes level through the console commands and checks what comes back.
+    ps2::test::RunSaveTest();
 #endif // PS2_QUAKE_DEBUG
 
 #if PS2_QUAKE_PROFILE

@@ -72,10 +72,10 @@ void ClientDisconnect(edict_t * ent);
 void ClientBegin(edict_t * ent);
 void ClientCommand(edict_t * ent);
 void RunEntity(edict_t * ent);
-void WriteGame(char * filename, qboolean autosave);
-void ReadGame(char * filename);
-void WriteLevel(char * filename);
-void ReadLevel(char * filename);
+qboolean WriteGame(FILE * f, qboolean autosave);
+void ReadGame(FILE * f);
+qboolean WriteLevel(FILE * f);
+void ReadLevel(FILE * f);
 void InitGame(void);
 void G_RunFrame(void);
 

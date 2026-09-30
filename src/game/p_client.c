@@ -35,7 +35,8 @@ void SP_misc_teleporter_dest(edict_t * ent);
 // we use carnal knowledge of the maps to fix the coop spot targetnames to match
 // that of the nearest named single player spot
 
-static void SP_FixCoopSpots(edict_t * self)
+// [PS2_QUAKE]: Not static: save games name their callbacks through a table (g_save.c).
+void SP_FixCoopSpots(edict_t * self)
 {
     edict_t * spot;
     vec3_t d;
@@ -66,7 +67,8 @@ static void SP_FixCoopSpots(edict_t * self)
 // some maps don't have any coop spots at all, so we need to create them
 // where they should have been
 
-static void SP_CreateCoopSpots(edict_t * self)
+// [PS2_QUAKE]: Not static: save games name their callbacks through a table (g_save.c).
+void SP_CreateCoopSpots(edict_t * self)
 {
     edict_t * spot;
 

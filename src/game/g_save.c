@@ -20,12 +20,168 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "g_local.h"
 
-#define Function(f) \
-    {               \
-        #f, f       \
-    }
+/*
+==============================================================================
 
-mmove_t mmove_reloc;
+[PS2_QUAKE]: SAVE FORMAT
+
+id's saves stored function pointers as offsets from InitGame and mmove_t pointers as
+offsets from a dummy mmove_t, and stamped the file with __DATE__, so a save only loaded
+into the very build that wrote it. Pointers to game functions and animations are now
+stored as a hash of the pointee's name instead, looked up in tables generated from the
+game's objects at build time (src/tools/scripts/gen_save_tables.py), and every save
+file starts with a header naming the format it was written in.
+
+The header's fingerprint (G_SaveFingerprint) covers the size of every struct written
+out whole, the field tables below and the item list, so most changes that would make
+an old save unreadable reject it cleanly instead of loading garbage. It can't see a
+change that keeps the sizes - two members of the same type swapped, say. For those,
+bump SAVE_FORMAT_VERSION by hand.
+
+==============================================================================
+*/
+
+#define SAVE_FORMAT_VERSION 1
+
+#define SAVE_MAGIC(a, b, c, d) ((a) | ((b) << 8) | ((c) << 16) | ((d) << 24))
+#define SAVE_MAGIC_GAME        SAVE_MAGIC('Q', '2', 'G', 'M') // game.ssv
+#define SAVE_MAGIC_LEVEL       SAVE_MAGIC('Q', '2', 'L', 'V') // <map>.sav
+
+typedef struct
+{
+    int magic;
+    int version;
+    unsigned int fingerprint;
+} saveheader_t;
+
+// The generated tables (build/<config>/gen/g_save_tables.c), each sorted by hash.
+typedef struct
+{
+    unsigned int hash;
+    const void * ptr;
+} g_save_ptr_t;
+
+extern const g_save_ptr_t g_saveFuncs[];
+extern const int g_saveNumFuncs;
+extern const g_save_ptr_t g_saveMmoves[];
+extern const int g_saveNumMmoves;
+
+// The same entries sorted by address, built once by G_InitSaveTables.
+extern g_save_ptr_t g_saveFuncsByPtr[];
+extern g_save_ptr_t g_saveMmovesByPtr[];
+
+// Set by anything that fails while a save is being written; see WriteGame/WriteLevel.
+static qboolean save_write_failed;
+
+static int G_SavePtrCompareHash(const void * a, const void * b)
+{
+    const unsigned int ha = ((const g_save_ptr_t *)a)->hash;
+    const unsigned int hb = ((const g_save_ptr_t *)b)->hash;
+    return (ha > hb) - (ha < hb);
+}
+
+static int G_SavePtrCompareAddress(const void * a, const void * b)
+{
+    const size_t pa = (size_t)((const g_save_ptr_t *)a)->ptr;
+    const size_t pb = (size_t)((const g_save_ptr_t *)b)->ptr;
+    return (pa > pb) - (pa < pb);
+}
+
+static void G_InitSaveTables(void)
+{
+    static qboolean built = false;
+
+    if (built)
+        return;
+
+    memcpy(g_saveFuncsByPtr, g_saveFuncs, g_saveNumFuncs * sizeof(g_save_ptr_t));
+    qsort(g_saveFuncsByPtr, g_saveNumFuncs, sizeof(g_save_ptr_t), G_SavePtrCompareAddress);
+
+    memcpy(g_saveMmovesByPtr, g_saveMmoves, g_saveNumMmoves * sizeof(g_save_ptr_t));
+    qsort(g_saveMmovesByPtr, g_saveNumMmoves, sizeof(g_save_ptr_t), G_SavePtrCompareAddress);
+
+    built = true;
+}
+
+// Name hash of a game function or mmove_t, or 0 if the address is not one the tables know.
+static unsigned int G_SaveHashForPtr(const g_save_ptr_t * byPtr, int count, const void * ptr)
+{
+    g_save_ptr_t key;
+    const g_save_ptr_t * found;
+
+    key.hash = 0;
+    key.ptr = ptr;
+    found = bsearch(&key, byPtr, count, sizeof(g_save_ptr_t), G_SavePtrCompareAddress);
+    return found ? found->hash : 0;
+}
+
+// The reverse of G_SaveHashForPtr: NULL if no game function or mmove_t has that name hash.
+static const void * G_SavePtrForHash(const g_save_ptr_t * byHash, int count, unsigned int hash)
+{
+    g_save_ptr_t key;
+    const g_save_ptr_t * found;
+
+    key.hash = hash;
+    key.ptr = NULL;
+    found = bsearch(&key, byHash, count, sizeof(g_save_ptr_t), G_SavePtrCompareHash);
+    return found ? found->ptr : NULL;
+}
+
+static unsigned int G_HashBytes(unsigned int h, const void * data, size_t size)
+{
+    const byte * p = data;
+    while (size--)
+    {
+        h ^= *p++;
+        h *= 16777619u; // FNV-1a
+    }
+    return h;
+}
+
+static unsigned int G_HashFieldTable(unsigned int h, const field_t * field)
+{
+    for (; field->name; field++)
+    {
+        h = G_HashBytes(h, field->name, strlen(field->name));
+        h = G_HashBytes(h, &field->ofs, sizeof(field->ofs));
+        h = G_HashBytes(h, &field->type, sizeof(field->type));
+        h = G_HashBytes(h, &field->flags, sizeof(field->flags));
+    }
+    return h;
+}
+
+static void G_SaveWrite(FILE * f, const void * data, int size)
+{
+    if (size > 0 && fwrite(data, size, 1, f) != 1)
+        save_write_failed = true;
+}
+
+static void G_SaveRead(FILE * f, void * data, int size)
+{
+    if (size > 0 && fread(data, size, 1, f) != 1)
+        gi.error("Savegame is truncated or corrupt");
+}
+
+static void G_WriteSaveHeader(FILE * f, int magic)
+{
+    saveheader_t header;
+
+    header.magic = magic;
+    header.version = SAVE_FORMAT_VERSION;
+    header.fingerprint = G_SaveFingerprint();
+    G_SaveWrite(f, &header, sizeof(header));
+}
+
+static void G_ReadSaveHeader(FILE * f, int magic)
+{
+    saveheader_t header;
+
+    G_SaveRead(f, &header, sizeof(header));
+    if (header.magic != magic)
+        gi.error("Not a Quake II savegame");
+    if (header.version != SAVE_FORMAT_VERSION || header.fingerprint != G_SaveFingerprint())
+        gi.error("Savegame is from an incompatible version of the game");
+}
 
 field_t fields[] = {
     { "classname", FOFS(classname), F_LSTRING },
@@ -144,6 +300,41 @@ field_t clientfields[] =
 
 /*
 ============
+G_SaveFingerprint
+
+[PS2_QUAKE]: See the SAVE FORMAT notes at the top of the file.
+============
+*/
+unsigned int G_SaveFingerprint(void)
+{
+    static unsigned int fingerprint = 0;
+
+    if (!fingerprint)
+    {
+        const int version = SAVE_FORMAT_VERSION;
+        const int sizes[] = {
+            sizeof(edict_t), sizeof(gclient_t), sizeof(game_locals_t), sizeof(level_locals_t)
+        };
+        const gitem_t * item;
+        unsigned int h = 2166136261u; // FNV-1a basis
+
+        h = G_HashBytes(h, &version, sizeof(version));
+        h = G_HashBytes(h, sizes, sizeof(sizes));
+        h = G_HashFieldTable(h, fields);
+        h = G_HashFieldTable(h, levelfields);
+        h = G_HashFieldTable(h, clientfields);
+
+        // F_ITEM fields and the inventory are indexes into itemlist.
+        for (item = itemlist + 1; item->classname; item++)
+            h = G_HashBytes(h, item->classname, strlen(item->classname) + 1);
+
+        fingerprint = h ? h : 1;
+    }
+    return fingerprint;
+}
+
+/*
+============
 InitGame
 
 This will be called when the dll is first loaded, which
@@ -206,6 +397,8 @@ void InitGame(void)
 
     // items
     InitItems();
+
+    G_InitSaveTables(); // [PS2_QUAKE]
 
     // [PS2_QUAKE]: Why not memset in the fist place???
     memset(game.helpmessage1, 0, sizeof(game.helpmessage1));
@@ -276,21 +469,28 @@ void WriteField1(FILE * f, field_t * field, byte * base)
         *(int *)p = index;
         break;
 
-    //relative to code segment
+    // [PS2_QUAKE]: by name hash, see the SAVE FORMAT notes at the top
     case F_FUNCTION:
         if (*(byte **)p == NULL)
             index = 0;
-        else
-            index = *(byte **)p - ((byte *)InitGame);
+        else if (!(index = G_SaveHashForPtr(g_saveFuncsByPtr, g_saveNumFuncs, *(void **)p)))
+        {
+            gi.dprintf("WriteField: %s points at %p, which is not a game function the save tables know\n",
+                       field->name, *(void **)p);
+            save_write_failed = true;
+        }
         *(int *)p = index;
         break;
 
-    //relative to data segment
     case F_MMOVE:
         if (*(byte **)p == NULL)
             index = 0;
-        else
-            index = *(byte **)p - (byte *)&mmove_reloc;
+        else if (!(index = G_SaveHashForPtr(g_saveMmovesByPtr, g_saveNumMmoves, *(void **)p)))
+        {
+            gi.dprintf("WriteField: %s points at %p, which is not a mmove_t the save tables know\n",
+                       field->name, *(void **)p);
+            save_write_failed = true;
+        }
         *(int *)p = index;
         break;
 
@@ -314,7 +514,7 @@ void WriteField2(FILE * f, field_t * field, byte * base)
         if (*(char **)p)
         {
             len = strlen(*(char **)p) + 1;
-            fwrite(*(char **)p, len, 1, f);
+            G_SaveWrite(f, *(char **)p, len);
         }
         break;
     }
@@ -346,7 +546,7 @@ void ReadField(FILE * f, field_t * field, byte * base)
         else
         {
             *(char **)p = gi.TagMalloc(len, TAG_LEVEL);
-            fread(*(char **)p, len, 1, f);
+            G_SaveRead(f, *(char **)p, len);
         }
         break;
     case F_EDICT:
@@ -371,22 +571,21 @@ void ReadField(FILE * f, field_t * field, byte * base)
             *(gitem_t **)p = &itemlist[index];
         break;
 
-    //relative to code segment
+    // [PS2_QUAKE]: by name hash, see the SAVE FORMAT notes at the top
     case F_FUNCTION:
         index = *(int *)p;
         if (index == 0)
-            *(byte **)p = NULL;
-        else
-            *(byte **)p = ((byte *)InitGame) + index;
+            *(const void **)p = NULL;
+        else if (!(*(const void **)p = G_SavePtrForHash(g_saveFuncs, g_saveNumFuncs, index)))
+            gi.error("Savegame refers to a game function this version doesn't have (%s %08x)", field->name, index);
         break;
 
-    //relative to data segment
     case F_MMOVE:
         index = *(int *)p;
         if (index == 0)
-            *(byte **)p = NULL;
-        else
-            *(byte **)p = (byte *)&mmove_reloc + index;
+            *(const void **)p = NULL;
+        else if (!(*(const void **)p = G_SavePtrForHash(g_saveMmoves, g_saveNumMmoves, index)))
+            gi.error("Savegame refers to an animation this version doesn't have (%s %08x)", field->name, index);
         break;
 
     default:
@@ -418,7 +617,7 @@ void WriteClient(FILE * f, gclient_t * client)
     }
 
     // write the block
-    fwrite(&temp, sizeof(temp), 1, f);
+    G_SaveWrite(f, &temp, sizeof(temp));
 
     // now write any allocated data following the edict
     for (field = clientfields; field->name; field++)
@@ -438,7 +637,7 @@ void ReadClient(FILE * f, gclient_t * client)
 {
     field_t * field;
 
-    fread(client, sizeof(*client), 1, f);
+    G_SaveRead(f, client, sizeof(*client));
 
     for (field = clientfields; field->name; field++)
     {
@@ -458,63 +657,46 @@ triggers, help computer info, and all client states.
 
 A single player death will automatically restore from the
 last save position.
+
+[PS2_QUAKE]: Writes to a stream the server opened and returns whether all of it was
+written; a failure is reported by the server, the game carries on regardless.
 ============
 */
-void WriteGame(char * filename, qboolean autosave)
+qboolean WriteGame(FILE * f, qboolean autosave)
 {
-    FILE * f;
     int i;
-    char str[16];
 
     if (!autosave)
         SaveClientData();
 
-    f = fopen(filename, "wb");
-    if (!f)
-        gi.error("Couldn't open %s", filename);
-
-    memset(str, 0, sizeof(str));
-    strcpy(str, __DATE__);
-    fwrite(str, sizeof(str), 1, f);
+    save_write_failed = false;
+    G_WriteSaveHeader(f, SAVE_MAGIC_GAME);
 
     game.autosaved = autosave;
-    fwrite(&game, sizeof(game), 1, f);
+    G_SaveWrite(f, &game, sizeof(game));
     game.autosaved = false;
 
     for (i = 0; i < game.maxclients; i++)
         WriteClient(f, &game.clients[i]);
 
-    fclose(f);
+    return !save_write_failed;
 }
 
-void ReadGame(char * filename)
+void ReadGame(FILE * f)
 {
-    FILE * f;
     int i;
-    char str[16];
+
+    G_ReadSaveHeader(f, SAVE_MAGIC_GAME);
 
     gi.FreeTags(TAG_GAME);
-
-    f = fopen(filename, "rb");
-    if (!f)
-        gi.error("Couldn't open %s", filename);
-
-    fread(str, sizeof(str), 1, f);
-    if (strcmp(str, __DATE__))
-    {
-        fclose(f);
-        gi.error("Savegame from an older version.\n");
-    }
 
     g_edicts = gi.TagMalloc(game.maxentities * sizeof(g_edicts[0]), TAG_GAME);
     globals.edicts = g_edicts;
 
-    fread(&game, sizeof(game), 1, f);
+    G_SaveRead(f, &game, sizeof(game));
     game.clients = gi.TagMalloc(game.maxclients * sizeof(game.clients[0]), TAG_GAME);
     for (i = 0; i < game.maxclients; i++)
         ReadClient(f, &game.clients[i]);
-
-    fclose(f);
 }
 
 //==========================================================
@@ -541,7 +723,7 @@ void WriteEdict(FILE * f, edict_t * ent)
     }
 
     // write the block
-    fwrite(&temp, sizeof(temp), 1, f);
+    G_SaveWrite(f, &temp, sizeof(temp));
 
     // now write any allocated data following the edict
     for (field = fields; field->name; field++)
@@ -572,7 +754,7 @@ void WriteLevelLocals(FILE * f)
     }
 
     // write the block
-    fwrite(&temp, sizeof(temp), 1, f);
+    G_SaveWrite(f, &temp, sizeof(temp));
 
     // now write any allocated data following the edict
     for (field = levelfields; field->name; field++)
@@ -592,7 +774,7 @@ void ReadEdict(FILE * f, edict_t * ent)
 {
     field_t * field;
 
-    fread(ent, sizeof(*ent), 1, f);
+    G_SaveRead(f, ent, sizeof(*ent));
 
     for (field = fields; field->name; field++)
     {
@@ -611,7 +793,7 @@ void ReadLevelLocals(FILE * f)
 {
     field_t * field;
 
-    fread(&level, sizeof(level), 1, f);
+    G_SaveRead(f, &level, sizeof(level));
 
     for (field = levelfields; field->name; field++)
     {
@@ -623,26 +805,17 @@ void ReadLevelLocals(FILE * f)
 =================
 WriteLevel
 
+[PS2_QUAKE]: Writes to a stream the server opened and returns whether all of it was
+written. The header replaces id's edict size and InitGame address checks.
 =================
 */
-void WriteLevel(char * filename)
+qboolean WriteLevel(FILE * f)
 {
     int i;
     edict_t * ent;
-    FILE * f;
-    void * base;
 
-    f = fopen(filename, "wb");
-    if (!f)
-        gi.error("Couldn't open %s", filename);
-
-    // write out edict size for checking
-    i = sizeof(edict_t);
-    fwrite(&i, sizeof(i), 1, f);
-
-    // write out a function pointer for checking
-    base = (void *)InitGame;
-    fwrite(&base, sizeof(base), 1, f);
+    save_write_failed = false;
+    G_WriteSaveHeader(f, SAVE_MAGIC_LEVEL);
 
     // write out level_locals_t
     WriteLevelLocals(f);
@@ -653,13 +826,13 @@ void WriteLevel(char * filename)
         ent = &g_edicts[i];
         if (!ent->inuse)
             continue;
-        fwrite(&i, sizeof(i), 1, f);
+        G_SaveWrite(f, &i, sizeof(i));
         WriteEdict(f, ent);
     }
     i = -1;
-    fwrite(&i, sizeof(i), 1, f);
+    G_SaveWrite(f, &i, sizeof(i));
 
-    fclose(f);
+    return !save_write_failed;
 }
 
 /*
@@ -678,17 +851,14 @@ calling ReadLevel.
 No clients are connected yet.
 =================
 */
-void ReadLevel(char * filename)
+void ReadLevel(FILE * f)
 {
     int entnum;
-    FILE * f;
     int i;
-    void * base;
     edict_t * ent;
 
-    f = fopen(filename, "rb");
-    if (!f)
-        gi.error("Couldn't open %s", filename);
+    // [PS2_QUAKE]: replaces id's edict size and InitGame address checks
+    G_ReadSaveHeader(f, SAVE_MAGIC_LEVEL);
 
     // free any dynamic memory allocated by loading the level
     // base state
@@ -698,39 +868,17 @@ void ReadLevel(char * filename)
     memset(g_edicts, 0, game.maxentities * sizeof(g_edicts[0]));
     globals.num_edicts = maxclients->value + 1;
 
-    // check edict size
-    fread(&i, sizeof(i), 1, f);
-    if (i != sizeof(edict_t))
-    {
-        fclose(f);
-        gi.error("ReadLevel: mismatched edict size");
-    }
-
-    // check function pointer base address
-    fread(&base, sizeof(base), 1, f);
-#ifdef _WIN32
-    if (base != (void *)InitGame)
-    {
-        fclose(f);
-        gi.error("ReadLevel: function pointers have moved");
-    }
-#else
-    gi.dprintf("Function offsets %d\n", ((byte *)base) - ((byte *)InitGame));
-#endif
-
     // load the level locals
     ReadLevelLocals(f);
 
     // load all the entities
     while (1)
     {
-        if (fread(&entnum, sizeof(entnum), 1, f) != 1)
-        {
-            fclose(f);
-            gi.error("ReadLevel: failed to read entnum");
-        }
+        G_SaveRead(f, &entnum, sizeof(entnum));
         if (entnum == -1)
             break;
+        if (entnum < 0 || entnum >= game.maxentities) // [PS2_QUAKE]
+            gi.error("ReadLevel: bad entity number %i", entnum);
         if (entnum >= globals.num_edicts)
             globals.num_edicts = entnum + 1;
 
@@ -741,8 +889,6 @@ void ReadLevel(char * filename)
         memset(&ent->area, 0, sizeof(ent->area));
         gi.linkentity(ent);
     }
-
-    fclose(f);
 
     // mark all clients as unconnected
     for (i = 0; i < maxclients->value; i++)

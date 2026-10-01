@@ -14,8 +14,9 @@ namespace ps2::save {
 constexpr const char * kIconSysFile   = "icon.sys";
 constexpr const char * kIconModelFile = "icon.ico";
 
-// Builds both files and writes them into the device's save directory.
-// False (SetError) if they couldn't be written.
-bool WriteSaveIcons(Device & device);
+// Builds both files and makes sure the device's save directory holds exactly them, writing
+// them if they are missing or differ (an older build's icon). False (SetError) if they
+// couldn't be written.
+bool EnsureSaveIcons(Device & device);
 
 } // namespace ps2::save

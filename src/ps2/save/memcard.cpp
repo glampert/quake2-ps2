@@ -125,14 +125,11 @@ public:
         }
 
         // A save directory the PS2 browser can't describe shows up there as corrupted data,
-        // and invites the player to delete it: always have the icon files in it.
-        u32 sizeBytes = 0;
-        if (!FileSize(kIconSysFile, sizeBytes) || !FileSize(kIconModelFile, sizeBytes))
+        // and invites the player to delete it: always have the icon files in it, and this
+        // build's ones - checked once per card, since the result is cached below.
+        if (!EnsureSaveIcons(*this))
         {
-            if (!WriteSaveIcons(*this))
-            {
-                return false;
-            }
+            return false;
         }
 
         m_saveDirReady = true;

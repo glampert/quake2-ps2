@@ -4179,6 +4179,8 @@ QUIT MENU
 
 const char * M_Quit_Key(int key)
 {
+    // The gamepad sends ENTER (cross/square) and ESCAPE (circle/triangle/start)
+    // while a menu has focus, so those double as yes/no without a keyboard.
     switch (key)
     {
     case K_ESCAPE:
@@ -4187,6 +4189,8 @@ const char * M_Quit_Key(int key)
         M_PopMenu();
         break;
 
+    case K_ENTER:
+    case K_KP_ENTER:
     case 'Y':
     case 'y':
         cls.key_dest = key_console;

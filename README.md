@@ -535,6 +535,21 @@ The engine and game still write id's save files through stdio, but not into
   Running from `host:`, the archived `ps2_savedevice` cvar (the game menu's "saves" option)
   can put the archives in `baseq2/save/` instead: `host` (the default there) or `mc`.
 
+`config.cfg` - the key bindings and archived cvars - is kept where each platform keeps settings,
+by the two hooks in [save_api.cpp](src/ps2/save/save_api.cpp) the engine writes and executes it
+through (`Sys_SaveStoreConfig` from `CL_WriteConfiguration`, `Sys_SaveLoadConfig` from `exec`):
+
+| | Emulator (game data on `host:`) | Console (game data on the USB stick, `mass:`) |
+|---|---|---|
+| **Saving** | `baseq2/config.cfg` on the host, as always; plus the card's `Q2PS2/config.cfg` when saves go to the card (`ps2_savedevice mc`) | the card's `Q2PS2/config.cfg` only. Never the USB stick |
+| **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the USB stick's `baseq2/config.cfg` only if the card has none |
+
+The config is written on quit and on leaving the video menu after a change; the card copy is
+only rewritten when it differs. A card that is missing or full just skips it, with a line on
+the console - on a console without a memory card the settings then last until it is switched
+off. The `config.cfg` the game data's folder holds on a USB stick is never written by the game,
+so one placed there by hand serves as the default for cards that have none.
+
 The game's pointers to functions and animations are saved as a hash of the pointee's name,
 looked up in tables generated from the game's objects at build time
 ([gen_save_tables.py](src/tools/scripts/gen_save_tables.py)), where id stored offsets that
@@ -669,10 +684,6 @@ against a release ELF you get function names from the symbol table but no file o
 
 **Engine features**
 
-- **`config.cfg` on the memory card.** It is still written to the game data's own path, which a
-  disc boot couldn't write to. The memory card device already reads, writes, lists and deletes
-  any file in the game's card directory ([save_system.h](src/ps2/save/save_system.h)); only the
-  wiring into `CL_WriteConfiguration` and the startup `exec` is missing.
 - Saving to MEMORY CARD slot 2, and formatting an unformatted card from the game.
 
 **Build and project**

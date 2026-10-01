@@ -43,6 +43,51 @@ const char * LastError()
 }
 
 // ------------------------------------------------------------------------------------------------
+// Whole-file helpers
+// ------------------------------------------------------------------------------------------------
+
+bool WriteWholeFile(Device & device, const char * name, const void * data, const u32 sizeBytes)
+{
+    const FileHandle handle = device.Open(name, OpenMode::Write);
+    if (handle == FileHandle::Invalid)
+    {
+        return false;
+    }
+
+    const bool written = device.Write(handle, data, sizeBytes);
+    return device.Close(handle) && written;
+}
+
+bool FileMatches(Device & device, const char * name, const void * expected, const u32 sizeBytes)
+{
+    u32 sizeOnDevice = 0;
+    if (!device.FileSize(name, sizeOnDevice) || sizeOnDevice != sizeBytes)
+    {
+        return false;
+    }
+
+    const FileHandle handle = device.Open(name, OpenMode::Read);
+    if (handle == FileHandle::Invalid)
+    {
+        return false;
+    }
+
+    u8 chunk[2048];
+    const u8 * const bytes = static_cast<const u8 *>(expected);
+    bool same = true;
+
+    for (u32 offset = 0; same && offset < sizeBytes;)
+    {
+        const u32 n = (sizeBytes - offset < sizeof(chunk)) ? sizeBytes - offset : static_cast<u32>(sizeof(chunk));
+        same = device.Read(handle, chunk, n) && std::memcmp(chunk, bytes + offset, n) == 0;
+        offset += n;
+    }
+
+    device.Close(handle);
+    return same;
+}
+
+// ------------------------------------------------------------------------------------------------
 // HostDevice
 // ------------------------------------------------------------------------------------------------
 

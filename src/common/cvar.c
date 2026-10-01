@@ -455,18 +455,19 @@ void Cvar_Set_f(void)
 
 /*
 ============
-Cvar_WriteVariables
-Appends lines containing "set variable value" for all variables
+Cvar_WriteVariablesToFile
+
+Writes lines containing "set variable value" for all variables
 with the archive flag set to true.
+
+[PS2_QUAKE]: to a stream, so CL_WriteConfiguration can build config.cfg in memory.
 ============
 */
-void Cvar_WriteVariables(const char * path)
+void Cvar_WriteVariablesToFile(FILE * f)
 {
     cvar_t * var;
     char buffer[1024];
-    FILE * f;
 
-    f = fopen(path, "a");
     for (var = cvar_vars; var; var = var->next)
     {
         if (var->flags & CVAR_ARCHIVE)
@@ -475,6 +476,23 @@ void Cvar_WriteVariables(const char * path)
             fprintf(f, "%s", buffer);
         }
     }
+}
+
+/*
+============
+Cvar_WriteVariables
+Appends lines containing "set variable value" for all variables
+with the archive flag set to true.
+============
+*/
+void Cvar_WriteVariables(const char * path)
+{
+    FILE * f;
+
+    f = fopen(path, "a");
+    if (!f) // [PS2_QUAKE]: id wrote through the null stream
+        return;
+    Cvar_WriteVariablesToFile(f);
     fclose(f);
 }
 

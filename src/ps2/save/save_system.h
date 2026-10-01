@@ -124,4 +124,11 @@ protected:
     ~Device() = default;
 };
 
+// Writes a whole file into the device's save directory, replacing any file of that name.
+// False if it couldn't all be written.
+bool WriteWholeFile(Device & device, const char * name, const void * data, u32 sizeBytes);
+
+// Whether the device's save directory holds exactly these bytes under that name.
+bool FileMatches(Device & device, const char * name, const void * expected, u32 sizeBytes);
+
 } // namespace ps2::save

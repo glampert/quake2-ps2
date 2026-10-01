@@ -395,7 +395,13 @@ void Cmd_Exec_f(void)
         return;
     }
 
-    len = FS_LoadFile(Cmd_Argv(1), (void **)&f);
+    // [PS2_QUAKE]: config.cfg comes from wherever this platform keeps it - the memory card
+    // or the game data, in the order Sys_SaveLoadConfig settles (see q_common.h).
+    if (!Q_stricmp(Cmd_Argv(1), "config.cfg"))
+        f = Sys_SaveLoadConfig(&len);
+    else
+        len = FS_LoadFile(Cmd_Argv(1), (void **)&f);
+
     if (!f)
     {
         Com_Printf("couldn't exec %s\n", Cmd_Argv(1));

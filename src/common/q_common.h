@@ -490,6 +490,7 @@ qboolean Cvar_Command(void);
 // was handled. (print or change)
 
 void Cvar_WriteVariables(const char * path);
+void Cvar_WriteVariablesToFile(FILE * f); // [PS2_QUAKE]: what Cvar_WriteVariables appends, to a stream
 // appends lines containing "set variable value" for all variables
 // with the archive flag set to true.
 
@@ -919,6 +920,23 @@ const char * Sys_SaveDeviceStatus(void);   // Where saves go, or why they can't,
 
 void Sys_SaveSetError(const char * message);
 const char * Sys_SaveLastError(void);
+
+// config.cfg, which CL_WriteConfiguration puts together and Cmd_Exec_f runs,
+// is kept where the platform keeps settings:
+//
+// Writing  - to <gamedir>/config.cfg only when running from the emulator's
+//            host:, never to a console's USB stick; and to the memory card's
+//            save folder whenever saves go there (always on a console).
+// Reading  - from the emulator, the host:/ file first (the one edited by hand
+//            while developing), the card's if there is none. On a console the
+//            card's first (the player's own settings), the USB stick's only if
+//            the card has none.
+//
+// Sys_SaveLoadConfig returns the file the way FS_LoadFile does: *outLength
+// bytes with no terminating 0, in a buffer FS_FreeFile frees - or NULL if
+// there is no config.cfg anywhere.
+void Sys_SaveStoreConfig(const char * text, int length);
+char * Sys_SaveLoadConfig(int * outLength);
 
 /*
 ==============================================================

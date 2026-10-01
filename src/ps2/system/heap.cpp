@@ -258,6 +258,18 @@ void * TryAlloc(const size_t sizeBytes, const MemTag tag)
     return p;
 }
 
+void * TryAllocAligned(const MemAlign alignment, const size_t sizeBytes, const MemTag tag)
+{
+    const size_t n = (sizeBytes != 0u ? sizeBytes : 1u);
+    void * p = dlmemalign(static_cast<size_t>(alignment), n);
+
+    if (p != nullptr)
+    {
+        AccountAlloc(tag, n);
+    }
+    return p;
+}
+
 void * AllocAligned(const MemAlign alignment, const size_t sizeBytes, const MemTag tag)
 {
     const size_t n = (sizeBytes != 0u ? sizeBytes : 1u);

@@ -6,14 +6,15 @@
  *  background corner colours and the lighting the browser shows the icon with, and the icon
  *  files to use for listing, copying and deleting - all the same one here.
  *
- *  The icon is the Quake II emblem from baseq2/quake-icon.pcx (128x128, 8-bit, palette index
- *  255 transparent), or the menu cursor's first frame (pics/m_cursor0.pcx) where the game data
- *  doesn't have it: a flat cut-out of the picture's opaque pixels, textured front and back, in
- *  its own proportions - cut out because the browser draws icon textures opaque, ignoring the
- *  texels' alpha. It is built from the game data whenever a save goes to a card, and rewritten
- *  if the card's copy differs - so a change of picture reaches cards that already have a save
- *  directory. The format isn't documented in the SDK; the layout below follows the community
- *  documentation of it (the one bmp2icon-style tools write):
+ *  The icon is the quad damage pickup (models/items/quaddama/tris.md2), the Quake II emblem in
+ *  3D: its first keyframe with its skin, read with the renderer's own MD2 parsing
+ *  (renderer/model_load.h) and turned into icon space. Should the game data not have it, the
+ *  icon is a plain square instead, so a save directory always has one.
+ *
+ *  It is built from the game data whenever a save goes to a card, and rewritten if the card's
+ *  copy differs - so a change of icon reaches cards that already have a save directory. The
+ *  format isn't documented in the SDK; the layout below follows the community documentation
+ *  of it (the one bmp2icon-style tools write):
  *
  *      header      magic 0x00010000, shape count, texture type, 1.0f, vertex count (x3)
  *      vertices    per vertex: a position per shape, a normal, UV, RGBA - s16 values in
@@ -21,12 +22,14 @@
  *      animation   header + frames + keys; a still icon has one frame of one key
  *      texture     128x128 texels, 16 bits each (GS PSMCT16: R5 G5 B5 A1), uncompressed
  *
- *  The browser's space has Y pointing down, with the icon standing on Y = 0.
+ *  The browser's space has Y pointing down, with the icon standing on Y = 0. It turns the
+ *  icon about the Y axis by itself, and draws its texture opaque, ignoring the alpha bit.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/save/mc_icon.h"
+#include "ps2/renderer/model_load.h"
 
 #include <cstring>
 #include <libmc.h>
@@ -36,20 +39,20 @@ namespace ps2::save {
 namespace {
 
 using ps2::heap::MemTag;
+using ps2::math::Vec3;
 
 constexpr const char * kTitleLine1 = "Quake II";
 constexpr const char * kTitleLine2 = "Saved Games";
+constexpr const char * kIconModel  = "models/items/quaddama/tris.md2";
 
-// The picture the icon is cut from: the first of these the game data has. A picture wider or
-// taller than the 128x128 texture gains nothing; 8-bit PCX with its own palette, index 255
-// transparent, as Quake's own pictures are.
-constexpr const char * kIconPictures[] = { "quake2-icon.pcx", "pics/m_cursor0.pcx" };
+// Browser-space size of the longest side of the model's bounding box.
+constexpr float kIconSize = 3.2f;
 
-// Browser-space size of the longer side of what the icon shows - the picture's opaque part -
-// the other side following its proportions. The texture stretches any picture to the square
-// 128x128 every icon texture is; the geometry keeps the picture's own proportions.
-constexpr float kSlabSize      = 3.2f;
-constexpr float kSlabThickness = 0.06f; // Keeps the back face from z-fighting the front.
+// Each model triangle goes in twice, once per winding, with the same normals. Whether the
+// browser culls back faces, and which winding it takes for the front, isn't known: this way
+// the outside of the model shows either way. Without culling, the two copies of a triangle
+// draw identically, so there is nothing for them to fight over.
+constexpr bool kDoubleSidedModel = true;
 
 constexpr int kTextureSize = 128;
 
@@ -106,14 +109,8 @@ constexpr u32 kTextureBytes = kTextureSize * kTextureSize * 2u;
 
 constexpr u32 kAnimationBytes = sizeof(IconAnimHeader) + sizeof(IconFrame) + sizeof(IconKey);
 
-// Each opaque rectangle of the picture is a front and a back quad, two triangles each.
-constexpr int kVerticesPerRect = 12;
-
-// Past this many rectangles - a picture with ragged, noisy transparency - the icon falls back
-// to one solid slab: 256 of them is already 72 KB of vertices on the card.
-constexpr int kMaxRects = 256;
-
-// The palette index Quake's pictures use for "no pixel".
+// The palette index Quake's images use for "no pixel". A skin has a stray few at most; they
+// take their neighbours' colour.
 constexpr int kTransparent = 255;
 
 // A decoded 8-bit Quake PCX.
@@ -126,13 +123,19 @@ struct Picture
     const u8 * palette; // 256 RGB triplets, inside the file's data.
 };
 
-// A block of opaque pixels: [x0, x1) x [y0, y1), in picture coordinates.
-struct Rect
+// An icon file being built: the whole file on the heap, and where its vertices and texture go.
+struct IconFile
 {
-    int x0, y0, x1, y1;
+    u8 *  data;
+    u32   sizeBytes;
+    u8 *  vertices;
+    u16 * texels;
 };
 
-static Rect s_rects[kMaxRects];
+inline u16 PackTexel(const int r, const int g, const int b)
+{
+    return static_cast<u16>((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | 0x8000);
+}
 
 inline s16 Fixed(const float value)
 {
@@ -140,15 +143,17 @@ inline s16 Fixed(const float value)
 }
 
 void SetVertex(IconVertex & vertex,
-               const float x, const float y, const float z,
-               const float normalZ,
-               const float u, const float v)
+               const float x,  const float y,  const float z,
+               const float nx, const float ny, const float nz,
+               const float u,  const float v)
 {
     vertex = IconVertex{};
     vertex.x  = Fixed(x);
     vertex.y  = Fixed(y);
     vertex.z  = Fixed(z);
-    vertex.nz = Fixed(normalZ);
+    vertex.nx = Fixed(nx);
+    vertex.ny = Fixed(ny);
+    vertex.nz = Fixed(nz);
     vertex.u  = Fixed(u);
     vertex.v  = Fixed(v);
     vertex.r  = 0x80;
@@ -157,12 +162,79 @@ void SetVertex(IconVertex & vertex,
     vertex.a  = 0x80;
 }
 
-inline u16 PackTexel(const int r, const int g, const int b, const bool opaque)
+// Allocates an icon file for this many vertices and fills in everything but the vertices and
+// the texture: the header, and a still animation. False if out of memory.
+bool NewIconFile(const u32 numVertices, IconFile & outFile)
 {
-    return static_cast<u16>((r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | (opaque ? 0x8000 : 0));
+    const u32 verticesOffset = sizeof(IconHeader);
+    const u32 textureOffset  = verticesOffset + numVertices * sizeof(IconVertex) + kAnimationBytes;
+    const u32 sizeBytes      = textureOffset + kTextureBytes;
+
+    u8 * const data = static_cast<u8 *>(ps2::heap::TryAlloc(sizeBytes, MemTag::SaveData));
+    if (data == nullptr)
+    {
+        return false;
+    }
+
+    IconHeader header = {};
+    header.magic       = kIconMagic;
+    header.numShapes   = 1;
+    header.textureType = kTextureRaw16;
+    header.reserved    = kFloatOne;
+    header.numVertices = numVertices;
+
+    IconAnimHeader anim = {};
+    anim.tag         = 1;
+    anim.frameLength = 1;
+    anim.speed       = 1.0f;
+    anim.playOffset  = 0;
+    anim.numFrames   = 1;
+
+    IconFrame frame = {};
+    frame.shapeId  = 0;
+    frame.numKeys  = 1;
+    frame.unknown1 = 1;
+    frame.unknown2 = 0;
+
+    const IconKey key = { 1.0f, 1.0f };
+
+    u8 * cursor = data + textureOffset - kAnimationBytes;
+    std::memcpy(data, &header, sizeof(header));
+    std::memcpy(cursor, &anim, sizeof(anim));
+    cursor += sizeof(anim);
+    std::memcpy(cursor, &frame, sizeof(frame));
+    cursor += sizeof(frame);
+    std::memcpy(cursor, &key, sizeof(key));
+
+    outFile.data      = data;
+    outFile.sizeBytes = sizeBytes;
+    outFile.vertices  = data + verticesOffset;
+
+    // `data` comes from the heap and every block before the texture is a whole number of
+    // u16s, so the texture is aligned for them.
+    outFile.texels = static_cast<u16 *>(static_cast<void *>(data + textureOffset));
+    return true;
 }
 
-bool Opaque(const Picture & picture, const int x, const int y)
+inline void PutVertex(IconFile & file, u32 & index, const IconVertex & vertex)
+{
+    std::memcpy(file.vertices + index * sizeof(IconVertex), &vertex, sizeof(vertex));
+    ++index;
+}
+
+void FillPlainTexture(u16 * outTexels)
+{
+    for (int i = 0; i < kTextureSize * kTextureSize; ++i)
+    {
+        outTexels[i] = PackTexel(72, 56, 40); // A dark bronze.
+    }
+}
+
+// ------------------------------------------------------------------------------------------------
+// Skin texture
+// ------------------------------------------------------------------------------------------------
+
+inline bool HasColour(const Picture & picture, const int x, const int y)
 {
     return picture.indexes[y * picture.stride + x] != kTransparent;
 }
@@ -228,10 +300,8 @@ void FreePicture(Picture & picture)
     picture.indexes = nullptr;
 }
 
-// Stretches the picture over the texture, bilinear. Only opaque pixels lend their colour, so
-// the edges of the shape don't darken towards the transparent ones (which are black), and the
-// texels just outside it carry the edge colour for the GS's filtering to blend with. The alpha
-// bit follows the nearest pixel, though the browser draws icon textures opaque regardless.
+// Stretches the picture over the texture, bilinear. "No pixel" pixels lend no colour - they
+// would otherwise pull their surroundings towards black.
 void ResampleTexture(const Picture & picture, u16 * outTexels)
 {
     const int width  = picture.width;
@@ -259,7 +329,7 @@ void ResampleTexture(const Picture & picture, u16 * outTexels)
             float totalWeight = 0.0f;
             for (int c = 0; c < 4; ++c)
             {
-                if (!Opaque(picture, xs[c], ys[c]))
+                if (!HasColour(picture, xs[c], ys[c]))
                 {
                     continue;
                 }
@@ -279,288 +349,231 @@ void ResampleTexture(const Picture & picture, u16 * outTexels)
                 }
             }
 
-            const bool opaque = Opaque(picture, (fx < 0.5f) ? x0 : x1, (fy < 0.5f) ? y0 : y1);
             outTexels[ty * kTextureSize + tx] = PackTexel(static_cast<int>(rgb[0]), static_cast<int>(rgb[1]),
-                                                          static_cast<int>(rgb[2]), opaque);
+                                                          static_cast<int>(rgb[2]));
         }
     }
 }
 
-// Covers the picture's opaque pixels with rectangles: each run of opaque pixels in a row,
-// grown down over the rows below that have exactly the same run. Returns how many, 0 for a
-// picture with no opaque pixel, or -1 if there would be more than maxRects.
-int FindOpaqueRects(const Picture & picture, Rect * outRects, const int maxRects)
-{
-    const int width  = picture.width;
-    const int height = picture.height;
-
-    // Whether row y has an opaque run starting at x0 and ending right before x1.
-    const auto sameRun = [&picture, width](const int y, const int x0, const int x1) {
-        for (int x = x0; x < x1; ++x)
-        {
-            if (!Opaque(picture, x, y))
-            {
-                return false;
-            }
-        }
-        return (x0 == 0 || !Opaque(picture, x0 - 1, y)) && (x1 == width || !Opaque(picture, x1, y));
-    };
-
-    const size_t numPixels = static_cast<size_t>(width) * static_cast<size_t>(height);
-    u8 * const covered = static_cast<u8 *>(ps2::heap::TryAlloc(numPixels, MemTag::SaveData));
-    if (covered == nullptr)
-    {
-        return -1;
-    }
-    std::memset(covered, 0, numPixels);
-
-    int count = 0;
-    for (int y = 0; y < height && count >= 0; ++y)
-    {
-        for (int x = 0; x < width;)
-        {
-            if (!Opaque(picture, x, y))
-            {
-                ++x;
-                continue;
-            }
-
-            int runEnd = x;
-            while (runEnd < width && Opaque(picture, runEnd, y))
-            {
-                ++runEnd;
-            }
-
-            // A run a rectangle from above already covers is covered whole: that rectangle
-            // only grew into rows where the run was exactly its own.
-            if (covered[y * width + x] == 0)
-            {
-                if (count == maxRects)
-                {
-                    count = -1;
-                    break;
-                }
-
-                int rectEnd = y + 1;
-                while (rectEnd < height && sameRun(rectEnd, x, runEnd))
-                {
-                    ++rectEnd;
-                }
-                for (int row = y; row < rectEnd; ++row)
-                {
-                    std::memset(covered + row * width + x, 1, static_cast<size_t>(runEnd - x));
-                }
-                outRects[count++] = { x, y, runEnd, rectEnd };
-            }
-            x = runEnd;
-        }
-    }
-
-    ps2::heap::Free(covered, numPixels, MemTag::SaveData);
-    return count;
-}
-
-// Where picture pixels land in browser space: `unit` per pixel, from the point (centreX,
-// bottomY) of the picture, which lands at X = 0 on the floor (Y = 0; Y points down).
-struct Placement
-{
-    float unit;
-    float centreX;
-    float bottomY;
-};
-
-// Fits the rectangles' bounding box - the opaque part of the picture, its empty margins left
-// out - to kSlabSize on its longer side, standing on the floor, centred.
-Placement PlaceRects(const Rect * rects, const int numRects)
-{
-    Rect bounds = rects[0];
-    for (int i = 1; i < numRects; ++i)
-    {
-        bounds.x0 = (rects[i].x0 < bounds.x0) ? rects[i].x0 : bounds.x0;
-        bounds.y0 = (rects[i].y0 < bounds.y0) ? rects[i].y0 : bounds.y0;
-        bounds.x1 = (rects[i].x1 > bounds.x1) ? rects[i].x1 : bounds.x1;
-        bounds.y1 = (rects[i].y1 > bounds.y1) ? rects[i].y1 : bounds.y1;
-    }
-
-    const int boundsWidth  = bounds.x1 - bounds.x0;
-    const int boundsHeight = bounds.y1 - bounds.y0;
-    const int longerSide   = (boundsWidth > boundsHeight) ? boundsWidth : boundsHeight;
-
-    Placement placement;
-    placement.unit    = kSlabSize / static_cast<float>(longerSide);
-    placement.centreX = static_cast<float>(bounds.x0 + bounds.x1) * 0.5f;
-    placement.bottomY = static_cast<float>(bounds.y1);
-    return placement;
-}
-
-// A rectangle of the picture as a front and a back quad. Both faces carry the same texture
-// coordinates, so from behind the picture reads mirrored - as the shape does.
-void AddRect(IconVertex * out, const Rect & rect, const int width, const int height, const Placement & placement)
-{
-    const float u0 = static_cast<float>(rect.x0) / static_cast<float>(width);
-    const float u1 = static_cast<float>(rect.x1) / static_cast<float>(width);
-    const float v0 = static_cast<float>(rect.y0) / static_cast<float>(height);
-    const float v1 = static_cast<float>(rect.y1) / static_cast<float>(height);
-
-    const float left   = (static_cast<float>(rect.x0) - placement.centreX) * placement.unit;
-    const float right  = (static_cast<float>(rect.x1) - placement.centreX) * placement.unit;
-    const float top    = (static_cast<float>(rect.y0) - placement.bottomY) * placement.unit;
-    const float bottom = (static_cast<float>(rect.y1) - placement.bottomY) * placement.unit;
-    const float front  = -kSlabThickness * 0.5f;
-    const float back   =  kSlabThickness * 0.5f;
-
-    // Front, facing -Z.
-    SetVertex(out[0],  left,  top,    front, -1.0f, u0, v0);
-    SetVertex(out[1],  right, top,    front, -1.0f, u1, v0);
-    SetVertex(out[2],  left,  bottom, front, -1.0f, u0, v1);
-    SetVertex(out[3],  right, top,    front, -1.0f, u1, v0);
-    SetVertex(out[4],  right, bottom, front, -1.0f, u1, v1);
-    SetVertex(out[5],  left,  bottom, front, -1.0f, u0, v1);
-
-    // Back, facing +Z, wound the other way.
-    SetVertex(out[6],  left,  top,    back,   1.0f, u0, v0);
-    SetVertex(out[7],  left,  bottom, back,   1.0f, u0, v1);
-    SetVertex(out[8],  right, top,    back,   1.0f, u1, v0);
-    SetVertex(out[9],  right, top,    back,   1.0f, u1, v0);
-    SetVertex(out[10], left,  bottom, back,   1.0f, u0, v1);
-    SetVertex(out[11], right, bottom, back,   1.0f, u1, v1);
-}
-
-// Builds the icon file on the heap and returns it, with its size; null if out of memory.
-//
-// The PS2 browser draws icon textures opaque - it ignores the texels' alpha bit - so the
-// picture's transparent pixels would show as black. The slab is instead built only where
-// the picture is opaque, one rectangle per block of opaque pixels.
-u8 * BuildIconFile(u32 & outSizeBytes)
+// Loads a PCX from the game data and stretches it over the texture. False if it couldn't be
+// loaded or decoded, leaving the texture untouched.
+bool TextureFromPcxFile(const char * name, u16 * outTexels)
 {
     void * pcx = nullptr;
+    const int pcxBytes = FS_LoadFile(name, &pcx);
+
     Picture picture = {};
-    bool decoded = false;
-
-    for (const char * name : kIconPictures)
-    {
-        const int pcxBytes = FS_LoadFile(name, &pcx);
-        decoded = (pcxBytes > 0) && DecodePcx(static_cast<const u8 *>(pcx), pcxBytes, picture);
-        if (decoded)
-        {
-            break;
-        }
-        if (pcx != nullptr)
-        {
-            FS_FreeFile(pcx);
-            pcx = nullptr;
-        }
-    }
-    if (!decoded)
-    {
-        Com_Printf("Save icon: none of its pictures could be loaded, the icon will be plain.\n");
-    }
-
-    // No picture, nothing opaque in it, or too ragged to cut out: one whole slab.
-    const int width  = decoded ? picture.width  : 1;
-    const int height = decoded ? picture.height : 1;
-    int numRects = decoded ? FindOpaqueRects(picture, s_rects, kMaxRects) : 0;
-    if (numRects <= 0)
-    {
-        numRects   = 1;
-        s_rects[0] = { 0, 0, width, height };
-    }
-
-    const u32 numVertices   = static_cast<u32>(numRects * kVerticesPerRect);
-    const u32 textureOffset = sizeof(IconHeader) + numVertices * sizeof(IconVertex) + kAnimationBytes;
-    outSizeBytes = textureOffset + kTextureBytes;
-
-    u8 * const out = static_cast<u8 *>(ps2::heap::TryAlloc(outSizeBytes, MemTag::SaveData));
-    if (out != nullptr)
-    {
-        IconHeader header = {};
-        header.magic       = kIconMagic;
-        header.numShapes   = 1;
-        header.textureType = kTextureRaw16;
-        header.reserved    = kFloatOne;
-        header.numVertices = numVertices;
-
-        IconAnimHeader anim = {};
-        anim.tag         = 1;
-        anim.frameLength = 1;
-        anim.speed       = 1.0f;
-        anim.playOffset  = 0;
-        anim.numFrames   = 1;
-
-        IconFrame frame = {};
-        frame.shapeId  = 0;
-        frame.numKeys  = 1;
-        frame.unknown1 = 1;
-        frame.unknown2 = 0;
-
-        const IconKey key = { 1.0f, 1.0f };
-
-        u8 * cursor = out;
-        const auto put = [&cursor](const void * data, const size_t sizeBytes) {
-            std::memcpy(cursor, data, sizeBytes);
-            cursor += sizeBytes;
-        };
-
-        const Placement placement = PlaceRects(s_rects, numRects);
-
-        put(&header, sizeof(header));
-        for (int i = 0; i < numRects; ++i)
-        {
-            IconVertex vertices[kVerticesPerRect];
-            AddRect(vertices, s_rects[i], width, height, placement);
-            put(vertices, sizeof(vertices));
-        }
-        put(&anim, sizeof(anim));
-        put(&frame, sizeof(frame));
-        put(&key, sizeof(key));
-
-        // The texture goes straight in place; `out` comes from the heap and every block before
-        // it is a whole number of u16s, so it is aligned for them.
-        PS2_Assert(cursor == out + textureOffset);
-        u16 * const texels = static_cast<u16 *>(static_cast<void *>(cursor));
-        if (decoded)
-        {
-            ResampleTexture(picture, texels);
-        }
-        else
-        {
-            for (int i = 0; i < kTextureSize * kTextureSize; ++i)
-            {
-                texels[i] = PackTexel(72, 56, 40, true); // A dark bronze.
-            }
-        }
-    }
-
+    const bool decoded = (pcxBytes > 0) && DecodePcx(static_cast<const u8 *>(pcx), pcxBytes, picture);
     if (decoded)
     {
+        ResampleTexture(picture, outTexels);
         FreePicture(picture);
     }
+
     if (pcx != nullptr)
     {
         FS_FreeFile(pcx);
     }
-    return out;
+    return decoded;
+}
+
+// ------------------------------------------------------------------------------------------------
+// The model
+// ------------------------------------------------------------------------------------------------
+
+// One keyframe vertex, decoded to model space - Quake's: X forward, Y left, Z up.
+Vec3 KeyframePosition(const daliasframe_t & frame, const int index)
+{
+    const dtrivertx_t & vertex = frame.verts[index];
+    return Vec3{ static_cast<float>(vertex.v[0]) * frame.scale[0] + frame.translate[0],
+                 static_cast<float>(vertex.v[1]) * frame.scale[1] + frame.translate[1],
+                 static_cast<float>(vertex.v[2]) * frame.scale[2] + frame.translate[2] };
+}
+
+// Turns the model's triangles into the icon's vertices: the bounding box's longest side
+// kIconSize, centred, standing on the floor. Model space maps to icon space as X <- Y,
+// Y <- -Z, Z <- -X: up is the icon's -Y, and the model's front faces -Z.
+void AddModelTriangles(IconFile & file, const dmdl_t & header, const daliasframe_t & frame,
+                       const mod::AliasVertex * corners, const int numTris)
+{
+    Vec3 mins = KeyframePosition(frame, 0);
+    Vec3 maxs = mins;
+    for (int i = 1; i < header.num_xyz; ++i)
+    {
+        const Vec3 p = KeyframePosition(frame, i);
+        mins.x = (p.x < mins.x) ? p.x : mins.x;
+        mins.y = (p.y < mins.y) ? p.y : mins.y;
+        mins.z = (p.z < mins.z) ? p.z : mins.z;
+        maxs.x = (p.x > maxs.x) ? p.x : maxs.x;
+        maxs.y = (p.y > maxs.y) ? p.y : maxs.y;
+        maxs.z = (p.z > maxs.z) ? p.z : maxs.z;
+    }
+
+    const float sizeX   = maxs.x - mins.x;
+    const float sizeY   = maxs.y - mins.y;
+    const float sizeZ   = maxs.z - mins.z;
+    const float longest = (sizeX > sizeY) ? ((sizeX > sizeZ) ? sizeX : sizeZ) : ((sizeY > sizeZ) ? sizeY : sizeZ);
+    const float unit    = (longest > 0.0f) ? (kIconSize / longest) : 1.0f;
+    const float centreX = (mins.x + maxs.x) * 0.5f;
+    const float centreY = (mins.y + maxs.y) * 0.5f;
+
+    const auto makeVertex = [&](const mod::AliasVertex & corner) -> IconVertex {
+        const int index = static_cast<int>(corner.index);
+        const Vec3 p = KeyframePosition(frame, index);
+
+        int normalIndex = frame.verts[index].lightnormalindex;
+        normalIndex = (normalIndex < NUMVERTEXNORMALS) ? normalIndex : 0;
+        const float * const n = bytedirs[normalIndex];
+
+        IconVertex vertex;
+        SetVertex(vertex,
+                  (p.y - centreY) * unit, -(p.z - mins.z) * unit, -(p.x - centreX) * unit,
+                  n[1], -n[2], -n[0],
+                  corner.s, corner.t);
+        return vertex;
+    };
+
+    u32 vertexIndex = 0;
+    for (int tri = 0; tri < numTris; ++tri)
+    {
+        const IconVertex a = makeVertex(corners[tri * 3 + 0]);
+        const IconVertex b = makeVertex(corners[tri * 3 + 1]);
+        const IconVertex c = makeVertex(corners[tri * 3 + 2]);
+
+        PutVertex(file, vertexIndex, a);
+        PutVertex(file, vertexIndex, b);
+        PutVertex(file, vertexIndex, c);
+
+        if (kDoubleSidedModel)
+        {
+            PutVertex(file, vertexIndex, a);
+            PutVertex(file, vertexIndex, c);
+            PutVertex(file, vertexIndex, b);
+        }
+    }
+}
+
+// The model icon. False if the model or memory isn't there, with nothing allocated.
+bool BuildModelIcon(IconFile & outFile)
+{
+    void * file = nullptr;
+    const int fileBytes = FS_LoadFile(kIconModel, &file);
+    if (fileBytes <= 0)
+    {
+        Com_Printf("Save icon: no %s in the game data, the icon will be plain.\n", kIconModel);
+        return false;
+    }
+
+    // FS_LoadFile's buffer comes from the heap, aligned for the header. The blocks inside it
+    // are read in place too, so their offsets must keep that alignment - true of every MD2
+    // in pak0, whose records are all whole words.
+    const u8 * const bytes = static_cast<const u8 *>(file);
+    const dmdl_t & header = *static_cast<const dmdl_t *>(file);
+    const bool aligned = (fileBytes >= static_cast<int>(sizeof(dmdl_t))) &&
+                         ((header.ofs_glcmds | header.ofs_frames | header.ofs_skins) & 3) == 0;
+
+    bool built = false;
+    if (aligned && mod::ValidateMD2Header(header, fileBytes, kIconModel))
+    {
+        const size_t cornersBytes = static_cast<size_t>(header.num_tris) * 3u * sizeof(mod::AliasVertex);
+        auto * const corners = static_cast<mod::AliasVertex *>(
+            ps2::heap::TryAllocAligned(ps2::heap::MemAlign(alignof(mod::AliasVertex)), cornersBytes, MemTag::SaveData));
+
+        const s32 * const glcmds = static_cast<const s32 *>(static_cast<const void *>(bytes + header.ofs_glcmds));
+        const int numTris = (corners != nullptr)
+                          ? mod::ExpandGLCmdsToTriangles(glcmds, header.num_glcmds, header.num_xyz,
+                                                         header.num_tris, corners, kIconModel)
+                          : -1;
+
+        const u32 verticesPerTri = kDoubleSidedModel ? 6u : 3u;
+        if (numTris > 0 && NewIconFile(static_cast<u32>(numTris) * verticesPerTri, outFile))
+        {
+            const auto & frame = *static_cast<const daliasframe_t *>(static_cast<const void *>(bytes + header.ofs_frames));
+            AddModelTriangles(outFile, header, frame, corners, numTris);
+
+            // The model's first skin, stretched over the texture as it is - its coordinates are
+            // already normalised, so the stretch is undone where they're looked up.
+            char skinName[MAX_SKINNAME] = {};
+            if (header.num_skins > 0)
+            {
+                std::memcpy(skinName, bytes + header.ofs_skins, sizeof(skinName) - 1);
+            }
+            if (skinName[0] == '\0' || !TextureFromPcxFile(skinName, outFile.texels))
+            {
+                Com_Printf("Save icon: couldn't load the skin of %s, the model will be plain.\n", kIconModel);
+                FillPlainTexture(outFile.texels);
+            }
+            built = true;
+        }
+
+        ps2::heap::Free(corners, cornersBytes, MemTag::SaveData);
+    }
+
+    FS_FreeFile(file);
+    return built;
+}
+
+// What the icon is without the model: a plain square, kIconSize across, so the save directory
+// still has an icon. Both windings, like the model. False if out of memory.
+bool BuildPlainIcon(IconFile & outFile)
+{
+    constexpr int kNumCorners = 6; // Two triangles.
+    if (!NewIconFile(kDoubleSidedModel ? kNumCorners * 2 : kNumCorners, outFile))
+    {
+        return false;
+    }
+
+    constexpr float kHalf = kIconSize * 0.5f;
+    IconVertex corners[kNumCorners];
+    SetVertex(corners[0], -kHalf, -kIconSize, 0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f);
+    SetVertex(corners[1],  kHalf, -kIconSize, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f);
+    SetVertex(corners[2], -kHalf,  0.0f,      0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 1.0f);
+    SetVertex(corners[3],  kHalf, -kIconSize, 0.0f, 0.0f, 0.0f, -1.0f, 1.0f, 0.0f);
+    SetVertex(corners[4],  kHalf,  0.0f,      0.0f, 0.0f, 0.0f, -1.0f, 1.0f, 1.0f);
+    SetVertex(corners[5], -kHalf,  0.0f,      0.0f, 0.0f, 0.0f, -1.0f, 0.0f, 1.0f);
+
+    u32 vertexIndex = 0;
+    for (int tri = 0; tri < kNumCorners / 3; ++tri)
+    {
+        const IconVertex & a = corners[tri * 3 + 0];
+        const IconVertex & b = corners[tri * 3 + 1];
+        const IconVertex & c = corners[tri * 3 + 2];
+
+        PutVertex(outFile, vertexIndex, a);
+        PutVertex(outFile, vertexIndex, b);
+        PutVertex(outFile, vertexIndex, c);
+
+        if (kDoubleSidedModel)
+        {
+            PutVertex(outFile, vertexIndex, a);
+            PutVertex(outFile, vertexIndex, c);
+            PutVertex(outFile, vertexIndex, b);
+        }
+    }
+
+    FillPlainTexture(outFile.texels);
+    return true;
 }
 
 void BuildIconSys(mcIcon & sys)
 {
-    static const iconIVECTOR kBackground[4] = {
+    const iconIVECTOR kBackground[4] = {
         { 96, 36, 20, 0 }, // top left
         { 96, 36, 20, 0 }, // top right
         { 20,  8,  4, 0 }, // bottom left
         { 20,  8,  4, 0 }, // bottom right
     };
-    static const iconFVECTOR kLightDir[3] = {
+    const iconFVECTOR kLightDir[3] = {
         {  0.5f,  0.5f, 0.5f,  0.0f },
         {  0.0f, -0.4f, -0.1f, 0.0f },
         { -0.5f, -0.5f, 0.5f,  0.0f },
     };
-    static const iconFVECTOR kLightColour[3] = {
+    const iconFVECTOR kLightColour[3] = {
         { 0.3f, 0.3f, 0.3f, 0.0f },
         { 0.4f, 0.4f, 0.4f, 0.0f },
         { 0.5f, 0.5f, 0.5f, 0.0f },
     };
-    static const iconFVECTOR kAmbient = { 0.5f, 0.5f, 0.5f, 0.0f };
+    const iconFVECTOR kAmbient = { 0.5f, 0.5f, 0.5f, 0.0f };
 
     std::memset(&sys, 0, sizeof(sys));
     std::memcpy(sys.head, "PS2D", 4);
@@ -611,14 +624,14 @@ bool FileMatches(Device & device, const char * name, const void * expected, cons
         return false;
     }
 
-    static u8 s_chunk[2048];
+    u8 chunk[2048];
     const u8 * const bytes = static_cast<const u8 *>(expected);
     bool same = true;
 
     for (u32 offset = 0; same && offset < sizeBytes;)
     {
-        const u32 n = (sizeBytes - offset < sizeof(s_chunk)) ? sizeBytes - offset : static_cast<u32>(sizeof(s_chunk));
-        same = device.Read(handle, s_chunk, n) && std::memcmp(s_chunk, bytes + offset, n) == 0;
+        const u32 n = (sizeBytes - offset < sizeof(chunk)) ? sizeBytes - offset : static_cast<u32>(sizeof(chunk));
+        same = device.Read(handle, chunk, n) && std::memcmp(chunk, bytes + offset, n) == 0;
         offset += n;
     }
 
@@ -630,9 +643,8 @@ bool FileMatches(Device & device, const char * name, const void * expected, cons
 
 bool EnsureSaveIcons(Device & device)
 {
-    u32 iconBytes = 0;
-    u8 * const iconFile = BuildIconFile(iconBytes);
-    if (iconFile == nullptr)
+    IconFile icon = {};
+    if (!BuildModelIcon(icon) && !BuildPlainIcon(icon))
     {
         SetError("Not enough memory to create the save icon.");
         return false;
@@ -641,14 +653,14 @@ bool EnsureSaveIcons(Device & device)
     mcIcon sys;
     BuildIconSys(sys);
 
-    const bool upToDate = FileMatches(device, kIconModelFile, iconFile, iconBytes) &&
+    const bool upToDate = FileMatches(device, kIconModelFile, icon.data, icon.sizeBytes) &&
                           FileMatches(device, kIconSysFile, &sys, sizeof(sys));
 
     const bool ok = upToDate ||
-                    (WriteWholeFile(device, kIconModelFile, iconFile, iconBytes) &&
+                    (WriteWholeFile(device, kIconModelFile, icon.data, icon.sizeBytes) &&
                      WriteWholeFile(device, kIconSysFile, &sys, sizeof(sys)));
 
-    ps2::heap::Free(iconFile, iconBytes, MemTag::SaveData);
+    ps2::heap::Free(icon.data, icon.sizeBytes, MemTag::SaveData);
 
     if (!ok)
     {

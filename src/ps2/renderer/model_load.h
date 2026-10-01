@@ -6,11 +6,12 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/common.h"         // dmdl_t (q_files.h)
+#include "ps2/renderer/model.h" // AliasVertex
+
 #include <cstdio> // FILE
 
 namespace ps2::mod {
-
-struct ModelInstance;
 
 // Reserves the block the world hunk and the streamed loader's lump scratch are
 // carved out of, for the life of the program. Call once at renderer init, before
@@ -34,7 +35,7 @@ bool IsWorldArenaBlock(const void * ptr);
 struct ScratchBlock
 {
     void * base;
-    unsigned int sizeBytes;
+    u32 sizeBytes;
 };
 ScratchBlock WorldScratchBlock();
 
@@ -63,5 +64,22 @@ struct SubModelTable
 bool LoadBrushModel(ModelInstance & outModel, FILE * file, const char * fileName, SubModelTable & outSubModels);
 bool LoadSpriteModel(ModelInstance & outModel, FILE * file, int fileLen);
 bool LoadAliasMD2Model(ModelInstance & outModel, FILE * file, int fileLen);
+
+// ------------------------------------------------------------------------------------------------
+// MD2 parsing, shared with the memory card icon (save/mc_icon.cpp), which builds its model
+// from one in a buffer rather than through the model cache.
+// ------------------------------------------------------------------------------------------------
+
+// Checks an MD2 header against the size of the file it came from: the version, counts within
+// the engine's limits, a framesize that matches the vertex count, and the skin names, glcmds
+// and keyframes all inside the file. Says what is wrong on the console when it returns false.
+bool ValidateMD2Header(const dmdl_t & header, int fileLen, const char * name);
+
+// Expands a model's glcmds - its triangle strips and fans - into a flat list of three
+// AliasVertex per triangle, in triangle order: keyframe vertex index and normalised skin
+// coordinates. Every vertex index is checked against numXyz and the total against maxTris.
+// Returns the triangle count, or -1 (with the reason on the console) if the list is malformed.
+int ExpandGLCmdsToTriangles(const s32 * glcmds, int numWords, int numXyz, int maxTris,
+                            AliasVertex * out, const char * modelName);
 
 } // namespace ps2::mod

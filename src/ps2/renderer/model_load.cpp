@@ -1797,8 +1797,8 @@ static constexpr u32 AliasFrameStride(const int numXyz)
 //
 // Returns the triangle count written, or -1 if the command list is malformed; everything rejected
 // here is a check the draw paths do not have to make.
-static int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
-                                   const int maxTris, AliasVertex * const out, const char * const modelName)
+int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords, const int numXyz,
+                            const int maxTris, AliasVertex * const out, const char * const modelName)
 {
     int at       = 0;
     int numTris  = 0;
@@ -1890,6 +1890,81 @@ static int ExpandGLCmdsToTriangles(const s32 * const glcmds, const int numWords,
     return numTris;
 }
 
+bool ValidateMD2Header(const dmdl_t & header, const int fileLen, const char * const name)
+{
+    if (fileLen < static_cast<int>(sizeof(dmdl_t))) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' is too small to hold a header (%i bytes)\n", name, fileLen);
+        return false;
+    }
+    if (header.version != ALIAS_VERSION) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has wrong version (%i should be %i)\n",
+                   name, header.version, ALIAS_VERSION);
+        return false;
+    }
+    if (header.ofs_end <= 0 || header.ofs_end > fileLen) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a bad end offset!\n", name);
+        return false;
+    }
+    if (header.skinheight > kMaxMD2SkinHeight) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a skin taller than %i.\n", name, kMaxMD2SkinHeight);
+        return false;
+    }
+    if (header.num_xyz <= 0 || header.num_xyz > MAX_VERTS) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a bad vertex count (%i)!\n", name, header.num_xyz);
+        return false;
+    }
+    if (header.num_tris <= 0 || header.num_tris > MAX_TRIANGLES) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a bad triangle count (%i)!\n", name, header.num_tris);
+        return false;
+    }
+    if (header.num_frames <= 0 || header.num_frames > UINT16_MAX) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a bad frame count (%i)!\n", name, header.num_frames);
+        return false;
+    }
+    if (header.num_glcmds <= 0) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has no glcmds!\n", name);
+        return false;
+    }
+    if (header.num_skins < 0 || header.num_skins > kMaxMD2Skins) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a bad skin count (%i)!\n", name, header.num_skins);
+        return false;
+    }
+
+    // The three blocks a reader of the model uses - skin names, glcmds and keyframes - must each
+    // lie inside the file. Written as a subtraction so a hostile offset cannot overflow the addition.
+    const auto blockFits = [&header](const int ofs, const int bytes) -> bool
+    {
+        return ofs >= static_cast<int>(sizeof(dmdl_t)) && ofs <= header.ofs_end &&
+               bytes >= 0 && bytes <= (header.ofs_end - ofs);
+    };
+
+    const u32 frameStride = AliasFrameStride(header.num_xyz);
+    if (header.framesize != static_cast<int>(frameStride)) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has framesize %i, expected %u for %i vertices!\n",
+                   name, header.framesize, frameStride, header.num_xyz);
+        return false;
+    }
+    if (!blockFits(header.ofs_skins, header.num_skins * MAX_SKINNAME) ||
+        !blockFits(header.ofs_glcmds, header.num_glcmds * 4) ||
+        !blockFits(header.ofs_frames, header.num_frames * header.framesize)) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' has a block running past the end of the file!\n", name);
+        return false;
+    }
+
+    return true;
+}
+
 bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen)
 {
     PS2_Assert(file != nullptr);
@@ -1907,70 +1982,12 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     dmdl_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
 
-    if (header.version != ALIAS_VERSION) [[unlikely]]
+    if (!ValidateMD2Header(header, fileLen, mdl.name)) [[unlikely]]
     {
-        Com_Printf("ERROR: Model '%s' has wrong version (%i should be %i)\n",
-                   mdl.name, header.version, ALIAS_VERSION);
         return false;
     }
-    if (header.ofs_end <= 0 || header.ofs_end > fileLen) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a bad end offset!\n", mdl.name);
-        return false;
-    }
-    if (header.skinheight > kMaxMD2SkinHeight) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a skin taller than %i.\n", mdl.name, kMaxMD2SkinHeight);
-        return false;
-    }
-    if (header.num_xyz <= 0 || header.num_xyz > MAX_VERTS) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a bad vertex count (%i)!\n", mdl.name, header.num_xyz);
-        return false;
-    }
-    if (header.num_tris <= 0 || header.num_tris > MAX_TRIANGLES) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a bad triangle count (%i)!\n", mdl.name, header.num_tris);
-        return false;
-    }
-    if (header.num_frames <= 0 || header.num_frames > UINT16_MAX) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a bad frame count (%i)!\n", mdl.name, header.num_frames);
-        return false;
-    }
-    if (header.num_glcmds <= 0) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has no glcmds!\n", mdl.name);
-        return false;
-    }
-    if (header.num_skins < 0 || header.num_skins > kMaxMD2Skins) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a bad skin count (%i)!\n", mdl.name, header.num_skins);
-        return false;
-    }
-
-    // The three blocks actually read below must each lie inside the file. Written
-    // as a subtraction so a hostile offset cannot overflow the addition.
-    const auto blockFits = [&header](const int ofs, const int bytes) -> bool
-    {
-        return ofs >= static_cast<int>(sizeof(dmdl_t)) && ofs <= header.ofs_end &&
-               bytes >= 0 && bytes <= (header.ofs_end - ofs);
-    };
 
     const u32 frameStride = AliasFrameStride(header.num_xyz);
-    if (header.framesize != static_cast<int>(frameStride)) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has framesize %i, expected %u for %i vertices!\n",
-                   mdl.name, header.framesize, frameStride, header.num_xyz);
-        return false;
-    }
-    if (!blockFits(header.ofs_skins, header.num_skins * MAX_SKINNAME) ||
-        !blockFits(header.ofs_glcmds, header.num_glcmds * 4) ||
-        !blockFits(header.ofs_frames, header.num_frames * header.framesize)) [[unlikely]]
-    {
-        Com_Printf("ERROR: Model '%s' has a block running past the end of the file!\n", mdl.name);
-        return false;
-    }
 
     // The hunk holds nothing but data: the expanded triangle stream, then the
     // keyframes verbatim. The dmdl_t header, the st and triangle arrays, the

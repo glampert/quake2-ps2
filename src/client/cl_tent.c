@@ -1357,7 +1357,7 @@ void CL_AddPlayerBeams(void)
     float yaw, pitch;
     float forward;
     float len, steps;
-    int framenum;
+    int framenum = 0;
     float model_length;
 
     float hand_multiplier;
@@ -1721,6 +1721,7 @@ void CL_ProcessSustain()
     for (i = 0, s = cl_sustains; i < MAX_SUSTAINS; i++, s++)
     {
         if (s->id)
+        {
             if ((s->endtime >= cl.time) && (cl.time >= s->nextthink))
             {
                 //				Com_Printf ("think %d %d %d\n", cl.time, s->nextthink, s->thinkinterval);
@@ -1728,6 +1729,7 @@ void CL_ProcessSustain()
             }
             else if (s->endtime < cl.time)
                 s->id = 0;
+        }
     }
 }
 

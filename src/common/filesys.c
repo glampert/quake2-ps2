@@ -1097,6 +1097,7 @@ void FS_SetDefaultBasePath(const char * path)
     if (path != NULL && *path != '\0')
     {
         strncpy(fs_default_base_path, path, sizeof(fs_default_base_path));
+        fs_default_base_path[sizeof(fs_default_base_path) - 1] = 0;
     }
 }
 

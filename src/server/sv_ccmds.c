@@ -841,6 +841,7 @@ void SV_ConSay_f(void)
     client_t * client;
     int j;
     const char * p;
+    size_t len, room;
     char text[1024];
 
     if (Cmd_Argc() < 2)
@@ -848,17 +849,19 @@ void SV_ConSay_f(void)
 
     strcpy(text, "console: ");
     p = Cmd_Args();
+    len = strlen(p);
 
     // Strip leading/trailing quotes:
-    if (*p == '"')
+    if (*p == '"' && len >= 2)
     {
-        ++p; // skip the first
-        strncat(text, p, strlen(p) - 1); // copy all except the last char (")
+        ++p;      // skip the first
+        len -= 2; // and the last (")
     }
-    else
-    {
-        strcat(text, p);
-    }
+
+    // [PS2_QUAKE]: the args can be as long as text itself (MAX_STRING_CHARS),
+    // so the copy is clamped to the room left after the prefix.
+    room = sizeof(text) - strlen(text) - 1;
+    strncat(text, p, len < room ? len : room);
 
     for (j = 0, client = svs.clients; j < maxclients->value; j++, client++)
     {

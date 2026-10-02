@@ -1251,11 +1251,11 @@ void Com_sprintf(char * dest, int size, const char * fmt, ...)
     if (len >= size)
     {
         Com_DPrintf("WARNING: Com_sprintf overflow of %i in %i\n", len, size);
-        len = size - 1;        // Truncate.
-        bigbuffer[len] = '\0'; // Ensure null terminated.
     }
 
+    // Truncates to size - 1 chars. strncpy leaves dest unterminated when the text fills it.
     strncpy(dest, bigbuffer, size - 1);
+    dest[size - 1] = '\0';
 }
 
 /*

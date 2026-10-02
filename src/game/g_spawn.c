@@ -810,6 +810,7 @@ void SP_worldspawn(edict_t * ent)
     }
     else
         strncpy(level.level_name, level.mapname, sizeof(level.level_name));
+    level.level_name[sizeof(level.level_name) - 1] = 0;
 
     if (st.sky && st.sky[0])
         gi.configstring(CS_SKY, st.sky);

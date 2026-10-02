@@ -518,10 +518,12 @@ void insane_checkdown(edict_t * self)
     if (self->spawnflags & 32) // Always stand
         return;
     if (random() < 0.3)
+    {
         if (random() < 0.5)
             self->monsterinfo.currentmove = &insane_move_uptodown;
         else
             self->monsterinfo.currentmove = &insane_move_jumpdown;
+    }
 }
 
 void insane_checkup(edict_t * self)

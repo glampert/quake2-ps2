@@ -295,24 +295,19 @@ EE_INCS += -I$(SRC_DIR)
 # that C needs C89 forced, -fcommon restored, and the constructs GCC 14+
 # promoted to hard errors downgraded so the untouched engine still compiles.
 #
-# TODO: Look into addressing and fixing some of these warnings, some are likely real bugs
-# that need patching (aggressive-loop-optimizations, maybe-uninitialized, dangling-else, etc).
-#
-#
 # -fsingle-precision-constant: id's code writes its float constants unsuffixed (x * 0.5),
 # which C makes double - and the EE has no double FPU, so every one of those turned a float
 # expression into libgcc soft-float calls. The backend's C++ needs no such flag: it uses f
 # suffixes, and -Wdouble-promotion enforces them.
 #
+# -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast: Allow integer<=>pointer conversions,
+# PS2 has 32bit pointers so sizeof(int) == sizeof(void*).
+#
 EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing -fsingle-precision-constant $(COMMON_DEFS) \
-	-Wno-implicit-function-declaration -Wno-implicit-int -Wno-maybe-uninitialized \
-	-Wno-int-conversion -Wno-int-to-pointer-cast -Wno-pointer-sign \
-	-Wno-pointer-to-int-cast -Wno-missing-braces -Wno-unused-variable \
-	-Wno-stringop-truncation -Wno-unused-but-set-variable -Wno-parentheses \
-	-Wno-aggressive-loop-optimizations -Wno-switch -Wno-dangling-else \
-	-Wno-unused-function -Wno-address -Wno-restrict -Wno-return-type \
-	-Wno-stringop-overflow \
-	-MMD -MP
+	-Wno-implicit-function-declaration -Wno-missing-braces -Wno-int-conversion \
+	-Wno-pointer-sign -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
+	-Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function \
+	-Wno-switch -MMD -MP
 
 # Strict, portable, warnings-as-errors for the new C++ backend (applies ONLY to
 # our .cpp - the untouched engine C above stays lenient). The set targets

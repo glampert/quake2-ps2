@@ -803,17 +803,19 @@ void Cmd_Say_f(edict_t * ent, qboolean team, qboolean arg0)
     }
     else
     {
-        p = gi.args();
+        size_t len, room;
 
-        if (*p == '"') // Copy ignoring quotes
+        p = gi.args();
+        len = strlen(p);
+
+        if (*p == '"' && len >= 2) // Copy ignoring quotes
         {
             p++;
-            strncat(text, p, strlen(p) - 1);
+            len -= 2;
         }
-        else
-        {
-            strcat(text, p);
-        }
+
+        room = sizeof(text) - strlen(text) - 1;
+        strncat(text, p, len < room ? len : room);
     }
 
     // don't let text be too long for malicious reasons

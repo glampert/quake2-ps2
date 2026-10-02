@@ -790,6 +790,7 @@ qboolean CinematicTest_PlayDirect(const char * filename)
     cl.cinematictime = Sys_Milliseconds();
 
     strncpy(last_test_cinematic, filename, sizeof(last_test_cinematic));
+    last_test_cinematic[sizeof(last_test_cinematic) - 1] = 0;
     return true;
 }
 

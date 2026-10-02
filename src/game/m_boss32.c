@@ -579,7 +579,11 @@ void makron_pain(edict_t * self, edict_t * other, float kick, int damage)
     }
     else
     {
+        // [PS2_QUAKE]: braced the way C has always parsed it, so the pain chances stay as shipped:
+        // ~64% at 111-150 damage, none above. id's indentation paired the else with the damage
+        // test instead (45% up to 150, 35% above).
         if (damage <= 150)
+        {
             if (random() <= 0.45)
             {
                 gi.sound(self, CHAN_VOICE, sound_pain6, 1, ATTN_NONE, 0);
@@ -590,6 +594,7 @@ void makron_pain(edict_t * self, edict_t * other, float kick, int damage)
                 gi.sound(self, CHAN_VOICE, sound_pain6, 1, ATTN_NONE, 0);
                 self->monsterinfo.currentmove = &makron_move_pain6;
             }
+        }
     }
 };
 

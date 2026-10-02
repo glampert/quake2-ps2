@@ -28,6 +28,7 @@
  * ================================================================================================ */
 
 #include "ps2/math/vec_mat.h"
+#include "ps2/qwords.h"
 #include "ps2/renderer/vu1.h"
 
 namespace ps2::clip {
@@ -120,30 +121,87 @@ inline void SetClipDists(ClipVertex & c, const math::Mat4 & mvp)
     c.d.f[7] = 0.0f; // along through the lerps, so keep them finite.
 }
 
+// out = a + t * (b - a) across all five quadwords of a vertex: five math::LerpTo calls in one,
+// doing exactly their arithmetic. Apart, each LerpTo moves t into the vector unit again and runs
+// one dependent chain - subtract, multiply, add, store - that waits out the FMAC latency at every
+// step. Together the five subtracts are independent and issue back to back, and only the
+// multiply-adds still queue, behind the one accumulator they share. t is taken from the FPU only
+// after the loads, so the divide that produced it finishes behind them instead of stalling the move.
+//
+// Everything is loaded before anything is stored, so 'out' may alias 'a' or 'b'.
+inline void LerpClipVertex(ClipVertex & out, const ClipVertex & a, const ClipVertex & b, const float t)
+{
+    [[maybe_unused]] u32 tmp;
+    asm (
+        "lqc2    $vf1,  0x00(%3)     \n\t" // vf1-vf5 = a
+        "lqc2    $vf2,  0x10(%3)     \n\t"
+        "lqc2    $vf3,  0x20(%3)     \n\t"
+        "lqc2    $vf4,  0x30(%3)     \n\t"
+        "lqc2    $vf5,  0x40(%3)     \n\t"
+        "lqc2    $vf6,  0x00(%4)     \n\t" // vf6-vf10 = b
+        "lqc2    $vf7,  0x10(%4)     \n\t"
+        "lqc2    $vf8,  0x20(%4)     \n\t"
+        "lqc2    $vf9,  0x30(%4)     \n\t"
+        "lqc2    $vf10, 0x40(%4)     \n\t"
+        "mfc1    %0,    %5           \n\t" // vf11.x = t; the first subtract fills the
+        "vsub    $vf6,  $vf6,  $vf1  \n\t" // mfc1's delay slot (vf6-vf10 = b - a)
+        "qmtc2   %0,    $vf11        \n\t"
+        "vsub    $vf7,  $vf7,  $vf2  \n\t"
+        "vsub    $vf8,  $vf8,  $vf3  \n\t"
+        "vsub    $vf9,  $vf9,  $vf4  \n\t"
+        "vsub    $vf10, $vf10, $vf5  \n\t"
+        "vmulax  $ACC,  $vf6,  $vf11 \n\t" // vf6-vf10 = (b - a) * t + a * 1
+        "vmaddw  $vf6,  $vf1,  $vf0  \n\t"
+        "vmulax  $ACC,  $vf7,  $vf11 \n\t"
+        "vmaddw  $vf7,  $vf2,  $vf0  \n\t"
+        "vmulax  $ACC,  $vf8,  $vf11 \n\t"
+        "vmaddw  $vf8,  $vf3,  $vf0  \n\t"
+        "vmulax  $ACC,  $vf9,  $vf11 \n\t"
+        "vmaddw  $vf9,  $vf4,  $vf0  \n\t"
+        "vmulax  $ACC,  $vf10, $vf11 \n\t"
+        "vmaddw  $vf10, $vf5,  $vf0  \n\t"
+        "sqc2    $vf6,  0x00(%2)     \n\t"
+        "sqc2    $vf7,  0x10(%2)     \n\t"
+        "sqc2    $vf8,  0x20(%2)     \n\t"
+        "sqc2    $vf9,  0x30(%2)     \n\t"
+        "sqc2    $vf10, 0x40(%2)     \n\t"
+        : "=&r" (tmp), "=m" (out)
+        : "r" (&out), "r" (&a), "r" (&b), "f" (t), "m" (a), "m" (b)
+    );
+}
+
 // Sutherland-Hodgman pass of a convex polygon against one plane. 'out' must
 // hold inCount + 1 vertexes. Returns the clipped vertex count.
+//
+// A vertex is tested as the 'b' of the edge it ends, and the verdict and
+// distance carry over to the next edge's 'a' rather than being worked out
+// again - which would mean reloading 'a' too: the copy ahead of the cut stores
+// to 'out', and the compiler cannot prove that misses 'in'.
 inline int ClipAgainstPlane(const ClipVertex * in, const int inCount, ClipVertex * out, const int plane)
 {
-    int outCount = 0;
+    int   outCount = 0;
+    float aDist    = in[0].d.f[plane];
+    bool  aInside  = (aDist >= 0.0f);
     for (int i = 0; i < inCount; ++i)
     {
         const ClipVertex & a = in[i];
         const ClipVertex & b = in[(i + 1 == inCount) ? 0 : i + 1];
 
-        if (a.d.f[plane] >= 0.0f)
+        const float bDist   = b.d.f[plane];
+        const bool  bInside = (bDist >= 0.0f);
+
+        if (aInside)
         {
-            out[outCount++] = a;
+            // Five qwords: a plain assignment is a loop of ld/sd pairs (see qwords.h).
+            CopyQwords<sizeof(ClipVertex) / 16>(&out[outCount++], &a);
         }
-        if ((a.d.f[plane] >= 0.0f) != (b.d.f[plane] >= 0.0f)) // Edge crosses the plane.
+        if (aInside != bInside) // Edge crosses the plane.
         {
-            const float t = a.d.f[plane] / (a.d.f[plane] - b.d.f[plane]);
-            ClipVertex & o = out[outCount++];
-            math::LerpTo(o.pos,    a.pos,    b.pos,    t);
-            math::LerpTo(o.st,     a.st,     b.st,     t);
-            math::LerpTo(o.color,  a.color,  b.color,  t);
-            math::LerpTo(o.d.q[0], a.d.q[0], b.d.q[0], t);
-            math::LerpTo(o.d.q[1], a.d.q[1], b.d.q[1], t);
+            LerpClipVertex(out[outCount++], a, b, aDist / (aDist - bDist));
         }
+
+        aDist   = bDist;
+        aInside = bInside;
     }
     return outCount;
 }

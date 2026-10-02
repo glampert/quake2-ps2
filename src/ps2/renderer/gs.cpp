@@ -231,6 +231,30 @@ void BuildLitPalette(const u32 * palette, const float intensity)
     UploadCluts(&s_litPaletteClut, nullptr);
 }
 
+// Loads the global palette into the GS's CLUT buffer and sets CBP0 to it, so the
+// CLUT_COMPARE_CBP0 in every indexed bind (see MakeTex0) starts from a known state.
+// Nothing documents what CBP0 holds after a GS reset, and whatever ran before us
+// may have left it on one of our CLUT addresses with its own palette in the buffer.
+// The first bind through that CLUT would then compare equal and skip its load.
+//
+// Must follow the CLUT uploads, since it reads one. Anything that rewrites a CLUT
+// in place later has to force a reload the same way: binds compare addresses, not
+// contents.
+void SeedClutBuffer()
+{
+    // TEX2 writes only TEX0's PSM and CLUT fields, so there is no texture to make up
+    // for it, and the first bind rewrites the lot. The PSM has to be an indexed one,
+    // or the GS ignores CLD.
+    GifWriter & pkt = s_texUploadPacket.Begin();
+    pkt.SetRegister(ContextReg(GS_REG_TEX2, DrawContext::Ctx0),
+                    GS_SET_TEX2(GS_PSM_8, static_cast<u32>(s_globalPaletteClut.vramAddr) >> 6,
+                                GS_PSM_32, CLUT_STORAGE_MODE1, 0, CLUT_LOAD_COPY_CBP0));
+    pkt.EndGifPacket();
+
+    s_texUploadPacket.SendNormal();
+    GifPacket::WaitGifChannel();
+}
+
 } // namespace
 
 // ------------------------------------------------------------------------------------------------
@@ -347,6 +371,7 @@ void Init(const Config & cfg)
 
     UploadCluts(&s_globalPaletteClut, &s_alphaRampClut);
     BuildLitPalette(cfg.palette, cfg.intensity);
+    SeedClutBuffer();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -357,12 +382,15 @@ u64 MakeTex0(const tex::Texture & texture, const bool lit)
 {
     PS2_AssertMsg(texture.IsVramResident(), "MakeTex0 for a texture with no VRAM!");
 
-    // Indexed formats sample through one of the fixed CLUTs and reload the on-chip CLUT cache on
-    // every bind - cheap (1 KB) even at the 2D path's bind rate. Everything else leaves the CLUT
-    // fields zero, which is also what CPSM reads as: GS_PSM_32 is 0.
+    // Indexed formats sample through one of the fixed CLUTs, which the GS copies into its on-chip
+    // CLUT buffer when a TEX0 write asks it to. CLUT_COMPARE_CBP0 makes that copy only when the
+    // CLUT's address differs from CBP0's, the one already in the buffer. A plain CLUT_LOAD copied
+    // the 1 KB palette again on every write, and a 3D batch resends TEX0 with every output window
+    // the microprogram kicks, so a frame reloaded the same palette hundreds of times.
     //
-    // TODO: CLUT_COMPARE_CBP0 skips redundant reloads - worthwhile once world textures bind
-    // per-surface.
+    // Comparing the address alone is enough because nothing rewrites a CLUT after Init and every
+    // indexed TEX0 is built here; Init seeds CBP0 (see SeedClutBuffer). Everything else leaves the
+    // CLUT fields zero, which is also what CPSM reads as: GS_PSM_32 is 0.
     const vram::Address clutAddr = ClutAddress(texture.format, lit);
     const bool palettized = (clutAddr != vram::Address::Invalid);
 
@@ -382,7 +410,7 @@ u64 MakeTex0(const tex::Texture & texture, const bool lit)
                        palettized ? (static_cast<int>(clutAddr) >> 6) : 0,
                        GS_PSM_32, // CPSM; only read for palettized PSMs (and == 0 anyway)
                        CLUT_STORAGE_MODE1, 0,
-                       palettized ? CLUT_LOAD : CLUT_NO_LOAD);
+                       palettized ? CLUT_COMPARE_CBP0 : CLUT_NO_LOAD);
 }
 
 u64 MakeMipTbp1(const tex::Texture & texture)

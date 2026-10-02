@@ -679,7 +679,6 @@ against a release ELF you get function names from the symbol table but no file o
 
 **Rendering**
 
-- CLUT reloads could be skipped with `CLUT_COMPARE_CBP0`.
 - General performance work — the target is a solid 60 fps "performance mode" in real gameplay.
 
 **Engine features**

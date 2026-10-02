@@ -37,6 +37,7 @@
 #include <gs_psm.h>
 #include <graph.h>
 #include <kernel.h> // SyncDCache
+#include <timer.h>  // GetTimerSystemTime / kBUSCLKBY256
 #include <draw.h>
 #include <draw2d.h>
 #include <draw_buffers.h>
@@ -255,6 +256,39 @@ void SeedClutBuffer()
     GifPacket::WaitGifChannel();
 }
 
+// ------------------------------------------------------------------------------------------------
+// Present clock
+// ------------------------------------------------------------------------------------------------
+
+static_assert(kPresentTicksPerSec == kBUSCLKBY256, "The present clock counts T2 ticks");
+
+// See gs.h. Init sets what one field lasts on it, by region.
+static PresentClock s_presentClock;
+static u32          s_ticksPerField;
+
+// Stamps the present just made, counting its gap from the last one in fields, rounded to the
+// nearest: a stamp sits a few spin iterations past its field boundary, never half a field.
+void StampPresent()
+{
+    // GetTimerSystemTime scales T2's count up to BUSCLK units, so the low byte is always zero (see
+    // Sys_Milliseconds); shifting it off gives the timer's own 576 kHz ticks. The 32 bits kept wrap
+    // every two hours or so, which the unsigned difference below does not mind.
+    const u32 now = static_cast<u32>(GetTimerSystemTime() >> 8);
+
+    // Two presents are never less than a field apart - each spins for a vsync of its own - so a
+    // gap that rounds to none could only be a clock fault, and counts as the one field it was.
+    u32 fields = 1;
+    if (s_presentClock.frames != 0)
+    {
+        fields = (now - s_presentClock.lastTicks + (s_ticksPerField / 2u)) / s_ticksPerField;
+        fields = (fields != 0) ? fields : 1;
+    }
+
+    s_presentClock.frames   += 1;
+    s_presentClock.fields   += fields;
+    s_presentClock.lastTicks = now;
+}
+
 } // namespace
 
 // ------------------------------------------------------------------------------------------------
@@ -336,6 +370,11 @@ void Init(const Config & cfg)
 
     // Display framebuffer 0 first; auto-detects NTSC/PAL.
     graph_initialize(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, 0, 0);
+
+    // The region graph_initialize picked the video mode by, which fixes the field rate the present
+    // clock counts in: 50 a second on PAL, 59.94 on NTSC.
+    s_ticksPerField = (graph_get_region() == GRAPH_MODE_PAL) ? (kPresentTicksPerSec / 50u)
+                                                             : (((kPresentTicksPerSec * 1001u) + 30000u) / 60000u);
 
     s_texUploadPacket.Init(kTexUploadQwords);
 
@@ -474,11 +513,17 @@ void PresentFramebuffer(const DrawContext ctx)
         PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
         graph_wait_vsync();
     }
+    StampPresent();
 
     const framebuffer_t & fb = detail::g_state.framebuffer[Index(ctx)];
     graph_set_framebuffer_filtered(static_cast<int>(fb.address),
                                    static_cast<int>(fb.width),
                                    static_cast<int>(fb.psm), 0, 0);
+}
+
+const PresentClock & GetPresentClock()
+{
+    return s_presentClock;
 }
 
 // ------------------------------------------------------------------------------------------------

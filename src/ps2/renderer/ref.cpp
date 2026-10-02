@@ -129,55 +129,67 @@ void DrawInternalString(int x, int y, const char * str, const u8 color[3] = kUiB
 }
 
 // Frames-per-second counter at the top-right corner of the screen.
-// Averages a few frames to smooth changes out a bit.
+//
+// Read off gs::PresentClock rather than a clock sampled here. Its stamps sit on the vsyncs the
+// frames went up on, so the rate comes out exact; a sample taken here lands after however much of
+// the frame came first, which moved enough between frames - on top of Sys_Milliseconds' whole
+// milliseconds - that a 4-frame average read 61 on a third of its updates and 59 on one in twenty
+// with every frame on time at 59.94 Hz. Each reading averages half a second, and is replaced as
+// often.
+//
+// The colour counts missed vsyncs instead of comparing against 60, which NTSC's 59.94 Hz sits just
+// under and PAL's 50 Hz never reaches: green while every frame went up on the field after the
+// last, yellow once one did not, red at half the refresh rate or below.
 void DrawFpsCounter()
 {
+    // Restarted each time the counter is switched on, so the time it spent hidden never lands in
+    // an average.
+    static struct
+    {
+        bool                  active;
+        bool                  published;
+        ps2::gs::PresentClock windowStart;
+        int                   fps;
+        const u8 *            color;
+    } s_fps;
+
     if (s_showFpsCount->value == 0.0f)
     {
+        s_fps.active = false;
         return;
     }
 
-    constexpr int kMaxFpsHist = 4;
-    static struct
+    const ps2::gs::PresentClock & clock = ps2::gs::GetPresentClock();
+
+    // A window opens on a present, so both its ends are vsyncs. None has happened yet when the
+    // counter comes on at boot, so it waits for the first.
+    if (!s_fps.active || s_fps.windowStart.frames == 0)
     {
-        int index;
-        int count;
-        int previousTime;
-        int timesHist[kMaxFpsHist];
-    } s_fps;
-
-    const int timeMillisec = Sys_Milliseconds(); // Real time clock
-    const int frameTime = timeMillisec - s_fps.previousTime;
-
-    s_fps.timesHist[s_fps.index++] = frameTime;
-    s_fps.previousTime = timeMillisec;
-
-    if (s_fps.index == kMaxFpsHist)
-    {
-        int total = 0;
-        for (int i = 0; i < kMaxFpsHist; ++i)
-        {
-            total += s_fps.timesHist[i];
-        }
-        if (total == 0)
-        {
-            total = 1;
-        }
-        s_fps.count = ((1000 * kMaxFpsHist) + (total / 2)) / total;
-        s_fps.index = 0;
+        s_fps.active      = true;
+        s_fps.published   = false;
+        s_fps.windowStart = clock;
     }
 
-    char text[32];
-    std::snprintf(text, sizeof(text), "FPS %d", s_fps.count);
+    const u32 elapsed = clock.lastTicks - s_fps.windowStart.lastTicks;
+    if (elapsed >= (ps2::gs::kPresentTicksPerSec / 2u))
+    {
+        const u32 frames = clock.frames - s_fps.windowStart.frames;
+        const u32 fields = clock.fields - s_fps.windowStart.fields;
 
-    const u8* color = kGreen;
-    if (s_fps.count < 60)
-    {
-        color = kYellow;
+        // 32-bit, like Sys_Milliseconds: the R5900 has no 64-bit multiply or divide. A window holds
+        // a few dozen frames at most, nowhere near overflowing frames * 576000.
+        s_fps.fps         = static_cast<int>(((frames * ps2::gs::kPresentTicksPerSec) + (elapsed / 2u)) / elapsed);
+        s_fps.color       = (fields == frames) ? kGreen : (fields >= (2u * frames)) ? kRed : kYellow;
+        s_fps.published   = true;
+        s_fps.windowStart = clock;
     }
-    if (s_fps.count < 30)
+
+    char text[32] = "FPS --"; // until the first window closes
+    const u8 * color = kUiBrightness;
+    if (s_fps.published)
     {
-        color = kRed;
+        std::snprintf(text, sizeof(text), "FPS %d", s_fps.fps);
+        color = s_fps.color;
     }
 
     // A black background to give the text more contrast.

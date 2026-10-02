@@ -7,18 +7,23 @@
  *  left-to-right in application order (model * view * proj). Z+ goes into the screen.
  *  Mat4/Vec4 are 16-byte aligned so they can be handed straight to the DMAC/VU.
  *
+ *  Their copies stay the implicit, trivial ones, though GCC moves a quadword as two ld/sd pairs
+ *  (and a Mat4 as a two-trip loop of them) where one lq/sq would do. An lq/sq assignment operator
+ *  was measured and lost: its asm needs both sides in memory, so an object holding a Vec4 could
+ *  no longer be kept in registers (DrawAliasMD2Entity grew 56% once its LerpStream spilled), and
+ *  v = { ... } got built on the stack only to be loaded back. Nor could it ever cover copy
+ *  construction - a user-declared copy constructor ends aggregate initialization in C++20.
+ *  Where both sides live in memory anyway and the copy is hot, use CopyQwords (ps2/qwords.h).
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
 #include "ps2/math/math.h"
 #include <tamtypes.h>
+#include <type_traits>
 
 #define bits_to_u32(x) __builtin_bit_cast(u32,   (x))
 #define bits_to_f32(x) __builtin_bit_cast(float, (x))
-
-// TODO:
-// - Give Vec3/Vec4 operator[], so we can replace most uses of Quake's vec3_t with Vec3.
-// - Consider giving custom copy assignment/ctor to Vec4/Mat4 that use lq/sq vector instructions.
 
 namespace ps2::math {
 
@@ -29,6 +34,29 @@ namespace ps2::math {
 struct Vec3
 {
     float x, y, z;
+
+    // Indexed access, 0 = x, as on Quake's vec3_t - and like its array, unchecked. x, y and z
+    // are consecutive floats opening a standard-layout struct, so the struct's address is x's
+    // and the other two follow it: at runtime this is the same indexed load a float[3] gets,
+    // and a constant index folds to the member's offset. Constant evaluation forbids the cast,
+    // so there the component is picked by name instead.
+    constexpr float & operator[](int i)
+    {
+        if (std::is_constant_evaluated())
+        {
+            return (i == 0) ? x : (i == 1) ? y : z;
+        }
+        return reinterpret_cast<float *>(this)[i];
+    }
+
+    constexpr const float & operator[](int i) const
+    {
+        if (std::is_constant_evaluated())
+        {
+            return (i == 0) ? x : (i == 1) ? y : z;
+        }
+        return reinterpret_cast<const float *>(this)[i];
+    }
 };
 
 constexpr Vec3 operator+(const Vec3 & a, const Vec3 & b)
@@ -85,6 +113,25 @@ inline Vec3 Normalize(const Vec3 & v)
 struct alignas(16) Vec4
 {
     float x, y, z, w;
+
+    // As Vec3's.
+    constexpr float & operator[](int i)
+    {
+        if (std::is_constant_evaluated())
+        {
+            return (i == 0) ? x : (i == 1) ? y : (i == 2) ? z : w;
+        }
+        return reinterpret_cast<float *>(this)[i];
+    }
+
+    constexpr const float & operator[](int i) const
+    {
+        if (std::is_constant_evaluated())
+        {
+            return (i == 0) ? x : (i == 1) ? y : (i == 2) ? z : w;
+        }
+        return reinterpret_cast<const float *>(this)[i];
+    }
 };
 
 // ------------------------------------------------------------------------------------------------
@@ -96,6 +143,9 @@ struct alignas(16) Mat4
     float m[4][4];
 };
 
+// Stays a constexpr aggregate: inlined, GCC builds the 1.0f dwords in registers and skips the
+// stores its caller overwrites. A constant copied out with four lq + four sq never comes to fewer
+// memory operations - RotationZ makes 10 stores, the copy would make 12 operations, 4 of them loads.
 constexpr Mat4 Identity()
 {
     return {{ { 1.0f, 0.0f, 0.0f, 0.0f },

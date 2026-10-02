@@ -570,11 +570,6 @@ Q_ALWAYS_INLINE Vec3 ToVec3(const float * const p)
     return { p[0], p[1], p[2] };
 }
 
-Q_ALWAYS_INLINE float Component(const Vec3 & v, int axis)
-{
-    return (axis == 0) ? v.x : (axis == 1) ? v.y : v.z;
-}
-
 // Texture-plane projection s = v . vec + vec[3] (vec is a texinfo vecs[] row).
 Q_ALWAYS_INLINE float TexProject(const Vec3 & v, const float vec[4])
 {
@@ -1129,16 +1124,16 @@ void SubdividePolygon(int numVerts, const Vec3 * verts, EmitFn emit)
     for (int axis = 0; axis < 3; ++axis)
     {
         const float mid = kSubdivideSizeF *
-            std::floor(((Component(mins, axis) + Component(maxs, axis)) * 0.5f) / kSubdivideSizeF + 0.5f);
+            std::floor(((mins[axis] + maxs[axis]) * 0.5f) / kSubdivideSizeF + 0.5f);
 
-        if (Component(maxs, axis) - mid < 8.0f) { continue; }
-        if (mid - Component(mins, axis) < 8.0f) { continue; }
+        if (maxs[axis] - mid < 8.0f) { continue; }
+        if (mid - mins[axis] < 8.0f) { continue; }
 
         // Signed distance of each vertex to the split plane, with a wrap slot.
         float dist[kSubdivideSize + 1];
         for (int i = 0; i < numVerts; ++i)
         {
-            dist[i] = Component(verts[i], axis) - mid;
+            dist[i] = verts[i][axis] - mid;
         }
         dist[numVerts] = dist[0];
 

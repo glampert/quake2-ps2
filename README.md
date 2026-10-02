@@ -677,10 +677,6 @@ against a release ELF you get function names from the symbol table but no file o
 
 ## Pending work
 
-**Rendering**
-
-- General performance work — the target is a solid 60 fps "performance mode" in real gameplay.
-
 **Engine features**
 
 - Saving to MEMORY CARD slot 2, and formatting an unformatted card from the game.

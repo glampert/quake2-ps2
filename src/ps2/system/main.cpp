@@ -11,7 +11,7 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/debug/exception_handler.h"
 
-int main()
+int main(int argc, char ** argv)
 {
 #if PS2_QUAKE_DEBUG
     // First thing, ahead of even the memory accounting: a bad pointer any time
@@ -26,10 +26,6 @@ int main()
     // tags add up to stays a faithful picture of the console's 32MB.
     ps2::heap::TagsAddSystemMem();
 
-    // Qcommon_Init wants an argv[]; synthesise a minimal one.
-    static char s_arg0[] = "quake2.elf";
-    static char * s_argv[] = { s_arg0, nullptr };
-
     // Locate the game data - host: under PCSX2, USB mass: on a real console
     // (which needs the IOP module bring-up) - before Qcommon_Init runs
     // FS_InitFilesystem. A build with -DPS2_FS_BASE_PATH=\"...\" pins the
@@ -40,7 +36,7 @@ int main()
     FS_SetDefaultBasePath(ps2::sys::DetectBasePathAndBootIop());
 #endif // PS2_FS_BASE_PATH
 
-    Qcommon_Init(1, s_argv);
+    Qcommon_Init(argc, argv);
 
     int oldtime = Sys_Milliseconds();
     for (;;)

@@ -207,9 +207,10 @@ VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
 VCL_FILES = textured_triangles.vcl particles.vcl
 VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
-# Shared macro/constant includes. vclpp has no -I, so the recipe runs it from
-# VCL_PATH and the programs include these by bare name; they are prerequisites
-# here because the pattern rule below would not otherwise see them change.
+# Shared macro/constant includes. The programs include these by bare name, which
+# vclpp finds next to the including file (and through -I $(VCL_PATH) as well);
+# they are prerequisites here because the pattern rule below would not otherwise
+# see them change.
 VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 
 # The openvcl/dvp-as output checks every VU build runs (see the rule below).
@@ -218,9 +219,12 @@ VU_CHECK = $(SRC_DIR)/tools/scripts/check_vu_code.py
 # vclpp is not part of the ps2dev distribution: it comes in as a git submodule
 # (https://github.com/glampert/vclpp) and is built by its own Makefile, so every
 # VU build runs the pinned version rather than whatever is on PATH - an older
-# vclpp silently mangles macro bodies that have comments in them.
-VCLPP_PATH = $(SRC_DIR)/tools/vclpp
-VCLPP      = $(BUILD_DIR)/tools/vclpp
+# vclpp silently mangles macro bodies that have comments in them. vclpp has a
+# submodule of its own, parse-utils (https://github.com/glampert/parse-utils),
+# whose lexer it is built with.
+VCLPP_PATH        = $(SRC_DIR)/tools/vclpp
+VCLPP_PARSE_UTILS = $(VCLPP_PATH)/external/parse-utils
+VCLPP             = $(BUILD_DIR)/tools/vclpp
 
 # miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
 # compressed with (ps2/save/working_set.cpp). A git submodule like vclpp; only the raw
@@ -424,8 +428,9 @@ $(SAVE_TABLES_O): $(SAVE_TABLES_C)
 # BIN_TARGET puts the binary under build/tools/ rather than in the submodule's
 # work tree, where git would report it as untracked content. Every VU program
 # depends on the binary, so a new vclpp rebuilds them all.
-$(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/*.cpp $(VCLPP_PATH)/*.h $(VCLPP_PATH)/*.hpp)
-	@test -f $(VCLPP_PATH)/Makefile || { echo "$(VCLPP_PATH) is empty - run 'git submodule update --init'"; exit 1; }
+$(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/src/*.cpp $(VCLPP_PATH)/src/*.hpp $(VCLPP_PARSE_UTILS)/*.hpp)
+	@test -f $(VCLPP_PATH)/Makefile && test -f $(VCLPP_PARSE_UTILS)/lexer.hpp || \
+		{ echo "$(VCLPP_PATH) is incomplete - run 'git submodule update --init --recursive'"; exit 1; }
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C $(VCLPP_PATH) CXX=$(HOST_CXX) BIN_TARGET=$(abspath $@)
 
@@ -447,7 +452,7 @@ $(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/*.cpp $(VCLPP_PATH)/*.
 # expected; see the branch check for why they are harmless.
 $(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(VCLPP)
 	@mkdir -p $(dir $@)
-	cd $(VCL_PATH) && $(abspath $(VCLPP)) $(notdir $<) $(abspath $(basename $@).pp.vcl) -j
+	$(VCLPP) -I $(VCL_PATH) -Wundef -Werror -j $< $(basename $@).pp.vcl
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
 	@openvcl -c -o $(basename $@).c.vsm $(basename $@).pp.vcl
 	dvp-as $(basename $@).vsm -o $@

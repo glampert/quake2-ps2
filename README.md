@@ -105,10 +105,10 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 
 Two dependencies come in as git submodules: [vclpp](https://github.com/glampert/vclpp), the
 preprocessor the VU microprograms go through, at [src/tools/vclpp/](src/tools/vclpp/) (built
-with its own Makefile), and [miniz](https://github.com/richgel999/miniz), the deflate codec
-the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/) (its sources are
-compiled straight into the game). Clone with `--recursive`, or run
-`git submodule update --init` in an existing clone.
+with its own Makefile, with a submodule of its own), and [miniz](https://github.com/richgel999/miniz),
+the deflate codec the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/)
+(its sources are compiled straight into the game). Clone with `--recursive`, or run
+`git submodule update --init --recursive` in an existing clone.
 
 ```sh
 make            # debug build -> build/debug/quake2.elf (+ host tools)

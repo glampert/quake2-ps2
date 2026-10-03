@@ -28,9 +28,8 @@
 ; keyframe backface cull uses, and openvcl cannot reorder it away
 ; because the sign travels as data.
 ;
-; Every macro here is a leaf: vclpp does not re-scan an expanded body,
-; so these are called from a #vuprog body, never from inside another macro.
-; Macros taking label names need one unique set per invocation.
+; A macro that places labels takes a prefix for them, which has to be
+; unique to each invocation.
 ;--------------------------------------------------------------------
 
 ; The two ping-pong buffers, absolute VU addresses, and the count spill.
@@ -107,10 +106,8 @@
 ; There is no far plane. Across 606,931 clipped triangles it was never
 ; once straddled, and leaving it out takes a corner off the worst case.
 ;
-; vclpp does not re-scan an expanded macro body, so a macro cannot invoke
-; another one: the sign extraction and the cut are written out here
-; rather than called. The label parameters need one unique set per
-; invocation - vclpp substitutes them as text.
+; 'lbl' prefixes the pass's labels: lbl##Loop, lbl##Kept, lbl##NoCut,
+; lbl##Wrap and lbl##Out.
 ;
 ; The corner count travels through kClipCount rather than in a register.
 ; Two passes in a row are sibling loops, and openvcl's liveness does not
@@ -120,7 +117,7 @@
 ;
 ; In:  kClipCount  corners in srcBuf, first one repeated at the end
 ; Out: kClipCount  corners in dstBuf, same arrangement. Zero, or three up.
-#macro ClipPlanePass: vSelCur, vSelNxt, srcBuf, dstBuf, lblLoop, lblKept, lblNoCut, lblWrap, lblOut
+#macro ClipPlanePass: vSelCur, vSelNxt, srcBuf, dstBuf, lbl
     ilw.x  iLeft,  kClipCount(vi00)
 
     ; Dead unless proven otherwise: every path out of here that drops the
@@ -131,12 +128,12 @@
 
     ; An earlier plane already finished it off.
     iaddi iSignCur, iLeft, -3
-    ibltz iSignCur, lblOut
+    ibltz iSignCur, lbl##Out
 
     iaddiu iWalk, vi00, srcBuf
     iaddiu iOut,  vi00, dstBuf
 
-    lblLoop:
+    lbl##Loop:
 
         lq fCurPos, 0(iWalk)
         lq fCurStq, 1(iWalk)
@@ -203,15 +200,15 @@
         mtir    iSignProd, fClipP[x]
 
         ; Keep this corner if it is inside the plane.
-        ibltz iSignCur, lblKept
+        ibltz iSignCur, lbl##Kept
         sq fCurPos, 0(iOut)
         sq fCurStq, 1(iOut)
         sq fCurCol, 2(iOut)
         iaddiu iOut,   iOut,   3
         iaddiu iCount, iCount, 1
-        lblKept:
+        lbl##Kept:
 
-        ibgez iSignProd, lblNoCut
+        ibgez iSignProd, lbl##NoCut
 
         ; Interpolate the cut onto the plane: t = dCur / (dCur - dNxt).
         ;
@@ -249,11 +246,11 @@
         sq.x fCurStq, 1(iOut)
         iaddiu iOut,   iOut,   3
         iaddiu iCount, iCount, 1
-        lblNoCut:
+        lbl##NoCut:
 
         iaddiu iWalk, iWalk, 3
         iaddi  iLeft, iLeft, -1
-        ibgtz  iLeft, lblLoop
+        ibgtz  iLeft, lbl##Loop
 
     ; Repeat the first survivor at the end, so the next pass - or the fan -
     ; walks edges without a wrap test.
@@ -264,11 +261,11 @@
     ; plane can leave two - and two corners with no wrap vertex is an edge
     ; list the next pass would walk straight off the end of.
     iaddi  iSignCur, iCount, -3
-    ibgez  iSignCur, lblWrap
+    ibgez  iSignCur, lbl##Wrap
     iaddiu iCount,   vi00, 0
-    lblWrap:
+    lbl##Wrap:
 
-    ibltz iSignCur, lblOut
+    ibltz iSignCur, lbl##Out
     lq fCurPos, dstBuf + 0(vi00)
     lq fCurStq, dstBuf + 1(vi00)
     lq fCurCol, dstBuf + 2(vi00)
@@ -276,7 +273,7 @@
     sq fCurStq, 1(iOut)
     sq fCurCol, 2(iOut)
     isw.x iCount, kClipCount(vi00)
-    lblOut:
+    lbl##Out:
 #endmacro
 
 ; Guard-band judgement for a vertex the clipper produced, before it is

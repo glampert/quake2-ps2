@@ -296,6 +296,9 @@
 ; vPos is read, never written - the clipper needs the clip-space position
 ; to survive, so the projection lands in a scratch register instead.
 ;
+; 'lbl' prefixes the three labels placed here, and has to be unique to each
+; invocation.
+;
 ; C-like pseudo-code:
 ;
 ;   void EmitVertex(vec4 pos, vec4 stq, vec4 col,
@@ -328,7 +331,7 @@
 ;           out[offAD].z = 0x01;          // A+D destination: RGBAQ register
 ;       }
 ;   }
-#macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lblNoWarp, lblPacked, lblDone
+#macro EmitVertex: vPos, vStq, vCol, offST, offAD, offXyz, lbl
 
     div        q,          vf00[w], vPos[w]
     mul.xyz    fProj,      vPos,    q
@@ -344,7 +347,7 @@
     mr32 fST, fStqScaled
 
     ilw.w iWarp, kWindowSpill(vi00)
-    ibeq  iWarp, vi00, lblNoWarp
+    ibeq  iWarp, vi00, lbl##NoWarp
 
     ; --- turbulent: ref_gl's EmitWaterPolys, on the vertex that really exists ---
     ;
@@ -409,7 +412,7 @@
     ; Perspective-correct, overwriting what the plain path rotated in above.
     mulq.xy fST, fUV, q
 
-    lblNoWarp:
+    lbl##NoWarp:
 
     ; Word 2 of a PACKED ST write latches Q for an RGBAQ that follows it, which
     ; is where colour mode 1 gets its Q from - it cannot ride in from the vertex
@@ -422,22 +425,22 @@
     sq     fST,  offST(iOutPtr)
     sq.xyz fProj, offXyz(iOutPtr)
 
-    ibeq iColorMode, vi00, lblPacked
+    ibeq iColorMode, vi00, lbl##Packed
 
     ; Mode 1: a computed colour, four floats. ftoi0 lands them one byte per
     ; word, which is exactly what the PACKED RGBAQ descriptor reads.
     ftoi0 fRGBA, vCol
     sq    fRGBA, offAD(iOutPtr)
-    b lblDone
+    b lbl##Done
 
-    lblPacked:
+    lbl##Packed:
     ; Mode 0: the packed u32 straight out of the untouched input register, as an
     ; A+D write to RGBAQ with Q alongside it.
     sq.x   vStq, offAD(iOutPtr)
     sq.y   fQ,   offAD(iOutPtr)
     isw.z  iRegRGBAQ, offAD(iOutPtr)
 
-    lblDone:
+    lbl##Done:
 
 #endmacro
 
@@ -719,9 +722,9 @@
         ibne  vi01, vi00, lClipTriangle
 
         ; --- every corner inside: emit the triangle as it stands ---
-        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0NoWarp, lEmitUn0Packed, lEmitUn0Done }
-        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1NoWarp, lEmitUn1Packed, lEmitUn1Done }
-        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2NoWarp, lEmitUn2Packed, lEmitUn2Done }
+        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0 }
+        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1 }
+        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2 }
         StoreTriangleAdc{ }
 
         iaddiu iOutPtr,    iOutPtr,     9
@@ -745,11 +748,11 @@
         ;
         ; Near goes first because it collapses the most geometry, so the four
         ; passes behind it walk shorter edge lists.
-        ClipPlanePass{ fJnC[z], fJnN[z], kClipBufA, kClipBufB, lNearLoop, lNearKept, lNearNoCut, lNearWrap, lNearOut }
-        ClipPlanePass{ fJnC[x], fJnN[x], kClipBufB, kClipBufA, lXlLoop,   lXlKept,   lXlNoCut,   lXlWrap,   lXlOut   }
-        ClipPlanePass{ fJpC[x], fJpN[x], kClipBufA, kClipBufB, lXrLoop,   lXrKept,   lXrNoCut,   lXrWrap,   lXrOut   }
-        ClipPlanePass{ fJnC[y], fJnN[y], kClipBufB, kClipBufA, lYbLoop,   lYbKept,   lYbNoCut,   lYbWrap,   lYbOut   }
-        ClipPlanePass{ fJpC[y], fJpN[y], kClipBufA, kClipBufB, lYtLoop,   lYtKept,   lYtNoCut,   lYtWrap,   lYtOut   }
+        ClipPlanePass{ fJnC[z], fJnN[z], kClipBufA, kClipBufB, lNear }
+        ClipPlanePass{ fJnC[x], fJnN[x], kClipBufB, kClipBufA, lXl   }
+        ClipPlanePass{ fJpC[x], fJpN[x], kClipBufA, kClipBufB, lXr   }
+        ClipPlanePass{ fJnC[y], fJnN[y], kClipBufB, kClipBufA, lYb   }
+        ClipPlanePass{ fJpC[y], fJpN[y], kClipBufA, kClipBufB, lYt   }
 
         ilw.x iCount, kClipCount(vi00)
 
@@ -783,9 +786,9 @@
             ClipJudge{ fPos1 }
             ClipJudge{ fPos2 }
 
-            EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitFan0NoWarp, lEmitFan0Packed, lEmitFan0Done }
-            EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitFan1NoWarp, lEmitFan1Packed, lEmitFan1Done }
-            EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2NoWarp, lEmitFan2Packed, lEmitFan2Done }
+            EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitFan0 }
+            EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitFan1 }
+            EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2 }
             WholeTriangleReject{ }
 
             iaddiu iOutPtr,    iOutPtr,     9

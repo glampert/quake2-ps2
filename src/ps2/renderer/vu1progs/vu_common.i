@@ -1,17 +1,12 @@
 ;--------------------------------------------------------------------
 ; vu_common.i
 ;
-; Macros every VU1 microprogram shares. Included by bare name: vclpp
-; has no include path and opens the file relative to its working
-; directory, so the Makefile recipe runs it from this directory.
+; Macros every VU1 microprogram shares, included by bare name: vclpp
+; finds this file next to the program including it.
 ;
-; Two vclpp rules shape everything here:
-;
-;  - A macro body is substituted without being re-scanned, so a macro
-;    can never invoke another one. Every macro below is a leaf, meant
-;    to be called directly from a #vuprog body.
-;  - Macros expand before #defines, so a body may reference a constant
-;    each program defines for itself - kGifTags below is one.
+; A macro body is expanded where the macro is invoked, so it may use a
+; constant each program defines for itself after including this file -
+; kGifTags below is one - and it may invoke other macros.
 ;--------------------------------------------------------------------
 
 ; The frame constants, at the fixed low addresses every program reads
@@ -30,19 +25,12 @@
     lq fClipScale, 6(vi00)
 #endmacro
 
-; Copies the batch's GIF tag block, prepared by the EE, to the head of
-; the GS packet at iKick. kGifTags is the program's own offset for it
-; and kNumGifTagQwords in vu1.h pins the count at the seven unrolled
-; here. Leaves iOutPtr just past the block, where the vertices go.
+; Copies a batch's GIF tag block from iTagPtr to iOutPtr, leaving both
+; just past it. kNumGifTagQwords in vu1.h pins the count at the seven
+; unrolled here.
 ;
-; Only particles still uses this - every triangle program sends its
-; output through a window instead, and OpenOutputWindow below repeats
-; these lines rather than calling them, because vclpp cannot nest one
-; macro inside another.
-#macro CopyGifTags
-    iaddiu iTagPtr, iBase, kGifTags
-    iaddiu iOutPtr, iKick, 0
-
+;   memcpy(out, tags, 7 * sizeof(qword)); tags += 7; out += 7;
+#macro CopyGifTagBlock
     lqi fTag0, (iTagPtr++)
     lqi fTag1, (iTagPtr++)
     lqi fTag2, (iTagPtr++)
@@ -58,6 +46,19 @@
     sqi fTag4, (iOutPtr++)
     sqi fTag5, (iOutPtr++)
     sqi fTag6, (iOutPtr++)
+#endmacro
+
+; Copies the batch's GIF tag block, prepared by the EE, to the head of
+; the GS packet at iKick. kGifTags is the program's own offset for it.
+; Leaves iOutPtr just past the block, where the vertices go.
+;
+; Only particles still uses this - every triangle program sends its
+; output through a window instead; see OpenOutputWindow below.
+#macro CopyGifTags
+    iaddiu iTagPtr, iBase, kGifTags
+    iaddiu iOutPtr, iKick, 0
+
+    CopyGifTagBlock{ }
 #endmacro
 
 ; Whole-triangle guard band reject, for a triangle whose output is 3
@@ -148,9 +149,6 @@
 ; the write cursor and the room left. Every window carries the whole
 ; block, the A+D state qwords included; re-latching state the GS already
 ; holds costs six qwords a kick and keeps one code path.
-;
-; The copy below is CopyGifTags' body written out again - see the note
-; there. Change one and change the other.
 #macro OpenOutputWindow
     ; The window address lands straight in the write cursor: an open has no
     ; use for iWin itself, and not naming it here is what keeps it out of
@@ -158,21 +156,7 @@
     ilw.x iOutPtr, kWindowSpill(vi00)
     ilw.z iTagPtr, kWindowSpill(vi00)
 
-    lqi fTag0, (iTagPtr++)
-    lqi fTag1, (iTagPtr++)
-    lqi fTag2, (iTagPtr++)
-    lqi fTag3, (iTagPtr++)
-    lqi fTag4, (iTagPtr++)
-    lqi fTag5, (iTagPtr++)
-    lqi fTag6, (iTagPtr++)
-
-    sqi fTag0, (iOutPtr++)
-    sqi fTag1, (iOutPtr++)
-    sqi fTag2, (iOutPtr++)
-    sqi fTag3, (iOutPtr++)
-    sqi fTag4, (iOutPtr++)
-    sqi fTag5, (iOutPtr++)
-    sqi fTag6, (iOutPtr++)
+    CopyGifTagBlock{ }
 
     iaddiu iVertsLeft, vi00, kWindowVerts
 #endmacro
@@ -212,8 +196,8 @@
     ; kicking the empty window leaves VIF1 waiting at the chain terminator's
     ; FLUSH for a PATH1 transfer the GIF never reports finishing.
     ;
-    ; 'lblEmpty' has to be a label name unique to this invocation - vclpp
-    ; substitutes it as text, and two invocations cannot share one.
+    ; 'lblEmpty' has to be a label name unique to this invocation: two
+    ; invocations cannot share one.
     ibeq   iNloop, vi00, lblEmpty
 
     ; Read here and written back below, so neither is live outside this

@@ -1824,7 +1824,7 @@ static void CM_DecompressVis(byte * in, byte * out)
 // [PS2_QUAKE] 2026-08-29
 // 16-byte aligned because the renderer shares these rows now (it dropped its own
 // copy of the visibility lump and its own decompressor - see MarkLeaves in
-// ps2/renderer/render_view.cpp). Combining two clusters' PVS there ORs the rows a
+// ps2/renderer/view.cpp). Combining two clusters' PVS there ORs the rows a
 // word at a time, and MIPS will not load a word from an odd address.
 //
 static byte pvsrow[MAX_MAP_LEAFS / 8] __attribute__((aligned(16)));

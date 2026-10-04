@@ -163,7 +163,7 @@ CXX_SRC = $(PS2_CXX_SRC)
 # are on the per-frame path, so they are built for size instead of speed - worth
 # ~9 KB of .text, which is RAM the levels get to use instead.
 #
-# The hot renderer (render_view/render_md2/render_sky/gs/vu1/vram/lightmap/ref),
+# The hot renderer (view/md2/sky/gs/vu1/vram/lightmap/ref),
 # the math backend and the whole stock engine keep $(EE_OPTFLAGS).
 SIZE_OPT_CXX_SRC =                    \
 	ps2/renderer/model_load.cpp       \

@@ -400,7 +400,7 @@ build runs the six checks in [check_vu_code.py](src/tools/vu-checker/check_vu_co
 definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
 reuse, immediate truncation, and branch reach.
 
-**Frame pass order** ([render_view.cpp](src/ps2/renderer/render_view.cpp)), following
+**Frame pass order** ([view.cpp](src/ps2/renderer/view.cpp)), following
 `ref_gl`'s `R_RenderView`: PVS + frustum culled world surfaces and the skybox, opaque
 entities, translucent entities, dynamic light flares, particles, deferred translucent world
 and brush surfaces, then the fullscreen polyblend.

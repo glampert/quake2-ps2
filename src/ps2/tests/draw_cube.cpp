@@ -268,7 +268,7 @@ void DrawRotatingCube()
     // path instead: positions quantized to MD2-style bytes and decoded back
     // on VU1, with the decode scale split between the two keyframe streams
     // (both carry the same bytes, so the split must cancel out) and the
-    // decode offset folded into the MVP's row 3 exactly as render_md2 folds
+    // decode offset folded into the MVP's row 3 exactly as md2.cpp folds
     // the lerp's 'move' term. Same cube, give or take 8-bit quantization -
     // a pixel-comparable smoke test of the V4_8 unpack, the itof0 conversion
     // and the lerp, with no model data in the loop.

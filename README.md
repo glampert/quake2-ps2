@@ -103,11 +103,13 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 
 ### Building
 
-Two dependencies come in as git submodules: [vclpp](https://github.com/glampert/vclpp), the
+Three dependencies come in as git submodules: [vclpp](https://github.com/glampert/vclpp), the
 preprocessor the VU microprograms go through, at [src/tools/vclpp/](src/tools/vclpp/) (built
-with its own Makefile, with a submodule of its own), and [miniz](https://github.com/richgel999/miniz),
-the deflate codec the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/)
-(its sources are compiled straight into the game). Clone with `--recursive`, or run
+with its own Makefile, with a submodule of its own), [vu-checker](https://github.com/glampert/vu-checker),
+the checks every VU build runs over the toolchain's output, at [src/tools/vu-checker/](src/tools/vu-checker/),
+and [miniz](https://github.com/richgel999/miniz), the deflate codec the save games are compressed
+with, at [src/tools/miniz/](src/tools/miniz/) (its sources are compiled straight into the game).
+Clone with `--recursive`, or run
 `git submodule update --init --recursive` in an existing clone.
 
 ```sh
@@ -282,10 +284,11 @@ src/
   tools/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc)
     scripts/                      Python helpers (symbolize, compile_commands.json generator,
-                                  check_vu_code - the openvcl/dvp-as output checks run by every VU build,
                                   gen_save_tables - the save games' function/animation name tables)
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
+    vu-checker/                   check_vu_code.py, the openvcl/dvp-as output checks run by every
+                                  VU build (git submodule)
     miniz/                        deflate codec for the save games (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
@@ -393,7 +396,7 @@ straddled across the perf demos. The sky is the one thing still cut on the EE
 ([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
 
 The VU toolchain fails silently in several ways that only show up on screen, so every VU
-build runs the six checks in [check_vu_code.py](src/tools/scripts/check_vu_code.py) over its output: register allocation (by reaching
+build runs the six checks in [check_vu_code.py](src/tools/vu-checker/check_vu_code.py) over its output: register allocation (by reaching
 definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
 reuse, immediate truncation, and branch reach.
 

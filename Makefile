@@ -213,8 +213,10 @@ VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 # see them change.
 VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 
-# The openvcl/dvp-as output checks every VU build runs (see the rule below).
-VU_CHECK = $(SRC_DIR)/tools/scripts/check_vu_code.py
+# The openvcl/dvp-as output checks every VU build runs (see the rule below). They
+# come in as a git submodule (https://github.com/glampert/vu-checker), so other
+# PS2 projects can share them.
+VU_CHECK = $(SRC_DIR)/tools/vu-checker/check_vu_code.py
 
 # vclpp is not part of the ps2dev distribution: it comes in as a git submodule
 # (https://github.com/glampert/vclpp) and is built by its own Makefile, so every
@@ -434,8 +436,13 @@ $(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/src/*.cpp $(VCLPP_PATH
 	@mkdir -p $(dir $@)
 	@$(MAKE) --no-print-directory -C $(VCLPP_PATH) CXX=$(HOST_CXX) BIN_TARGET=$(abspath $@)
 
+# The vu-checker submodule. The script needs no build step, so this rule only
+# runs when the file is missing - an uninitialized submodule. Every VU program
+# depends on it, so a new vu-checker checks them all again.
+$(VU_CHECK):
+	@echo "$(patsubst %/,%,$(dir $@)) is incomplete - run 'git submodule update --init --recursive'"; exit 1
+
 # VU1 microprograms.
-# TODO: Consider putting check_vu_code.py on GH or under the vclpp repo.
 # The checks in check_vu_code.py are not optional, and every one of them exists
 # because the toolchain fails silently. openvcl allocates VI registers by
 # liveness and gets it wrong on control flow past a single counted loop - it
@@ -450,7 +457,7 @@ $(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/src/*.cpp $(VCLPP_PATH
 # done and a failure deletes the object - otherwise the next make would take the
 # bad object as up to date. The 'operand out of range' warnings from dvp-as are
 # expected; see the branch check for why they are harmless.
-$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(VCLPP)
+$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(VCLPP) $(VU_CHECK)
 	@mkdir -p $(dir $@)
 	$(VCLPP) -I $(VCL_PATH) -Wundef -Werror -j $< $(basename $@).pp.vcl
 	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl

@@ -224,8 +224,8 @@ Type = hidkbd
 ```
 
 This attaches a HID keyboard that passes host keystrokes straight through — no per-key
-bindings to set up. Set `in_keyboard 1` in the game to bring the driver up. Two quirks worth
-knowing:
+bindings to set up. The game brings the keyboard driver up at boot, since `in_keyboard`
+defaults to 1; set it to 0 to ignore the keyboard. Two quirks worth knowing:
 
 - The emulated device reports itself as a JIS keyboard, so at boot it logs a batch of
   harmless `Missing host mapping for QKey '<name>'` warnings for JIS-only keys.
@@ -562,7 +562,8 @@ incompatible build before it is read, with `SAVE_FORMAT_VERSION` in
 ## Debugging tools and Cvars
 
 All of these are cvars unless noted. The four overlays default to on in debug builds;
-everything else defaults to the normal rendering path.
+everything else defaults to the normal rendering path. [CVARS.md](CVARS.md) lists every cvar
+the backend registers, with its debug and release defaults and a line on what it does.
 
 **Overlays:** `ps2_show_fps`, `ps2_show_memstats` (per-tag heap usage), `ps2_show_vramstats`
 (texture heap occupancy and per-frame uploads), `ps2_show_drawstats` (nodes walked, surfaces,
@@ -573,9 +574,9 @@ triangles drawn/clipped/culled, batches, entities, particles, dlights).
 `ps2_skip_weapon_model`, `ps2_force_null_models`.
 
 **Renderer toggles:** `ps2_fb_16bit`, `ps2_fb_dither`, `ps2_lightmaps`, `ps2_lightmap_only`,
-`ps2_lightmap_color`, `ps2_lightmap_modulate`, `ps2_dynamic_lightmaps`, `ps2_backface_cull`,
+`ps2_lightmap_color`, `ps2_lightmap_modulate`, `ps2_dynamic_lightmaps`,
 `ps2_md2_lerp_on`, `ps2_md2_vu_lerp`, `ps2_md2_cullface`, `ps2_md2_shadows`,
-`ps2_hd_particles`, `ps2_polyblend`, `ps2_skymip`, `ps2_sky_full_bounds`.
+`ps2_polyblend`, `ps2_skymip`, `ps2_sky_full_bounds`.
 
 **Bring-up scenes:** `ps2_testcube 1` (VU1 path smoke test, with `ps2_testcube_tess`,
 `ps2_testcube_vulerp`, `ps2_testcube_vram_tex_eviction`), `ps2_testcin 1` (cinematic

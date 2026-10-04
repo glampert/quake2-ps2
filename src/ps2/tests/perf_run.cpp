@@ -144,9 +144,9 @@ void RunPerfTest()
         // them is being read during an unattended run: the frame log already
         // carries every number they display, and more.
         //
-        // None of these is CVAR_ARCHIVE, so unlike ps2_perftest itself they do not
-        // need restoring - the config written on the way out never had them, and
-        // the next launch gets the PS2_QUAKE_DEBUG defaults back.
+        // These are all CVAR_ARCHIVE and are not restored, so the config written on
+        // the way out keeps them at 0: after a run, set them back to 1 by hand to
+        // get the panels back.
         Cvar_Set("ps2_show_fps", "0");
         Cvar_Set("ps2_show_memstats", "0");
         Cvar_Set("ps2_show_vramstats", "0");

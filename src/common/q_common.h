@@ -26,7 +26,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "game/q_shared.h"
 
-#define VERSION 3.19
+// [PS2_QUAKE]: Original Quake2 source code release starts at 3.19 and so does
+// PS2 Quake2's first release. Subsequent PS2 releases bump the minor verion.
+#define VERSION 3.20
 #define BASEDIRNAME "baseq2"
 
 #ifdef WIN32

@@ -2,12 +2,15 @@
  * File: cd_audio.cpp
  * Brief: Quake II's CD audio module (client/cdaudio.h), replacing null/cd_null.c. The
  *        soundtrack comes from baseq2/music/trackNN.adp instead of the disc's audio tracks -
- *        NN being the CD track a map asks for through CS_CDTRACK, 02..11 for the stock game.
- *        A MusicStream reads and decodes the file (music_stream.h), and the result goes into
- *        the engine's raw-sample channel - s_rawsamples in client/snd_dma.c, the one the
- *        cinematics stream through - which the mixer lays under the sound effects. It then
- *        reaches the SPU2 inside the audsrv stream that carries the mix anyway, so the music
- *        costs no SIF bandwidth of its own.
+ *        NN being the CD track a map asks for through CS_CDTRACK, 02..11 for the stock game -
+ *        or, when `make music` hasn't encoded that track, from its trackNN.wav. A MusicStream
+ *        reads and decodes the file (music_stream.h), and the result goes into the engine's
+ *        raw-sample channel - s_rawsamples in client/snd_dma.c, the one the cinematics stream
+ *        through - which the mixer lays under the sound effects. It then reaches the SPU2
+ *        inside the audsrv stream that carries the mix anyway, so the music costs no SIF
+ *        bandwidth of its own. A track at another sample rate than the mixer's is converted
+ *        on the way in: a 2:1 half-band filter for exactly double (a 44.1kHz CD rip),
+ *        linear interpolation otherwise.
  *
  *        Behaviour follows id's win32/cd_win.c: a map's track loops cd_loopcount times, then
  *        hands over to the ambient cd_looptrack, which loops for good; cd_nocd (the menu's
@@ -23,6 +26,7 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/audio/half_band.h"
 #include "ps2/audio/music_stream.h"
 #include "ps2/common.h"
 #include "ps2/renderer/profile.h"
@@ -45,10 +49,21 @@ extern "C" {
 
 namespace {
 
+using ps2::audio::HalfBandDecimator;
 using ps2::audio::MusicStream;
 
 // Highest track number a map (or the "cd" command) may ask for, as on an audio CD.
 constexpr int kMaxTrack = 99;
+
+// Where a track's music can come from, tried in this order in each search directory: the
+// .adp `make music` encodes, then the plain .wav it encodes from, for whoever hasn't run it.
+// A ripper's capitalised Track02.wav is tried too, as `make music` accepts it: FAT and macOS
+// hosts ignore case anyway, but PCSX2 on a case-sensitive host does not.
+constexpr const char * kTrackFiles[] = {
+    "%s/music/track%02d.adp",
+    "%s/music/track%02d.wav",
+    "%s/music/Track%02d.wav",
+};
 
 // How far ahead of the mixer's paint position the raw-sample ring is kept filled. This is
 // the hitch tolerance: a frame that takes longer than this to come round again (348 ms at
@@ -81,10 +96,14 @@ static bool s_disabled         = false; // cd_nocd, as CDAudio_Update last saw i
 static bool s_ringPrimed       = false; // s_rawsamples holds music the mixer hasn't painted yet.
 
 static bool s_warnedMissing[kMaxTrack + 1] = {};
+static char s_trackPath[MAX_OSPATH]        = {}; // The file s_stream has open, for the console.
 
-// Linear resampler, for when s_khz picks an output rate other than the file's own (22050,
-// as musenc encodes) - s_khz 11 or 44. 15-bit phase keeps the products inside 32 bits;
-// the R5900 has no 64-bit multiply.
+// For a track at exactly twice the mixer's rate: a 44.1kHz WAV at the default s_khz 22, or
+// any 22050Hz track at s_khz 11. See half_band.h.
+static HalfBandDecimator s_halfBand;
+
+// Linear resampler, for any other rate mismatch: a 22050Hz track at s_khz 44, or a WAV at an
+// odd rate. 15-bit phase keeps the products inside 32 bits; the R5900 has no 64-bit multiply.
 constexpr int kPhaseBits = 15;
 constexpr int kPhaseOne  = 1 << kPhaseBits;
 
@@ -105,8 +124,9 @@ int CvarInt(const cvar_t * const var)
     return static_cast<int>(var->value);
 }
 
-void ResetResampler()
+void ResetRateConversion()
 {
+    s_halfBand.Reset();
     s_resamplePhase = kPhaseOne;
     s_resamplePrev[0] = s_resamplePrev[1] = 0;
     s_resampleNext[0] = s_resampleNext[1] = 0;
@@ -134,7 +154,7 @@ void CloseTrack(const bool dropQueued)
     }
 }
 
-// Tries music/trackNN.adp under every search path directory, the mod's first, like any
+// Tries each of kTrackFiles under every search path directory, the mod's first, like any
 // other game file. Only loose files: the stream reads through its own fd, not the pak code.
 bool OpenTrackFile(const int track, const int extraLoops)
 {
@@ -151,17 +171,31 @@ bool OpenTrackFile(const int track, const int extraLoops)
         }
         previous = dir;
 
-        Com_sprintf(path, sizeof(path), "%s/music/track%02d.adp", dir, track);
-        if (s_stream.Open(path, extraLoops))
+        for (const char * const pattern : kTrackFiles)
         {
-            return true;
+            Com_sprintf(path, sizeof(path), pattern, dir, track);
+            switch (s_stream.Open(path, extraLoops))
+            {
+            case MusicStream::OpenResult::Opened:
+                Com_sprintf(s_trackPath, sizeof(s_trackPath), "%s", path);
+                return true;
+
+            case MusicStream::OpenResult::Unusable:
+                // Already reported. The fallback is for a file that isn't there, not one
+                // that is broken or didn't fit in memory - the next one would most likely
+                // not fit either.
+                return false;
+
+            case MusicStream::OpenResult::Missing:
+                break;
+            } // switch (s_stream.Open(path, extraLoops))
         }
     }
 
     if (!s_warnedMissing[track])
     {
         s_warnedMissing[track] = true;
-        Com_DPrintf("CDAudio: no music/track%02d.adp, track %d stays silent.\n", track, track);
+        Com_DPrintf("CDAudio: no music/track%02d.adp or .wav, track %d stays silent.\n", track, track);
     }
     return false;
 }
@@ -206,16 +240,19 @@ void StartTrack(const int track, const bool looping, const bool dropQueued)
     s_playLooping  = looping;
     s_trackPass    = 1;
     s_paused       = false;
-    ResetResampler();
+    ResetRateConversion();
 
+    char passes[32];
     if (extraLoops == MusicStream::kLoopForever)
     {
-        Com_DPrintf("CDAudio: track %02d, looping.\n", track);
+        Com_sprintf(passes, sizeof(passes), "looping");
     }
     else
     {
-        Com_DPrintf("CDAudio: track %02d, %d pass(es).\n", track, extraLoops + 1);
+        Com_sprintf(passes, sizeof(passes), "%d pass(es)", extraLoops + 1);
     }
+    Com_DPrintf("CDAudio: track %02d from %s (%s, %d Hz %s), %s.\n", track, s_trackPath,
+                s_stream.FormatName(), s_stream.SampleRate(), (s_stream.Channels() > 1) ? "stereo" : "mono", passes);
 }
 
 // Called with the stream finished: all of its music is in the ring, still playing out.
@@ -242,17 +279,50 @@ void TrackFinished()
 // s_rawend, and it would be reloaded and stored back once a frame.
 void StoreFrames(const s16 * const frames, const int count, const int gain)
 {
-    portable_samplepair_t * const ring = s_rawsamples;
+    const s16 * __restrict             in   = frames;
+    portable_samplepair_t * __restrict ring = s_rawsamples;
     int fill = s_rawend;
 
     for (int i = 0; i < count; ++i)
     {
         portable_samplepair_t & out = ring[fill & (MAX_RAW_SAMPLES - 1)];
-        out.left  = frames[i * 2] * gain;
-        out.right = frames[(i * 2) + 1] * gain;
+        out.left  = in[i * 2] * gain;
+        out.right = in[(i * 2) + 1] * gain;
         ++fill;
     }
     s_rawend = fill;
+}
+
+// Fills up to `wanted` ring frames from a track at twice the mixer's rate, through the
+// half-band decimator. Returns how many it managed before the stream ran dry.
+int StoreDecimated(const int wanted, const int gain)
+{
+    s16 frames[HalfBandDecimator::kMaxOutputs * 2];
+    int done = 0;
+
+    while (done < wanted)
+    {
+        const int batch = ((wanted - done) < HalfBandDecimator::kMaxOutputs) ? (wanted - done) : HalfBandDecimator::kMaxOutputs;
+
+        int needed = s_halfBand.InputNeeded(batch);
+        if (needed > s_halfBand.Room())
+        {
+            needed = s_halfBand.Room();
+        }
+        if (needed > 0)
+        {
+            s_halfBand.Commit(s_stream.Decode(s_halfBand.Tail(), needed));
+        }
+
+        const int count = s_halfBand.Produce(frames, batch);
+        if (count <= 0)
+        {
+            break;
+        }
+        StoreFrames(frames, count, gain);
+        done += count;
+    }
+    return done;
 }
 
 bool PullSourceFrame(int frame[2])
@@ -343,8 +413,9 @@ void PumpMusic()
     }
 
     const int gain = static_cast<int>((s_cdVolume->value * static_cast<float>(kUnityGain)) + 0.5f);
+    const int rate = s_stream.SampleRate();
 
-    if (s_stream.SampleRate() == dma.speed)
+    if (rate == dma.speed)
     {
         s16 frames[kPumpFrames * 2];
         while (wanted > 0)
@@ -359,7 +430,7 @@ void PumpMusic()
             s_ringPrimed = true;
         }
     }
-    else if (StoreResampled(wanted, gain) > 0)
+    else if (((rate == 2 * dma.speed) ? StoreDecimated(wanted, gain) : StoreResampled(wanted, gain)) > 0)
     {
         s_ringPrimed = true;
     }
@@ -367,7 +438,7 @@ void PumpMusic()
 
 void PrintInfo()
 {
-    Com_Printf("CD audio (music/trackNN.adp): %s\n", s_disabled ? "off (cd_nocd 1)" : "on");
+    Com_Printf("CD audio (music/trackNN.adp or .wav): %s\n", s_disabled ? "off (cd_nocd 1)" : "on");
 
     if (s_stream.IsOpen())
     {
@@ -378,6 +449,8 @@ void PrintInfo()
                    s_playingTrack, s_playLooping ? "looping" : "once",
                    position / 60, position % 60, length / 60, length % 60,
                    s_trackPass, s_paused ? ", paused" : "");
+        Com_Printf("  %s: %s, %d Hz %s\n", s_trackPath, s_stream.FormatName(), rate,
+                   (s_stream.Channels() > 1) ? "stereo" : "mono");
     }
     else
     {

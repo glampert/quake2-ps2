@@ -31,6 +31,12 @@ paths:
 - Wall mipmaps (WAL levels 1-3 on POT walls): 28.89 → 29.26 MB (max tex+mdl 7.81 → 8.17).
   `ps2_mipmaps 0` reproduces the old numbers.
 - CD music: 29.31 MB (~25 KB static).
+- CD music's WAV fallback moved the stream buffers to the heap (`MemTag::Music`, the `Mus`
+  column), held only while a track plays: the loading plaque stops music, so transitions
+  never carry them. Static dropped to ~12 KB. On the code of 2026-10-05 the worst moment is
+  city3's steady state either way: **29.44 MB** with `.adp` tracks (2 × 8 KB buffers) and
+  **29.54 MB** with every track falling back to a 44.1 kHz WAV (2 × 64 KB), 1.98 MB still
+  free. Exactly the 112 KB of buffer difference.
 - **Fixed segregated heaps for textures/models were rejected.** A partition must cover
   max(tex+mdl) + max(everything else), and those peak at different moments, so it costs about
   1.2 MB more than fragmentation does. Fragmentation (arena minus live peak) measured
@@ -43,4 +49,4 @@ paths:
 
 Reference summaries live in `build/baselines/` (local, untracked): `mapcycle-fbl0` (before
 free-before-load), `mapcycle-fbl1`, `mapcycle-mip0`/`mip1`, `mapcycle-vwep`,
-`mapcycle-cdmusic`.
+`mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, current code), `mapcycle-cdwav` (WAV only).

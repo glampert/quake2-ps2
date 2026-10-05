@@ -27,6 +27,7 @@ enum class MemTag : size_t
     WorldMdl,  // World geometry.
     Lightmap,  // Lightmap atlas buffers (see renderer/lightmap.cpp).
     Audio,     // Decoded sound cache. Its own tag because it is one of the largest pools in the game.
+    Music,     // Streamed CD music read buffers (audio/music_stream.cpp), held only while a track plays.
     SaveData,  // The save game working set (compressed level states) and the save/load I/O buffers.
 
     TagCount,  // Number of entries in this enum. Internal use only.

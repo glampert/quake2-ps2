@@ -33,7 +33,8 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 - **Sound.** The stock portable Quake mixer painting into a ring buffer that is streamed to
   the SPU2 through the `audsrv` IOP driver, including cinematic audio.
 - **Music.** The CD soundtrack, streamed from loose SPU2 ADPCM files in `baseq2/music/`
-  in place of the disc's audio tracks, with id's per-map tracks and looping rules.
+  in place of the disc's audio tracks - or straight from the ripped WAVs if they haven't
+  been converted - with id's per-map tracks and looping rules.
 - **Input.** DualShock gamepad (analog sticks + full button mapping + rumble) and an optional
   USB keyboard through `ps2kbd`, usable simultaneously.
 - **Save games** on the memory card (MEMORY CARD slot 1, with a PS2 browser icon), or as
@@ -87,7 +88,7 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
        pak0.pak
        players/      (optional, loose files)
        video/        (optional, .cin cinematics)
-       music/        (optional, trackNN.adp soundtrack - see below)
+       music/        (optional, trackNN.adp or trackNN.wav soundtrack - see below)
        config.cfg
    ```
 
@@ -100,6 +101,13 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
    about 1.5 MB a minute, ~41 MB for the whole soundtrack. Only the `.adp` files need to go
    onto a USB stick. Input must be at 22050 Hz or exactly twice that (a CD rip); convert
    anything else first, e.g. `afconvert -f WAVE -d LEI16@22050 -c 2 in.flac out.wav` on macOS.
+
+   Skipping `make music` works too: for a track with no `.adp`, the game plays the
+   `trackNN.wav` itself (16-bit PCM, mono or stereo). It is the heavier option on every
+   count - a CD rip is 7x the bytes of its `.adp` (176 KB/s off the USB stick), holds 128 KB
+   of RAM in read buffers instead of 16 KB while it plays, and costs more EE time to resample
+   from 44.1 kHz - so it is a convenience, not the way to ship. 44.1 and 22.05 kHz play best;
+   other rates go through a plain linear resampler.
 
 ### Building
 
@@ -439,14 +447,21 @@ turns it off deliberately.
 no CDVD path, so [cd_audio.cpp](src/ps2/audio/cd_audio.cpp) implements the `CDAudio_*`
 module over loose `baseq2/music/trackNN.adp` files instead. They are SPU2 ADPCM - the PS2's
 native sample format, 3.5x smaller than 16-bit PCM - chunk-interleaved so the same files
-could later be streamed straight into SPU2 voices. [`MusicStream`](src/ps2/audio/music_stream.h)
-keeps just two 8 KB read buffers in flight (~650 ms of audio; ~25 KB of RAM in all) and
-decodes on demand; the file reads are issued from a reader thread at the main thread's
-priority, since a blocking read off a USB stick could otherwise cost a frame. The decoded
-music is fed into the mixer's raw-sample channel (the one cinematics use), so it reaches the
-SPU2 inside the existing audsrv stream at no extra SIF bandwidth. It costs about 0.15-0.2 ms
-of EE time per frame as measured in PCSX2. Behaviour follows id's `cd_win.c`: a map's track
-loops `cd_loopcount` times, then the ambient `cd_looptrack` loops for good.
+could later be streamed straight into SPU2 voices. A track with no `.adp` falls back to its
+`trackNN.wav` (16-bit PCM), so the music plays even if `make music` was never run.
+[`MusicStream`](src/ps2/audio/music_stream.h) keeps just two read buffers in flight - 8 KB
+each for ADPCM (~650 ms at 22050 Hz), up to 64 KB each for a WAV (~740 ms of a CD rip) - and
+decodes on demand. The buffers come from the heap when a track starts and go back when it
+stops, so music never holds memory across a level load, and a track that can't get them
+stays silent with a warning instead of halting. The file reads are issued from a reader
+thread at the main thread's priority, since a blocking read off a USB stick could otherwise
+cost a frame. The decoded music is fed into the mixer's raw-sample channel (the one
+cinematics use), so it reaches the SPU2 inside the existing audsrv stream at no extra SIF
+bandwidth; a track at twice the mixer's rate (a 44.1 kHz WAV) goes through a 23-tap
+half-band decimator ([half_band.h](src/ps2/audio/half_band.h)) on the way in. In PCSX2 it
+costs about 0.14 ms of EE time per frame for an `.adp` track and 0.27 ms for a 44.1 kHz WAV.
+Behaviour follows id's `cd_win.c`: a map's track loops `cd_loopcount` times, then the ambient
+`cd_looptrack` loops for good.
 
 ### Input
 
@@ -637,7 +652,8 @@ run ends with `SaveTest: PASS` or `FAIL`. Debug builds only.
 **CD music:** `cd_nocd` (the Options menu's "CD music" toggle), `cd_volume` (0-1, the "music
 volume" slider), `cd_loopcount` / `cd_looptrack` (id's loop-to-ambient rule, default 4 and 11).
 The `cd` command drives it by hand: `cd play N`, `cd loop N`, `cd stop`, `cd pause`,
-`cd resume`, `cd on`, `cd off`, and `cd info` for the current track, position and settings.
+`cd resume`, `cd on`, `cd off`, and `cd info` for the current track, its file and format,
+position and settings.
 With `developer 1` it also logs track starts, loops, missing files and stream underruns.
 
 **Loading an empty map for renderer work:** `deathmatch 1` is the switch that frees every monster at spawn. Both it and `cheats` are latched, so they must be set *before* `map`:

@@ -140,16 +140,17 @@ void ReportMap(const char * const name, const int index)
     using ps2::heap::MemTag;
     constexpr size_t kUnit = ps2::heap::kMemUnitStrSize;
 
-    char world[kUnit], audio[kUnit], tex[kUnit], alias[kUnit], sprite[kUnit];
+    char world[kUnit], audio[kUnit], music[kUnit], tex[kUnit], alias[kUnit], sprite[kUnit];
     char total[kUnit], peak[kUnit], freeMem[kUnit], arena[kUnit];
 
     const size_t peakNow = ps2::heap::GetPeakMemBytes();
 
-    Com_Printf("MapCycle [%2d/%2d] %-9s World %-9s Audio %-9s Tex %-9s Mdl %-9s Spr %-9s "
+    Com_Printf("MapCycle [%2d/%2d] %-9s World %-9s Audio %-9s Mus %-9s Tex %-9s Mdl %-9s Spr %-9s "
                "TOTAL %-9s PEAK %-9s FREE %-9s%s\n",
                index + 1, ArrayLength(kMaps), name,
                FormatMemoryUnit(TagBytes(MemTag::WorldMdl),  true, world,  sizeof(world)),
                FormatMemoryUnit(TagBytes(MemTag::Audio),     true, audio,  sizeof(audio)),
+               FormatMemoryUnit(TagBytes(MemTag::Music),     true, music,  sizeof(music)),
                FormatMemoryUnit(TagBytes(MemTag::TexImage),  true, tex,    sizeof(tex)),
                FormatMemoryUnit(TagBytes(MemTag::AliasMdl),  true, alias,  sizeof(alias)),
                FormatMemoryUnit(TagBytes(MemTag::SpriteMdl), true, sprite, sizeof(sprite)),

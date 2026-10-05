@@ -84,6 +84,7 @@ static const char * const s_memTagNames[kMemTagCount] = {
     "World",
     "Lightmap",
     "Audio",
+    "Music",
     "SaveData",
 };
 

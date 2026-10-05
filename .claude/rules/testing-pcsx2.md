@@ -120,5 +120,12 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
   fake only the hardware class.
 - **Emulate the EE FPU** in any math harness: `1/sqrt(0)` must give FLT_MAX, not inf (see
   [ps2-platform.md](ps2-platform.md)). Otherwise target-only bugs won't reproduce.
+- **ASan can't see an overrun that stays inside one object** (a member array reading into
+  the next member). Heap-allocate the object under test, so writes past its last member hit
+  the redzone, and poison what must not be read with `ASAN_POISON_MEMORY_REGION` from
+  `<sanitizer/asan_interface.h>` (it handles a partial first granule), unpoisoning after the
+  call. Give outputs exact-size heap buffers with canaries. Then prove the harness by seeding
+  defects into a shadow copy of the header (`-I<mutant dir>` first): the `half_band.h`
+  harness caught 7 of 7 (off-by-ones, an over-long memmove, a wrong tap, a 32-bit overflow).
 - Code with EE/VU0 inline asm can't run on the host. Use the standalone test ELF recipe in
   [performance.md](performance.md).

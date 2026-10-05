@@ -65,6 +65,15 @@ All policy lives in the backend. The engine only builds the text (`open_memstrea
   write is skipped when unchanged.
 - **Read:** emulator = the host file first, with the card as fallback. Console = **the card
   first**, then the USB `baseq2/config.cfg`.
+- **Order:** binds in key-number order, then archived cvars sorted by name, so an unchanged
+  setup writes the same bytes every quit. id wrote cvars in list order (newest first), and
+  `exec config.cfg` creates most of them before registration, so every quit reversed them.
+  That churned the committed file and defeated the card's skip-when-unchanged.
+- An archived cvar that a run never registers is dropped from the file (id's behaviour):
+  a `set` creates it with no flags. So **register every `CVAR_ARCHIVE` cvar in every build**,
+  outside any `PS2_QUAKE_DEBUG`/`PS2_QUAKE_PROFILE` gate, even if nothing reads it there.
+  `ps2_perftest` does this through `RegisterPerfTestCvar`. The game's cvars still drop if a
+  run quits before any server starts, but the attract loop starts one within seconds.
 - The console branch was only host-tested, because this setup can't boot from `mass:`. The
   host policy test uses directories literally named `host:`/`mass:` to catch stray writes.
 

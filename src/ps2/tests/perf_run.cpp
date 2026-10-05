@@ -18,14 +18,22 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#if PS2_QUAKE_PROFILE
 #include "ps2/common.h"
 #include "ps2/tests/perf_run.h"
+#if PS2_QUAKE_PROFILE
 #include "ps2/renderer/profile.h"
+#endif // PS2_QUAKE_PROFILE
 
 namespace ps2::test {
 namespace {
 
+// Archived, because there is no command line on this target: the only way to
+// arm a run before the first frame is a line in config.cfg, and the game
+// rewrites that file from the archived cvars on the way out. Without the flag
+// the run's own quit would erase the line that started it.
+static const cvar_t * s_enabled = nullptr;
+
+#if PS2_QUAKE_PROFILE
 // The demos the stock attract loop cycles through, in its order. The idlog.cin
 // cinematic those aliases interleave is deliberately left out: a cinematic is a
 // full screen blit down a path the world renderer never touches, so it would
@@ -108,17 +116,18 @@ void NextDemoOrFinish()
     Cbuf_AddText("quit\n");
     s_done = true;
 }
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace
 
+void RegisterPerfTestCvar()
+{
+    s_enabled = Cvar_Get("ps2_perftest", "0", CVAR_ARCHIVE);
+}
+
+#if PS2_QUAKE_PROFILE
 void RunPerfTest()
 {
-    // Archived, because there is no command line on this target: the only way to
-    // arm a run before the first frame is a line in config.cfg, and the game
-    // rewrites that file from the archived cvars on the way out. Without the flag
-    // the run's own quit would erase the line that started it.
-    static const cvar_t * s_enabled = Cvar_Get("ps2_perftest", "0", CVAR_ARCHIVE);
-
     if (s_enabled->value == 0.0f || s_done)
     {
         return;
@@ -213,5 +222,6 @@ void RunPerfTest()
     }
 }
 
-} // namespace ps2::test
 #endif // PS2_QUAKE_PROFILE
+
+} // namespace ps2::test

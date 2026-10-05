@@ -11,9 +11,16 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
-#if PS2_QUAKE_PROFILE
 namespace ps2::test {
 
+// Registers the "ps2_perftest" cvar. Call once from PS2_RefInit, in every build.
+// Builds without the profiler can't run the test, but they register the cvar
+// anyway. It is archived, and an archived cvar a build never registers is
+// dropped from config.cfg on quit, so switching between debug and release
+// builds would otherwise add and remove its line each time.
+void RegisterPerfTestCvar();
+
+#if PS2_QUAKE_PROFILE
 // Advances the performance run by one frame. Call every frame from PS2_EndFrame.
 // Gated by the "ps2_perftest" cvar; a no-op when it is 0 and once the run is over.
 //
@@ -35,6 +42,6 @@ namespace ps2::test {
 // Do not enable alongside "ps2_testmaps" - both drive the server through the
 // command buffer and would fight over it.
 void RunPerfTest();
+#endif // PS2_QUAKE_PROFILE
 
 } // namespace ps2::test
-#endif // PS2_QUAKE_PROFILE

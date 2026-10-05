@@ -569,7 +569,8 @@ through (`Sys_SaveStoreConfig` from `CL_WriteConfiguration`, `Sys_SaveLoadConfig
 | **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the USB stick's `baseq2/config.cfg` only if the card has none |
 
 The config is written on quit and on leaving the video menu after a change; the card copy is
-only rewritten when it differs. A card that is missing or full just skips it, with a line on
+only rewritten when it differs. The archived cvars are written sorted by name (id wrote them in
+registration order, which reversed on every quit), so the same settings always give the same file. A card that is missing or full just skips it, with a line on
 the console - on a console without a memory card the settings then last until it is switched
 off. The `config.cfg` the game data's folder holds on a USB stick is never written by the game,
 so one placed there by hand serves as the default for cards that have none.

@@ -533,6 +533,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     s_showVramStats     = Cvar_Get("ps2_show_vramstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
     s_showDrawStats     = Cvar_Get("ps2_show_drawstats", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
     s_showProfileStats  = Cvar_Get("ps2_show_profile",   PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
+    ps2::test::RegisterPerfTestCvar(); // Archived, so registered in every build; see perf_run.h.
 
     const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
     const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);

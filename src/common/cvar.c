@@ -461,20 +461,41 @@ Writes lines containing "set variable value" for all variables
 with the archive flag set to true.
 
 [PS2_QUAKE]: to a stream, so CL_WriteConfiguration can build config.cfg in memory.
+
+[PS2_QUAKE]: sorted by name. id wrote them in list order, and the list is
+newest-first: config.cfg runs before most cvars are registered, so the ones it
+creates come out in reverse file order, and every quit flipped the whole file.
 ============
 */
 void Cvar_WriteVariablesToFile(FILE * f)
 {
     cvar_t * var;
+    cvar_t * best;
+    const char * last = NULL;
     char buffer[1024];
 
-    for (var = cvar_vars; var; var = var->next)
+    // [PS2_QUAKE]: a selection pass per line rather than a sorted copy of the list.
+    // It only runs on quit and on leaving the video menu, and cannot fail on an
+    // allocation. Names are unique, so "after the last one written" walks every
+    // archived cvar exactly once.
+    for (;;)
     {
-        if (var->flags & CVAR_ARCHIVE)
+        best = NULL;
+        for (var = cvar_vars; var; var = var->next)
         {
-            Com_sprintf(buffer, sizeof(buffer), "set %s \"%s\"\n", var->name, var->string);
-            fprintf(f, "%s", buffer);
+            if (!(var->flags & CVAR_ARCHIVE))
+                continue;
+            if (last && strcmp(var->name, last) <= 0)
+                continue;
+            if (!best || strcmp(var->name, best->name) < 0)
+                best = var;
         }
+        if (!best)
+            break;
+
+        Com_sprintf(buffer, sizeof(buffer), "set %s \"%s\"\n", best->name, best->string);
+        fprintf(f, "%s", buffer);
+        last = best->name;
     }
 }
 

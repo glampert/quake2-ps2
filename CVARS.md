@@ -11,7 +11,9 @@ bigger picture.
   ([vid.cpp](src/ps2/renderer/vid.cpp)); the page says which apply live and which need a
   map load or a restart.
 - **—** in the release column means the cvar is not registered at all there: the code that
-  reads it is compiled out with `PS2_QUAKE_DEBUG` / `PS2_QUAKE_PROFILE`.
+  reads it is compiled out with `PS2_QUAKE_DEBUG` / `PS2_QUAKE_PROFILE`. Archived cvars never
+  get a **—**. Every build registers them, even where nothing reads them, because the quit
+  drops an archived cvar the build never registered from `config.cfg`.
 
 ## Renderer: video and frame
 
@@ -81,7 +83,7 @@ bigger picture.
 | `ps2_show_drawstats` | `1` | `0` | Arch. | Nodes, surfaces, triangles, batches, entities, particles and dlights per frame. |
 | `ps2_show_profile` | `1` | `0` | Arch. | Per-stage frame timings panel; does nothing in release, where the profiler is compiled out. |
 | `ps2_frame_log` | `0` | — | | Log per-frame timings and counters to stdout in batches, for the `frame_log` scripts. |
-| `ps2_perftest` | `0` | — | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits. |
+| `ps2_perftest` | `0` | `0` | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits; does nothing in release, where the profiler is compiled out. |
 
 ## Sound and music
 

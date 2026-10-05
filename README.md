@@ -1,6 +1,8 @@
 
 # Quake II port for the PlayStation 2
 
+![Quake 2 PS2](misc/screens/banner.jpg "Quake 2 PS2")
+
 ## Overview
 
 This is an unofficial fan-made port, targeting the PlayStation 2 console, of the original

@@ -15,7 +15,9 @@ build/*
 !build/dummy.txt
 
 # Quake2 game asset files, not part of this repository.
-baseq2
+# Keep the default config file loaded at startup and saved by Quake2 on quit.
+baseq2/*
+!baseq2/config.cfg
 
 # Generated per-machine editor tooling:
 compile_commands.json

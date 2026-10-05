@@ -154,6 +154,11 @@ with `STRIP_ELF=0` to ship the unstripped ELF as `quake2.elf` instead.
 | `make clean` | Removes all build artifacts, both configs. |
 | `make clean_vu` | Removes only the assembled VU microprograms (`build/vu/`). |
 
+To cut a release, [make_github_release.sh](src/tools/scripts/make_github_release.sh)
+`[-f] [version]` runs `make clean`, `make` and `make release`, then packages both ELFs with
+an empty `baseq2/` tree and the committed `config.cfg` into `github_rel_<version>/` (one
+zip per config). `version` defaults to `VERSION` in `src/common/q_common.h`.
+
 The host tools and the assembled VU microprograms are config-independent (no EE compiler
 flag reaches either), so they are built once and shared, outside `build/<config>/`.
 
@@ -285,6 +290,7 @@ src/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc)
     scripts/                      Python helpers (symbolize, compile_commands.json generator,
                                   gen_save_tables - the save games' function/animation name tables)
+                                  and make_github_release.sh
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
     vu-checker/                   check_vu_code.py, the openvcl/dvp-as output checks run by every

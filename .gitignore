@@ -19,6 +19,9 @@ build/*
 baseq2/*
 !baseq2/config.cfg
 
+# Release packages made by src/tools/scripts/make_github_release.sh:
+github_rel_*/
+
 # Generated per-machine editor tooling:
 compile_commands.json
 

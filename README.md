@@ -684,6 +684,8 @@ against a release ELF you get function names from the symbol table but no file o
 **Engine features**
 
 - Saving to MEMORY CARD slot 2, and formatting an unformatted card from the game.
+- Support second game connector and multiple slots. Right now only port 0/slot 0 (controller connector 1) are supported.
+- Split-screen mutiplayer should be possible with a bit of work!
 
 **Build and project**
 

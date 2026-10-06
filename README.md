@@ -607,20 +607,21 @@ All of these are cvars unless noted. The four overlays default to on in debug bu
 everything else defaults to the normal rendering path. [CVARS.md](CVARS.md) lists every cvar
 the backend registers, with its debug and release defaults and a line on what it does.
 
-**Log file:** `ps2_logfile` (on by default for now) copies everything the console prints,
-plus `Sys_Error`, to `quake2.log` next to `baseq2/`. That's `build/<config>/quake2.log` under PCSX2, and the ELF's folder on a USB
-stick. It is the only log a console run leaves. Every line is stamped with the seconds since
-boot, and every write opens, appends and closes the file. On a FAT drive that close is the
-only flush: bdmfs_fatfs has no sync, so a log kept open could come back empty after a power
-cycle. A run that hangs or crashes still leaves its log up to the last line.
+**Log file:** `ps2_logfile` (off by default, and on in a build with the load trace on) copies
+everything the console prints, plus `Sys_Error`, to `quake2.log` next to `baseq2/`. That's
+`build/<config>/quake2.log` under PCSX2, and the ELF's folder on a USB stick. It is the only
+log a console run leaves. Every line is stamped with the seconds since boot, and every write
+opens, appends and closes the file. On a FAT drive that close is the only flush: bdmfs_fatfs
+has no sync, so a log kept open could come back empty after a power cycle. A run that hangs or
+crashes still leaves its log up to the last line.
 
 **Load trace:** set `PS2_QUAKE_LOAD_TRACE` to 1 in
-[load_trace.h](src/ps2/debug/load_trace.h) (it ships 0), and the level loading path prints
-`[load +<ms> ms]` lines from a cinematic's end to the first 3D frame after it. The lines
-cover the server's spawn, the client's precache, sound and refresh registration, and every
-file read with its size and read time. While a level comes up, a heartbeat a second shows the
-client's state. "+ms" is the time since the previous trace, so a step's duration is on the line
-that ends it.
+[load_trace.h](src/ps2/debug/load_trace.h) (it ships 0), which also turns the log file on by
+default, and the level loading path prints `[load +<ms> ms]` lines from a cinematic's end to
+the first 3D frame after it. The lines cover the server's spawn, the client's precache, sound
+and refresh registration, and every file read with its size and read time. While a level comes
+up, a heartbeat a second shows the client's state. "+ms" is the time since the previous trace,
+so a step's duration is on the line that ends it.
 
 **Loading screen:** while the loading plaque is up, the screen shows the plaque with a status
 bar naming the file being read, and the files, megabytes and seconds so far. It's redrawn at

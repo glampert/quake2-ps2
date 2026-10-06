@@ -15,7 +15,8 @@
  *        comes up (CL_Frame).
  *
  *        PS2_QUAKE_LOAD_TRACE is 0 in the repository: set it to 1 to trace, and back to 0
- *        before committing. When it is 0 every trace compiles to nothing.
+ *        before committing. When it is 0 every trace compiles to nothing. It also decides
+ *        whether the log file is on by default, since that is where the trace is read back.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

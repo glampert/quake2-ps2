@@ -15,6 +15,7 @@
 
 #include "ps2/common.h"
 #include "ps2/debug/log_file.h"
+#include "ps2/debug/load_trace.h"
 
 #include <cstdio>
 #include <fcntl.h>
@@ -30,10 +31,10 @@ namespace {
 
 constexpr const char * kLogFileName = "quake2.log";
 
-// What the log does until ps2_logfile is registered, and that cvar's default.
-// On in every build for now, while USB loading is being debugged on hardware.
-// TEMP: Disable once hardware USB boot issues are debugged.
-constexpr bool kLogFileDefaultOn = true;
+// What the log does until ps2_logfile is registered, and that cvar's default. On only in a build
+// with the load trace on: a session debugging a load on hardware wants both, and the trace is
+// read back from this log.
+constexpr bool kLogFileDefaultOn = (PS2_QUAKE_LOAD_TRACE != 0);
 
 // A Com_Printf message (MAXPRINTMSG is 4096) with a stamp on each line fits in one write. A
 // longer run of short lines just takes more than one.

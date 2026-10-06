@@ -17,13 +17,16 @@ namespace ps2::sys {
 // host: and services it without any IOP involvement - and the probe fails
 // instantly on hardware). When that misses, performs the full IOP bring-up:
 // reset, sbv patches, the embedded USB/BDM module chain, then waits for the
-// USB drive to enumerate. Returns the base path ("host:.", "host:" or
-// "mass:"); Sys_Errors when no game data can be found anywhere.
+// USB drive to enumerate, probing every FAT volume BDM mounts: first the
+// folder the ELF was launched from (elfPath is the loader's argv[0], or null
+// if it passed none), then the volume's root. Returns the base path ("host:",
+// "host:." or "mass0:" to "mass9:", plus that folder when the data is next to
+// the ELF); Sys_Errors when no game data can be found anywhere.
 //
 // Must run from main() BEFORE Qcommon_Init: FS_InitFilesystem opens pak files
 // during Qcommon_Init (before Sys_Init), and the pad driver loads its rom0:
 // modules later at IN_Init - after the IOP reset, which is the required order.
-const char * DetectBasePathAndBootIop();
+const char * DetectBasePathAndBootIop(const char * elfPath);
 
 // True once the call above has taken the USB route: the IOP was reset, the sbv
 // patches that allow loading a module from an EE buffer are in place and usbd.irx

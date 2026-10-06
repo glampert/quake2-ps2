@@ -254,10 +254,25 @@ defaults to 1; set it to 0 to ignore the keyboard. Two quirks worth knowing:
 
 The boot path probes `host:` first (which fails instantly on a console), then falls back to
 USB mass storage: full IOP reset, sbv patches, and the embedded BDM/USB driver stack, waiting
-for the drive to enumerate. Put `baseq2/` in the root of a FAT-formatted USB stick and load
-`quake2.elf` with your launcher of choice. The BDM, USB, keyboard and sound IRX modules are
-all embedded in the ELF by the Makefile's `bin2c` rule, so nothing else has to be on the
-drive.
+up to 10 seconds for the drive to enumerate. Copy `quake2.elf` and `baseq2/` side by side into
+any folder of a FAT32 or exFAT USB drive (or put `baseq2/` at the drive's root) and load the
+ELF with your launcher of choice. A release zip's `q2ps2_<config>_<version>/` folder already
+has this layout, so it can be copied over as it is:
+
+```
+mass:/q2ps2_release_3.20/
+  quake2.elf
+  baseq2/
+```
+
+The folder comes from the ELF path the launcher passes (`argv[0]`). It can be up to 50
+characters long, which keeps every path the engine builds within its 128-byte limit. Next to
+the ELF wins over the root. Every FAT volume is probed (`mass0:` to `mass9:`, one per
+partition, in mount order), so the data needn't be on the first partition or the first drive.
+When none has it, the error screen shows the ELF path it got, where it looked, and the volumes
+that did mount. `none` means the drive never came up or has no FAT partition. The BDM, USB,
+keyboard and sound IRX modules are all embedded in the ELF by the Makefile's `bin2c` rule, so
+nothing else has to be on the drive.
 
 ---
 

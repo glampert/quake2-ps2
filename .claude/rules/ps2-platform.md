@@ -57,6 +57,17 @@ paths:
   `sbv_patch_enable_lmb()` alone lets `SifExecModuleBuffer` load embedded IRX without
   disturbing open `host:` handles. The USB path does a full IOP reset, then sbv patches and
   BDM. Game data is located *before* `Qcommon_Init`.
+- **`mass:` is `mass0:`.** iomanX's `parsefile` reads a missing unit number as 0, and libcglue
+  passes both spellings through unchanged. bdmfs_fatfs serves the N-th FAT/exFAT volume it
+  mounted as `massN:` (N < 10, FatFs `FF_VOLUMES`): one volume per partition, in mount order,
+  with GPT's EFI and MS-reserved partitions skipped. usbmass_bd drives two USB drives at once.
+  The boot probes all ten units.
+- The USB boot finds the ELF's folder from `argv[0]`. Loaders spell the device their own way
+  (`mass:/dir/quake2.elf`, `mass:dir/quake2.elf`, `hdd0:__common:pfs:/...`), and the IOP reset
+  renumbers the drives, so only what follows the last colon is kept and tried on every unit,
+  before the root. PCSX2 passes `host:` plus the ELF's absolute host path. The folder is capped
+  at 50 chars: the engine builds `<base>/baseq2/<name>` in `MAX_OSPATH` (128) with names up to
+  `MAX_QPATH - 1`, so the base path (`massN:` + folder) must stay within 56.
 - `rom0:FILEIO`'s `remove()` RPC handler lacks a `break`: every `remove(path)` on the fio
   backend also runs `mkdir(path)`. `sbv_patch_fileio()` fixes it (applied on the host: path;
   `ps2::sys::FileIoRemovePatched()` reports it). fio has no `rename()` (`ENOSYS`). The USB

@@ -28,12 +28,13 @@ int main(int argc, char ** argv)
 
     // Locate the game data - host: under PCSX2, USB mass: on a real console
     // (which needs the IOP module bring-up) - before Qcommon_Init runs
-    // FS_InitFilesystem. A build with -DPS2_FS_BASE_PATH=\"...\" pins the
-    // base path and skips the detection, for debugging.
+    // FS_InitFilesystem. On USB it may sit next to the ELF, whose path the
+    // loader passes as argv[0]. A build with -DPS2_FS_BASE_PATH=\"...\" pins
+    // the base path and skips the detection, for debugging.
 #ifdef PS2_FS_BASE_PATH
     FS_SetDefaultBasePath(PS2_FS_BASE_PATH);
 #else // PS2_FS_BASE_PATH
-    FS_SetDefaultBasePath(ps2::sys::DetectBasePathAndBootIop());
+    FS_SetDefaultBasePath(ps2::sys::DetectBasePathAndBootIop((argc > 0) ? argv[0] : nullptr));
 #endif // PS2_FS_BASE_PATH
 
     Qcommon_Init(argc, argv);

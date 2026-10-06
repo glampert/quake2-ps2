@@ -68,6 +68,17 @@ Three traps. Each one looks like a game crash, and all of them reproduce at HEAD
 - `ps2_perftest 1`: unattended frame-log capture of the demo loop. See
   [performance.md](performance.md).
 - `ps2_testcube 1` (VU1 path smoke test), `ps2_testcin 1` (cinematics).
+- **The USB boot branch:** run a copy of the ELF from a directory with no `baseq2/` (e.g. the
+  scratchpad). The `host:` probe misses, so the IOP reset, the BDM module chain and the
+  10 s `mass0:`-`mass9:` poll all run, ending on the "No game data found!" screen with
+  `USB volumes mounted: none`. PCSX2 offers no USB mass-storage device, so a mounted volume
+  needs hardware. The run stops before `Qcommon_Init` and never touches `config.cfg`. Its
+  `argv[0]` is an absolute host path, longer than the 50-char ELF folder cap, so only the
+  root is searched.
+- **The USB search itself** (ELF folder vs root, unit order) runs in a host harness: include
+  `iop_boot.cpp` with stub SDK headers and stub IOP calls, and run it from a directory holding
+  folders literally named `mass0:`, `mass1:`... (macOS allows the colon). `fopen` then takes
+  the probe paths as relative ones.
 
 ## Quiet map for renderer work
 

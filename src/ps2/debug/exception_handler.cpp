@@ -4,8 +4,15 @@
  *
  *  Built on ps2sdk's libeedebug, which owns the hard part: it replaces the EE's level 1
  *  exception vectors with an assembly stub that spills the full register set into an
- *  EE_RegFrame and dispatches to a C handler per cause. All this file adds is the handler
- *  that prints the frame and unwinds the stack behind it.
+ *  EE_RegFrame and dispatches to a C handler per cause.
+ *
+ *  That handler runs at exception level (EXL set, on libeedebug's own stack), where nothing that
+ *  talks to the IOP can work: printf, the log file and every other SIF RPC need interrupts, and
+ *  newlib faults before it gets that far. So the handler only copies what the report needs out
+ *  of the frame, points the frame's EPC and $sp at ReportCrash, and returns. libeedebug reloads
+ *  the registers from the frame and erets, so the faulting thread resumes in ReportCrash, on a
+ *  stack of its own, as ordinary thread code. The report is written from there: to the log file
+ *  (log_file.h), then to the screen the way Sys_Error shows an error, which echoes it to stdout.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -13,9 +20,13 @@
 #if PS2_QUAKE_DEBUG
 #include "ps2/debug/exception_handler.h"
 #include "ps2/debug/stack_trace.h"
+#include "ps2/debug/scr_print.h"
+#include "ps2/debug/log_file.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <tamtypes.h>
+#include <kernel.h>
 #include <ee_debug.h>
 
 // Bounds of our own .text, from the ps2sdk linkfile. Used to tell a fault inside
@@ -51,124 +62,226 @@ const char * CauseName(const int cause)
     }
 }
 
-// A fault inside the handler would re-enter it and spin, which is exactly the
-// double fault this exists to replace. One pass only: after that, stop.
-static volatile bool s_handlingException = false;
+// What the report needs, copied out of the exception frame. Copying it is all the handler does
+// at exception level.
+struct Fault
+{
+    int cause;
+    u32 epc;
+    u32 badVAddr;
+    u32 status;
+    u32 ra;
+    u32 sp;
+    u32 fp;
+    u32 gp;
+    u32 a[4];
+    u32 v[2];
+};
 
-// The low 32 bits of a saved 128-bit EE register.
+// How far the report has got. A fault inside ReportCrash re-enters the handler, which goes by
+// this to decide what to try next.
+enum class Stage
+{
+    Idle,      // no fault yet
+    Reporting, // ReportCrash's first run
+    Retrying,  // that faulted - most likely walking a stack the fault left unreadable - so it
+               // runs once more without the unwind
+    Stopped,   // the retry faulted too
+};
+
+static Stage s_stage = Stage::Idle;
+static Fault s_fault = {};
+
+// Recorded at install, from main(): a fault on any other thread has to stop this one, or its
+// next frame would draw over the report.
+static int s_mainThreadId = -1;
+
+// ReportCrash runs on this rather than the faulting thread's stack, which may be what broke.
+constexpr u32 kReportStackBytes = 16u * 1024u;
+alignas(64) static u8 s_reportStack[kReportStackBytes];
+
+// The report, built whole and then written out in one go. It is laid out for the debug screen:
+// 64 columns, and few enough lines to fit 22 rows with a full 32-frame stack.
+static char s_report[2048];
+static int  s_reportLength = 0;
+
+// The low 32 bits of a saved 128-bit EE register, and a write of a 32-bit value to one.
 inline u32 Reg(const u32 (&r)[4]) { return r[0]; }
+
+inline void SetReg(u32 (&r)[4], const u32 value)
+{
+    r[0] = value;
+    r[1] = 0;
+    r[2] = 0;
+    r[3] = 0;
+}
 
 inline bool InOurText(const u32 addr)
 {
     return addr >= reinterpret_cast<u32>(_ftext) && addr < reinterpret_cast<u32>(_etext);
 }
 
-// Prints one unwind. 'pc' must be an address the scanner can walk back from -
-// see the note at the call sites about which one to hand it.
-void PrintUnwind(const char * const what, const u32 pc, const u32 sp)
+__attribute__((format(printf, 1, 2))) void Append(const char * const fmt, ...)
+{
+    const int room = static_cast<int>(sizeof(s_report)) - s_reportLength;
+    if (room <= 1)
+    {
+        return;
+    }
+
+    va_list args;
+    va_start(args, fmt);
+    const int written = std::vsnprintf(&s_report[s_reportLength], static_cast<size_t>(room), fmt, args);
+    va_end(args);
+
+    if (written > 0)
+    {
+        s_reportLength += (written < room) ? written : (room - 1);
+    }
+}
+
+// One unwind, five frames to a line. 'pc' must be an address the scanner can walk back from -
+// see the note at the call site about which one to hand it.
+void AppendUnwind(const char * const from, const u32 pc, const u32 sp)
 {
     u32 frames[kStackTraceMaxFrames];
     const int count = detail::WalkStack(pc, sp, frames, kStackTraceMaxFrames);
 
-    std::printf("----------------- STACK TRACE (%s) -----------------\n", what);
+    Append("Stack, innermost first (unwound from %s):\n", from);
     for (int i = 0; i < count; ++i)
     {
-        std::printf("#%-2d 0x%08x\n", i, frames[i]);
+        const bool lineEnds = ((i % 5) == 4) || (i == count - 1);
+        Append("0x%08x%s", frames[i], lineEnds ? "\n" : " ");
     }
+
     if (count == 0)
     {
-        std::printf("%s", "<unavailable - could not unwind>\n");
+        Append("%s", "<could not unwind>\n");
     }
     else if (count == kStackTraceMaxFrames)
     {
-        std::printf("%s", "... (truncated)\n");
+        Append("%s", "... (truncated)\n");
     }
-    std::fflush(stdout);
+}
+
+[[noreturn]] void ReportCrash()
+{
+    // The fault may have struck with interrupts masked, and all the I/O below needs them.
+    EIntr();
+
+    const Fault & f = s_fault;
+    const int threadId = GetThreadId();
+
+    s_reportLength = 0;
+    Append("EE CPU EXCEPTION: %s (cause %d), thread %d%s\n",
+           CauseName(f.cause), f.cause, threadId, (threadId == s_mainThreadId) ? " (main)" : "");
+    Append("EPC 0x%08x  BadVAddr 0x%08x  Status 0x%08x\n", f.epc, f.badVAddr, f.status);
+    Append("ra  0x%08x  sp 0x%08x  fp 0x%08x  gp 0x%08x\n", f.ra, f.sp, f.fp, f.gp);
+
+    // The argument registers are worth having: a null pointer handed to a callee is the common
+    // shape of this fault, and $a0-$a3 usually still hold it.
+    Append("a0-a3 0x%08x 0x%08x 0x%08x 0x%08x\n", f.a[0], f.a[1], f.a[2], f.a[3]);
+    Append("v0-v1 0x%08x 0x%08x\n", f.v[0], f.v[1]);
+
+    // Where to unwind from depends on where the fault landed.
+    //
+    // Inside our own text, EPC names the faulting instruction and the scanner can walk back from
+    // it to the function prologue. Outside it - a kernel routine handed a bad pointer, which is
+    // what "pc=0x82000 addr=0x0" was - EPC is in code the scanner cannot read prologues for, and
+    // unwinding from it produces fiction. There $ra is the useful number: it points back into
+    // whichever of our functions made the call.
+    if (s_stage == Stage::Retrying)
+    {
+        Append("%s", "Walking the stack faulted as well, so it's left out.\n");
+    }
+    else if (InOurText(f.epc))
+    {
+        AppendUnwind("EPC", f.epc, f.sp);
+    }
+    else if (InOurText(f.ra))
+    {
+        Append("%s", "EPC is outside our text: a kernel or library call faulted.\n");
+        AppendUnwind("$ra", f.ra, f.sp);
+    }
+    else
+    {
+        Append("%s", "EPC and $ra are both outside our text: a smashed stack,\n"
+                     "or a jump through a corrupt pointer.\n");
+    }
+    Append("%s", "Resolve the addresses against quake2_unstripped.elf.\n");
+
+    // The log first: on a console it is the record that outlives this.
+    LogFileWriteFatal(s_report);
+
+    // A fault on another thread leaves the main one running, and its next frame would draw over
+    // the report. Stopped only now, after the log write, since it may have held a lock that the
+    // write needed.
+    if (s_mainThreadId >= 0 && threadId != s_mainThreadId)
+    {
+        SuspendThread(s_mainThreadId);
+    }
+
+    // On screen as Sys_Error shows an error. ScrPrintf echoes every line to stdout.
+    ScrInit();
+    ScrSetTextColor(0xFF0000FF); // red text
+    ScrPrintf("***************************************************************\n");
+    ScrPrintf("%s", s_report);
+    ScrPrintf("***************************************************************\n");
+
+    for (;;)
+    {
+        SleepThread();
+    }
 }
 
 int OnException(EE_RegFrame * const frame)
 {
-    if (s_handlingException)
+    switch (s_stage)
     {
-        std::printf("\n*** Fault inside the exception handler - stopping. ***\n");
-        std::fflush(stdout);
-        for (;;) {} // Nothing safe left to do; hang here rather than loop the vector.
-    }
-    s_handlingException = true;
+    case Stage::Idle:
+        s_fault.cause    = static_cast<int>((frame->cause >> 2) & 0x1F);
+        s_fault.epc      = frame->epc;
+        s_fault.badVAddr = frame->badvaddr;
+        s_fault.status   = frame->status;
+        s_fault.ra       = Reg(frame->ra);
+        s_fault.sp       = Reg(frame->sp);
+        s_fault.fp       = Reg(frame->fp);
+        s_fault.gp       = Reg(frame->gp);
+        s_fault.a[0]     = Reg(frame->a0);
+        s_fault.a[1]     = Reg(frame->a1);
+        s_fault.a[2]     = Reg(frame->a2);
+        s_fault.a[3]     = Reg(frame->a3);
+        s_fault.v[0]     = Reg(frame->v0);
+        s_fault.v[1]     = Reg(frame->v1);
+        s_stage = Stage::Reporting;
+        break;
 
-    const int cause = static_cast<int>((frame->cause >> 2) & 0x1F);
+    case Stage::Reporting:
+        s_stage = Stage::Retrying; // s_fault still holds the first fault
+        break;
 
-    std::printf("\n"
-                "=============== EE CPU EXCEPTION ===============\n"
-                "Cause    : %d (%s)\n"
-                "EPC      : 0x%08x   <- the faulting instruction\n"
-                "BadVAddr : 0x%08x   <- the address it touched\n"
-                "Status   : 0x%08x   Cause raw: 0x%08x\n"
-                "ra       : 0x%08x   sp: 0x%08x   fp: 0x%08x   gp: 0x%08x\n",
-                cause, CauseName(cause),
-                frame->epc, frame->badvaddr, frame->status, frame->cause,
-                Reg(frame->ra), Reg(frame->sp), Reg(frame->fp), Reg(frame->gp));
-
-    // The argument registers are worth having: a null pointer handed to a callee
-    // is the common shape of this fault, and $a0-$a3 usually still hold it.
-    std::printf("a0-a3    : 0x%08x 0x%08x 0x%08x 0x%08x\n"
-                "v0-v1    : 0x%08x 0x%08x\n",
-                Reg(frame->a0), Reg(frame->a1), Reg(frame->a2), Reg(frame->a3),
-                Reg(frame->v0), Reg(frame->v1));
-
-    // Flush before unwinding. Printing from exception context goes out over the
-    // same path the fault may have interrupted; if the unwind below wedges, the
-    // four lines above are the ones actually worth having.
-    std::fflush(stdout);
-
-    // Where to unwind from depends on where the fault landed.
-    //
-    // Inside our own text, EPC names the faulting instruction and the scanner can
-    // walk back from it to the function prologue. Outside it - a kernel routine
-    // handed a bad pointer, which is what "pc=0x82000 addr=0x0" was - EPC is in
-    // code the scanner cannot read prologues for, and unwinding from it produces
-    // fiction. There $ra is the useful number: it points back into whichever of
-    // our functions made the call.
-    const u32 epc = frame->epc;
-    const u32 ra  = Reg(frame->ra);
-    const u32 sp  = Reg(frame->sp);
-
-    if (InOurText(epc))
-    {
-        PrintUnwind("from EPC", epc, sp);
-    }
-    else
-    {
-        std::printf("EPC 0x%08x is outside this program's text (0x%08x-0x%08x): the fault was\n"
-                    "taken in kernel or library code we were calling. Unwinding from $ra instead.\n",
-                    epc, reinterpret_cast<u32>(_ftext), reinterpret_cast<u32>(_etext));
-
-        if (InOurText(ra))
-        {
-            PrintUnwind("from $ra", ra, sp);
-        }
-        else
-        {
-            std::printf("$ra 0x%08x is outside our text too - the call chain is gone, which\n"
-                        "usually means a smashed stack or a jump through a corrupt pointer.\n", ra);
-        }
+    case Stage::Retrying:
+    case Stage::Stopped:
+        // The retry faulted as well. Nothing is safe to try from here, and returning would
+        // resume the fault: stop.
+        s_stage = Stage::Stopped;
+        for (;;) {}
     }
 
-    std::printf("%s", "Resolve with: mips64r5900el-ps2-elf-addr2line -f -C -e "
-                      "build/<config>/quake2_unstripped.elf <addr>\n");
-    std::printf("%s", "================================================\n");
-    std::fflush(stdout);
-
-    // Returning would resume at EPC and fault again forever. Sys_Error is not an
-    // option either - it draws, and the renderer's state is whatever the fault
-    // left it. Hang, with everything already printed.
-    for (;;) {}
+    // Leave exception level: libeedebug reloads every register from this frame and erets to its
+    // EPC, so the faulting thread resumes in ReportCrash, on the report's own stack.
+    frame->epc = reinterpret_cast<u32>(&ReportCrash);
+    SetReg(frame->sp, reinterpret_cast<u32>(s_reportStack + kReportStackBytes));
+    SetReg(frame->ra, 0);
+    return 0;
 }
 
 } // namespace
 
 void InstallExceptionHandlers()
 {
+    s_mainThreadId = GetThreadId();
+
     // Level 1 only. Level 2 is the debug/counter vector, used by hardware
     // breakpoints; nothing here sets any, and installing it would replace the
     // vector a real debugger wants.

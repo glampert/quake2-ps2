@@ -99,6 +99,19 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
   against **the same build's** `quake2_unstripped.elf`:
   `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>` or
   `build/tools/symbolize < emulog.txt`.
+- **The handler can't print from where it runs.** libeedebug calls it at exception level (EXL
+  set, its own stack). No SIF RPC can complete there, and newlib's `printf` faults: its state
+  pointer reads null. The old handler died that way: a burst of `TLB Miss` at 0x0-0x68 inside
+  `printf`, `_vfprintf_r` and `__retarget_lock_acquire_recursive`, and no report. Now the
+  handler only copies the frame's registers. It then points the frame's EPC and `$sp` at
+  `ReportCrash`, which has its own 16 KB stack, and returns. libeedebug's `_ee_load_frame` +
+  `eret` resumes the faulting thread there as ordinary thread code, which writes the log, the
+  screen and stdout. Keep anything that needs the IOP out of `OnException`.
+- To test the handler, add a temporary `teq $zero, $zero` (an unconditional trap, cause 13).
+  `move $sp, $zero` before it gives a smashed stack. A null store or load won't do: PCSX2 logs
+  `TLB Miss ... [store]` and skips the access without raising the exception. For the same
+  reason the reporter's retry path (a fault while it walks the stack) can't be exercised in
+  PCSX2.
 - **Known flake, never game code:** a `TLB Miss` in `_request_end` (ps2sdk `sifrpc.c`,
   `SIF_CMD_RPC_END`) during `host:` file I/O, usually right after a
   `PackFile: host:/baseq2/pak0.pak` line. The signature is one to three

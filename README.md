@@ -663,22 +663,31 @@ most - which is the number to watch. A full pass takes roughly fifteen minutes a
 dwell. Debug builds only; the whole test compiles out of release.
 
 **CPU exception handling:** Debug builds install EE level-1 exception handlers at the top
-of `main()` (`src/ps2/debug/exception_handler.cpp`, on ps2sdk's `libeedebug`). A bad pointer that
-would otherwise hang the console with three lines of emulator output instead prints the cause,
-EPC, BadVAddr, the argument registers and an unwound call stack:
+of `main()` (`src/ps2/debug/exception_handler.cpp`, on ps2sdk's `libeedebug`). A bad pointer would
+otherwise hang the console with a few lines of emulator output. Instead it reports the cause,
+EPC, BadVAddr, the argument registers and an unwound call stack. The report goes on screen in red,
+as `Sys_Error` shows an error, and to the log file and stdout. This is a deliberate trap in
+`main()`:
 
 ```
-=============== EE CPU EXCEPTION ===============
-Cause    : 2 (TLB refill (load/fetch))
-EPC      : 0x001b4d20   <- the faulting instruction
-BadVAddr : 0x00000000   <- the address it touched
-...
-Resolve with: mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>
+EE CPU EXCEPTION: Trap (cause 13), thread 1 (main)
+EPC 0x002020e4  BadVAddr 0x00000000  Status 0x70030c13
+ra  0x002020e4  sp 0x01ffed20  fp 0x00000000  gp 0x00285770
+a0-a3 0x0000001a 0x00000000 0xffffffff 0x004e77bc
+v0-v1 0x0064d500 0x00600000
+Stack, innermost first (unwound from EPC):
+0x00100ee8 0x00082600
+Resolve the addresses against quake2_unstripped.elf.
 ```
 
+Resolve with `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>`.
+The handler itself runs at exception level, where neither `printf` nor the log file can work.
+So it only copies the registers out, then resumes the faulting thread in a reporting function on
+a stack of its own. A fault on another thread stops the main one, so the report stays on screen.
 When EPC lands outside the program's own `.text` - a kernel or library routine handed a bad
-pointer - it says so and unwinds from `$ra` instead, since the backward prologue scan the
-unwinder uses cannot read code it has no symbols for.
+pointer - the report says so and unwinds from `$ra` instead, since the backward prologue scan the
+unwinder uses can't read code it has no symbols for. If walking the stack faults too, the report
+goes out without it.
 
 **Commands:** `ps2_dump_iop_mods` lists the currently loaded IOP modules;
 `in_keyboardmap <usage> <key>` remaps a USB scan code; `ps2_saveinfo` lists the save working

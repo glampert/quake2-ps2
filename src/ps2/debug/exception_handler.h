@@ -9,8 +9,9 @@
  *            TLB Miss, pc=0x8001044 addr=0x8001044  [load]
  *
  *        which names neither the function nor the call that reached it. With it, the same
- *        fault prints the cause, the faulting instruction, the address it touched and an
- *        unwound call stack - one addr2line away from the source line.
+ *        fault reports the cause, the faulting instruction, the address it touched and an
+ *        unwound call stack - one addr2line away from the source line - on screen, in the log
+ *        file and on stdout.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

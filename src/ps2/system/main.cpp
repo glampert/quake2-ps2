@@ -10,6 +10,7 @@
 #include "ps2/system/iop_boot.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/debug/exception_handler.h"
+#include "ps2/debug/log_file.h"
 
 int main(int argc, char ** argv)
 {
@@ -32,10 +33,15 @@ int main(int argc, char ** argv)
     // loader passes as argv[0]. A build with -DPS2_FS_BASE_PATH=\"...\" pins
     // the base path and skips the detection, for debugging.
 #ifdef PS2_FS_BASE_PATH
-    FS_SetDefaultBasePath(PS2_FS_BASE_PATH);
+    const char * const basePath = PS2_FS_BASE_PATH;
 #else // PS2_FS_BASE_PATH
-    FS_SetDefaultBasePath(ps2::sys::DetectBasePathAndBootIop((argc > 0) ? argv[0] : nullptr));
+    const char * const basePath = ps2::sys::DetectBasePathAndBootIop((argc > 0) ? argv[0] : nullptr);
 #endif // PS2_FS_BASE_PATH
+
+    FS_SetDefaultBasePath(basePath);
+
+    // The log file goes next to baseq2/, and starts now so it covers all of Qcommon_Init.
+    ps2::debug::LogFileOpen(basePath);
 
     Qcommon_Init(argc, argv);
 

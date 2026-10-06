@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "client.h"
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 typedef struct
 {
@@ -234,6 +235,8 @@ Called when either the cinematic completes, or it is aborted
 */
 void SCR_FinishCinematic(void)
 {
+    PS2_LOAD_TRACE("SCR_FinishCinematic: asking the server for the next one (servercount %d)", cl.servercount); // [PS2_QUAKE]
+
     // tell the server to advance to the next map / cinematic
     MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
     SZ_Print(&cls.netchan.message, va("nextserver %i\n", cl.servercount));

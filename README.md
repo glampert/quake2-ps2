@@ -607,6 +607,29 @@ All of these are cvars unless noted. The four overlays default to on in debug bu
 everything else defaults to the normal rendering path. [CVARS.md](CVARS.md) lists every cvar
 the backend registers, with its debug and release defaults and a line on what it does.
 
+**Log file:** `ps2_logfile` (on by default for now) copies everything the console prints,
+plus `Sys_Error`, to `quake2.log` next to `baseq2/`. That's `build/<config>/quake2.log` under PCSX2, and the ELF's folder on a USB
+stick. It is the only log a console run leaves. Every line is stamped with the seconds since
+boot, and every write opens, appends and closes the file. On a FAT drive that close is the
+only flush: bdmfs_fatfs has no sync, so a log kept open could come back empty after a power
+cycle. A run that hangs or crashes still leaves its log up to the last line.
+
+**Load trace:** set `PS2_QUAKE_LOAD_TRACE` to 1 in
+[load_trace.h](src/ps2/debug/load_trace.h) (it ships 0), and the level loading path prints
+`[load +<ms> ms]` lines from a cinematic's end to the first 3D frame after it. The lines
+cover the server's spawn, the client's precache, sound and refresh registration, and every
+file read with its size and read time. While a level comes up, a heartbeat a second shows the
+client's state. "+ms" is the time since the previous trace, so a step's duration is on the line
+that ends it.
+
+**Loading screen:** while the loading plaque is up, the screen shows the plaque with a status
+bar naming the file being read, and the files, megabytes and seconds so far. It's redrawn at
+most every 200 ms, and as soon as a file of 256 KB or more starts. While a `.bsp` is parsed it
+holds its last frame (the map's name): the frame chain's memory is the world loader's lump
+scratch then. Each frame is shown before
+its draw returns: with `ps2_gs_latency` on, the plaque `SCR_BeginLoadingPlaque` draws would
+otherwise wait for a next frame that no one draws until the level is up, so it never showed.
+
 **Overlays:** `ps2_show_fps`, `ps2_show_memstats` (per-tag heap usage), `ps2_show_vramstats`
 (texture heap occupancy and per-frame uploads), `ps2_show_drawstats` (nodes walked, surfaces,
 triangles drawn/clipped/culled, batches, entities, particles, dlights).

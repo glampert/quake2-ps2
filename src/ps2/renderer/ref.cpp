@@ -25,6 +25,8 @@
 #include "ps2/renderer/md2.h"
 #include "ps2/renderer/sky.h"
 #include "ps2/renderer/profile.h"
+#include "ps2/renderer/loading_screen.h"
+#include "ps2/debug/load_trace.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
@@ -34,6 +36,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace {
 
@@ -70,6 +73,13 @@ static const cvar_t * s_wallMipmaps = nullptr;
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
 static const ps2::tex::Texture * s_texBacktile = nullptr;
+
+#if PS2_QUAKE_LOAD_TRACE
+// Armed by EndRegistration, so the load trace ends with the first 3D view drawn after it and the
+// frame that carries it.
+static bool s_traceFirstView = false;
+static bool s_firstViewInThisFrame = false;
+#endif // PS2_QUAKE_LOAD_TRACE
 
 // A missing image draws as the pink/black checkerboard instead of crashing or
 // silently vanishing - obvious on screen, and callers get sane dimensions.
@@ -613,6 +623,7 @@ void PS2_ReleaseWorldModel(const char * bspName)
 
 void PS2_BeginRegistration(const char * mapName)
 {
+    PS2_LOAD_TRACE("R_BeginRegistration: %s", mapName);
     ps2::debug::FrameLogMarkMap(mapName);
     ps2::tex::BeginRegistration();
 
@@ -631,12 +642,19 @@ void PS2_BeginRegistration(const char * mapName)
     ps2::mod::BeginRegistration(mapName);
     ps2::view::BeginRegistration();
     ps2::sky::BeginRegistration();
+    PS2_LOAD_TRACE("R_BeginRegistration: world loaded");
 }
 
 void PS2_EndRegistration()
 {
+    PS2_LOAD_TRACE("R_EndRegistration: freeing what this level didn't register");
     ps2::mod::EndRegistration();
     ps2::tex::EndRegistration();
+    PS2_LOAD_TRACE("R_EndRegistration: done");
+
+#if PS2_QUAKE_LOAD_TRACE
+    s_traceFirstView = true;
+#endif // PS2_QUAKE_LOAD_TRACE
 }
 
 // Free-before-load registration, driven by the client's CL_PrepRefresh. Registration used to keep
@@ -757,6 +775,44 @@ void PS2_DrawFadeScreen()
     ps2::rs::FillRect(0, 0, ps2::gs::Width(), ps2::gs::Height(), 0, 0, 0, 128);
 }
 
+// The loading screen (loading_screen.h): the plaque over black, as SCR_UpdateScreen draws it,
+// with a status bar along the bottom laid out like the menu's (Menu_DrawStatusBar). The client
+// draws nothing while the plaque is up, so no later frame would put this one on screen: it is
+// shown before returning, whatever ps2_gs_latency says.
+int PS2_DrawLoadingScreen(const char * status)
+{
+    // The plaque pic, if it has to be loaded below, comes back here through the file hook. And
+    // while a .bsp is parsed the frame chain's memory is the loader's lump scratch: the wall
+    // textures loading then would have this frame write its chain over the lumps being read.
+    if (ps2::rs::FrameStarted() || ps2::cmdbuf::LentToWorldLoad())
+    {
+        return 0;
+    }
+
+    ps2::rs::BeginFrame(/*dither=*/s_enableDither->value != 0.0f);
+
+    int picWidth  = 0;
+    int picHeight = 0;
+    PS2_DrawGetPicSize(&picWidth, &picHeight, "loading");
+    PS2_DrawPic((viddef.width - picWidth) / 2, (viddef.height - picHeight) / 2, "loading");
+
+    // Menu_DrawStatusBar's padding, so the bar isn't cut off at the bottom of the screen.
+    constexpr int kBarPadY = 4;
+    const int barY = viddef.height - (kGlyphSize + kBarPadY);
+    PS2_DrawFill(0, barY, viddef.width, kGlyphSize, 4);
+
+    const int maxChars = viddef.width / kGlyphSize;
+    const int numChars = std::min(static_cast<int>(std::strlen(status)), maxChars);
+    const int textX    = ((maxChars - numChars) / 2) * kGlyphSize;
+    for (int i = 0; i < numChars; ++i)
+    {
+        PS2_DrawChar(textX + (i * kGlyphSize), barY, static_cast<unsigned char>(status[i]));
+    }
+
+    ps2::rs::EndFrame(/*deferPresent=*/false);
+    return 1;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Cinematics
 // ------------------------------------------------------------------------------------------------
@@ -847,11 +903,30 @@ void PS2_EndFrame()
     DrawDebugOverlays();
 
     ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
+
+#if PS2_QUAKE_LOAD_TRACE
+    if (s_firstViewInThisFrame)
+    {
+        s_firstViewInThisFrame = false;
+        PS2_LOAD_TRACE("R_EndFrame: the first 3D frame since registration went to the GS (gs latency %d)",
+                       (s_gsLatency->value != 0.0f) ? 1 : 0);
+    }
+#endif // PS2_QUAKE_LOAD_TRACE
 }
 
 void PS2_RenderFrame(refdef_t * viewDef)
 {
     PS2_Assert(viewDef != nullptr);
+
+#if PS2_QUAKE_LOAD_TRACE
+    if (s_traceFirstView)
+    {
+        s_traceFirstView = false;
+        s_firstViewInThisFrame = true;
+        PS2_LOAD_TRACE("R_RenderFrame: first 3D view since registration");
+    }
+#endif // PS2_QUAKE_LOAD_TRACE
+
     ps2::view::RenderFrame(*viewDef);
 }
 

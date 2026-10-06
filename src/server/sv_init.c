@@ -19,6 +19,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "server.h"
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 server_static_t svs; // persistant server info
 server_t sv;         // local server
@@ -189,6 +190,7 @@ void SV_SpawnServer(char * server, char * spawnpoint, server_state_t serverstate
         Cvar_Set("paused", "0");
 
     Com_Printf("---- Server Initialization ----\n");
+    PS2_LOAD_TRACE("SV_SpawnServer: %s (state %d)", server, serverstate); // [PS2_QUAKE]
 
     Com_DPrintf("SpawnServer: %s\n", server);
     if (sv.demofile)
@@ -264,7 +266,9 @@ void SV_SpawnServer(char * server, char * spawnpoint, server_state_t serverstate
         // early-out just below.
         CL_ReleaseWorldModel(sv.configstrings[CS_MODELS + 1]);
 
+        PS2_LOAD_TRACE("SV_SpawnServer: CM_LoadMap %s", sv.configstrings[CS_MODELS + 1]); // [PS2_QUAKE]
         sv.models[1] = CM_LoadMap(sv.configstrings[CS_MODELS + 1], false, &checksum);
+        PS2_LOAD_TRACE("SV_SpawnServer: CM_LoadMap done"); // [PS2_QUAKE]
     }
 
     Com_sprintf(sv.configstrings[CS_MAPCHECKSUM],
@@ -295,11 +299,13 @@ void SV_SpawnServer(char * server, char * spawnpoint, server_state_t serverstate
     Com_SetServerState(sv.state);
 
     // load and spawn all other entities
+    PS2_LOAD_TRACE("SV_SpawnServer: spawning entities"); // [PS2_QUAKE]
     ge->SpawnEntities(sv.name, CM_EntityString(), spawnpoint);
 
     // run two frames to allow everything to settle
     ge->RunFrame();
     ge->RunFrame();
+    PS2_LOAD_TRACE("SV_SpawnServer: entities spawned and settled"); // [PS2_QUAKE]
 
     // all precaches are complete
     sv.state = serverstate;
@@ -315,6 +321,7 @@ void SV_SpawnServer(char * server, char * spawnpoint, server_state_t serverstate
     Cvar_FullSet("mapname", sv.name, CVAR_SERVERINFO | CVAR_NOSET);
 
     Com_Printf("-------------------------------------\n");
+    PS2_LOAD_TRACE("SV_SpawnServer: done"); // [PS2_QUAKE]
 }
 
 /*
@@ -437,6 +444,7 @@ void SV_Map(qboolean attractloop, const char * levelstring, qboolean loadgame)
     sv.loadgame = loadgame;
     sv.attractloop = attractloop;
 
+    PS2_LOAD_TRACE("SV_Map: %s (attract loop %d, server state %d)", levelstring, attractloop, sv.state); // [PS2_QUAKE]
     if (sv.state == ss_dead && !sv.loadgame)
     {
         SV_InitGame(); // the game is just starting

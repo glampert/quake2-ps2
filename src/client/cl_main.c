@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "client.h"
 #include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 cvar_t * freelook;
 
@@ -1365,7 +1366,9 @@ void CL_RequestNextDownload(void)
     {
         precache_check = ENV_CNT + 1;
 
+        PS2_LOAD_TRACE("CL_RequestNextDownload: CM_LoadMap %s", cl.configstrings[CS_MODELS + 1]); // [PS2_QUAKE]
         CM_LoadMap(cl.configstrings[CS_MODELS + 1], true, &map_checksum);
+        PS2_LOAD_TRACE("CL_RequestNextDownload: CM_LoadMap done"); // [PS2_QUAKE]
 
         if (map_checksum != atoi(cl.configstrings[CS_MAPCHECKSUM]))
         {
@@ -1429,6 +1432,7 @@ void CL_RequestNextDownload(void)
 
     MSG_WriteByte(&cls.netchan.message, clc_stringcmd);
     MSG_WriteString(&cls.netchan.message, va("begin %i\n", precache_spawncount));
+    PS2_LOAD_TRACE("CL_RequestNextDownload: precache done, sent \"begin %d\"", precache_spawncount); // [PS2_QUAKE]
 }
 
 /*
@@ -1441,6 +1445,8 @@ before allowing the client into the server
 */
 void CL_Precache_f(void)
 {
+    PS2_LOAD_TRACE("CL_Precache_f: \"%s\"", Cmd_Args()); // [PS2_QUAKE]
+
     //Yet another hack to let old demos work
     //the old precache sequence
     if (Cmd_Argc() < 2)
@@ -1743,6 +1749,22 @@ void CL_Frame(int msec)
     {
         return;
     }
+
+#if PS2_QUAKE_LOAD_TRACE
+    // [PS2_QUAKE]: while a level comes up, a line a second shows the loop is still running and
+    // where the client stands - a hang inside a load call is the one place these stop.
+    {
+        static int last_beat_ms;
+        const int now_ms = Sys_Milliseconds();
+        if ((cls.disable_screen || cls.state != ca_active || !cl.refresh_prepped) && now_ms - last_beat_ms >= 1000)
+        {
+            last_beat_ms = now_ms;
+            PS2_LOAD_TRACE("CL_Frame: client state %d, server state %d, prepped %d, frame valid %d, plaque %d, cinematic %d",
+                           cls.state, Com_ServerState(), cl.refresh_prepped, cl.frame.valid,
+                           cls.disable_screen ? 1 : 0, cl.cinematictime > 0);
+        }
+    }
+#endif
 
     extratime += msec;
 

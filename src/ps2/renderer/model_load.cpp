@@ -387,6 +387,10 @@ public:
         m_scratch     = nullptr;
         m_scratchSize = 0;
         m_file        = nullptr;
+
+        // The scratch is the frame chain's again. Close runs from the destructor, after the last
+        // lump has been read, and on every early return out of Open.
+        cmdbuf::EndWorldLoad();
     }
 
     const dheader_t & Header() const { return m_header; }

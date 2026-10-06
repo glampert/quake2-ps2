@@ -666,6 +666,11 @@ void EndFrame(const bool deferPresent)
     s_drawCtx = gs::NextDrawContext(s_drawCtx); // draw into the other buffer next frame
 }
 
+bool FrameStarted()
+{
+    return s_frameStarted;
+}
+
 void KickAndWait()
 {
     cmdbuf::Drain();

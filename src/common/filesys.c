@@ -20,6 +20,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "common/q_common.h"
 #include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
+#include "ps2/debug/load_trace.h"       // [PS2_QUAKE]
+#include "ps2/renderer/loading_screen.h" // [PS2_QUAKE]
 
 //===========================================================================
 
@@ -450,10 +452,20 @@ static int FS_FOpenFileImpl(const char * filename, FILE ** file)
 int FS_FOpenFile(const char * filename, FILE ** file)
 {
     int len;
+#if PS2_QUAKE_LOAD_TRACE
+    const int open_start_ms = Sys_Milliseconds();
+#endif
     PS2Quake_FrameLogNoteOpen(filename);
     PS2Quake_ProfileBegin(PS2_PROF_FS_IO);
     len = FS_FOpenFileImpl(filename, file);
     PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
+
+    // [PS2_QUAKE]: the caller streams it from here, so the loading screen names it now.
+    PS2_LOAD_TRACE("FS_FOpenFile %s: %d bytes, opened in %d ms", filename, len, Sys_Milliseconds() - open_start_ms);
+    if (len >= 0)
+    {
+        PS2_LoadingScreenNoteFile(filename, len);
+    }
     return len;
 }
 
@@ -556,6 +568,9 @@ int FS_LoadFile(const char * path, void ** buffer)
     packfile_t * entry;
     byte * buf;
     int len;
+#if PS2_QUAKE_LOAD_TRACE
+    int read_start_ms;
+#endif
 
     // [PS2_QUAKE]: a whole-file load does not need a stream of its own. A file in a pak is read
     // through the pak's handle, which stays open (and unbuffered) for the life of the game: one
@@ -570,6 +585,10 @@ int FS_LoadFile(const char * path, void ** buffer)
 
     if (len < 0 || !buffer)
     {
+        if (len < 0 && buffer)
+        {
+            PS2_LOAD_TRACE("FS_LoadFile %s: not found", path); // [PS2_QUAKE]
+        }
         if (h)
         {
             fclose(h);
@@ -580,6 +599,11 @@ int FS_LoadFile(const char * path, void ** buffer)
         }
         return len;
     }
+
+    PS2_LoadingScreenNoteFile(path, len); // [PS2_QUAKE]: named on the loading screen while it is read
+#if PS2_QUAKE_LOAD_TRACE
+    read_start_ms = Sys_Milliseconds();
+#endif
 
     buf = Z_Malloc(len);
     *buffer = buf;
@@ -597,6 +621,9 @@ int FS_LoadFile(const char * path, void ** buffer)
         fclose(h);
     }
     PS2Quake_ProfileEnd(PS2_PROF_FS_IO);
+
+    PS2_LOAD_TRACE("FS_LoadFile %s: %d KB from %s in %d ms", path, (len + 1023) / 1024,
+                   pak ? "pak" : "file", Sys_Milliseconds() - read_start_ms); // [PS2_QUAKE]
     return len;
 }
 

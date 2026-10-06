@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "client.h"
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 char * svc_strings[256] =
 {
@@ -179,6 +180,7 @@ void CL_RegisterSounds(void)
 {
     int i;
 
+    PS2_LOAD_TRACE("CL_RegisterSounds: begin"); // [PS2_QUAKE]
     S_BeginRegistration();
     CL_RegisterTEntSounds();
     CL_RegisterMuzzleFlashSounds(); // [PS2_QUAKE]
@@ -189,7 +191,9 @@ void CL_RegisterSounds(void)
         cl.sound_precache[i] = S_RegisterSound(cl.configstrings[CS_SOUNDS + i]);
         Sys_SendKeyEvents(); // pump message loop
     }
+    PS2_LOAD_TRACE("CL_RegisterSounds: %d level sounds registered, S_EndRegistration loads them", i - 1); // [PS2_QUAKE]
     S_EndRegistration();
+    PS2_LOAD_TRACE("CL_RegisterSounds: done"); // [PS2_QUAKE]
 }
 
 /*
@@ -338,6 +342,8 @@ void CL_ParseServerData(void)
 
     // get the full level name
     str = MSG_ReadString(&net_message);
+    PS2_LOAD_TRACE("CL_ParseServerData: \"%s\", servercount %d, playernum %d, attract loop %d",
+                   str, cl.servercount, cl.playernum, cl.attractloop); // [PS2_QUAKE]
 
     if (cl.playernum == -1)
     {

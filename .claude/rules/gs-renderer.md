@@ -21,6 +21,19 @@ The README's "Rendering" section is the architecture overview. The renderer file
   calls it first**, and `EndFrame` calls it last. Never defer all 2D to frame end: the 2D
   packet bakes texture VRAM addresses, and mid-frame 3D uploads can evict them. Don't
   reintroduce a frame-wide 2D bracket. Each 2D→3D switch is a GS sync point (~2 per frame).
+- **With `ps2_gs_latency` on (the default), a frame reaches the screen only when the next
+  `BeginFrame` runs.** A frame that nothing follows never shows. The loading plaque was one:
+  `SCR_BeginLoadingPlaque` draws it once, then `cls.disable_screen` stops all drawing until
+  the level is up, so a slow load sat on a black screen. Draw such frames with
+  `rs::EndFrame(/*deferPresent=*/false)`, as `PS2_DrawLoadingScreen` does. `rs::FrameStarted()`
+  tells you whether a frame is already open.
+- **No frame may begin while a `.bsp` is parsed.** Both command buffer halves live in the world
+  loader's lump scratch, lent from `cmdbuf::DrainBeforeWorldLoad` until `BspFileReader::Close`
+  (`cmdbuf::LentToWorldLoad()`). `LoadTexInfo` loads every wall texture inside that window, so
+  anything that draws from a file hook must check it. A frame built there writes its chain over
+  the pinned vertex/edge lumps. That surfaced as "Surface lightmap too large for the
+  accumulator!" and is now an assert in `cmdbuf::BeginFrame`. To reproduce: set the loading
+  screen's `kRedrawIntervalMsec` to 0, so every file read draws.
 - **TEST is not in the VU1 batch register block.** MIPTBP1 took its slot, and the 7-qword tag
   block can't grow: 8 qwords would need 2 more per double-buffer half, and there is 1. 3D
   relies on TEST holding the 3D pixel tests. The clear leaves it so, and `gs::EmitEnd2D`

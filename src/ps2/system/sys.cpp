@@ -11,6 +11,7 @@
 #include "ps2/common.h"
 #include "ps2/debug/scr_print.h"
 #include "ps2/debug/profile.h"
+#include "ps2/debug/log_file.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/save/save_system.h"
 
@@ -89,6 +90,8 @@ void Sys_Init()
     // the pad driver loads its rom0: modules later, at IN_Init.
     Com_Printf("------- Sys_Init (PS2) -------\n");
 
+    ps2::debug::LogFileRegisterCvar();
+
     Cmd_AddCommand("ps2_dump_iop_mods", []() {
         ps2::sys::PrintLoadedIopModules(40, &Com_Printf);
     });
@@ -126,6 +129,13 @@ Q_COLD_FUNC void Sys_Error(const char * error, ...)
     tempbuff[sizeof(tempbuff) - 1] = '\0';
     va_end(argptr);
 
+    // Into the log before anything that draws: on a console it is the record that outlives this.
+    // One write, so the message stays on the line its prefix starts. Static, like ScrPrintf's
+    // buffer, to keep a second 2 KB off whichever thread's stack failed.
+    static char s_logLine[sizeof(tempbuff) + 16];
+    std::snprintf(s_logLine, sizeof(s_logLine), "Sys_Error: %s\n", tempbuff);
+    ps2::debug::LogFileWriteFatal(s_logLine);
+
     ps2::debug::ScrInit();
     ps2::debug::ScrSetTextColor(0xFF0000FF); // red text
     ps2::debug::ScrPrintf("***************************************************************\n");
@@ -157,6 +167,7 @@ void Sys_UnloadGame()
 void Sys_ConsoleOutput(const char * string)
 {
     std::printf("[Q2] %s", string);
+    ps2::debug::LogFileWrite(string);
 }
 
 char * Sys_ConsoleInput()

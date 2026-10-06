@@ -49,6 +49,14 @@ paths:
   preloading for anything that appears at a predictable moment.
 - `CDAudio_Play` is called by `CL_PrepRefresh` when loading is done. It is a useful event
   hook for scripted tests.
+- **While the loading plaque is up, `SCR_UpdateScreen` returns at once** (`cls.disable_screen`).
+  So `CL_PrepRefresh`'s per-model `SCR_UpdateScreen` calls draw nothing. The plaque comes down
+  in `SCR_EndLoadingPlaque` (`CL_ParseFrame`'s first valid frame of a new servercount, once
+  prepped), or after a 120 s timeout. The PS2 loading screen hangs off those calls and off
+  `FS_LoadFile`/`FS_FOpenFile` (`ps2/renderer/loading_screen.h`).
+- The load trace (`PS2_LOAD_TRACE`, `ps2/debug/load_trace.h`) covers the path from
+  `SCR_FinishCinematic` to the first `R_EndFrame` after registration. `PS2_QUAKE_LOAD_TRACE`
+  ships as 0; set it to 1 to debug a load, and back to 0 before committing.
 
 ## Save game duty
 

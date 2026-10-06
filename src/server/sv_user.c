@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_user.c -- server code for moving users
 
 #include "server.h"
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 edict_t * sv_player;
 
@@ -42,6 +43,7 @@ void SV_BeginDemoserver(void)
     char name[MAX_OSPATH];
 
     Com_sprintf(name, sizeof(name), "demos/%s", sv.name);
+    PS2_LOAD_TRACE("SV_BeginDemoserver: %s", name); // [PS2_QUAKE]
     FS_FOpenFile(name, &sv.demofile);
 
     if (!sv.demofile)
@@ -419,6 +421,7 @@ void SV_Nextserver(void)
 
     svs.spawncount++; // make sure another doesn't sneak in
     v = Cvar_VariableString("nextserver");
+    PS2_LOAD_TRACE("SV_Nextserver: \"%s\"", v[0] ? v : "killserver"); // [PS2_QUAKE]
     if (!v[0])
     {
         Cbuf_AddText("killserver\n");

@@ -108,6 +108,7 @@ PS2_CXX_SRC =                         \
 	ps2/renderer/cmd_buffer.cpp       \
 	ps2/renderer/render_system.cpp    \
 	ps2/renderer/clip.cpp             \
+	ps2/renderer/loading_screen.cpp   \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \
 	ps2/tests/map_cycle.cpp           \
@@ -118,6 +119,8 @@ PS2_CXX_SRC =                         \
 	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
 	ps2/debug/profile.cpp             \
+	ps2/debug/log_file.cpp            \
+	ps2/debug/load_trace.cpp          \
 	ps2/builtin/palette.cpp           \
 	ps2/builtin/conchars.cpp          \
 	ps2/builtin/conback.cpp           \
@@ -177,6 +180,7 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/input/pad.cpp                 \
 	ps2/input/rumble.cpp              \
 	ps2/renderer/vid.cpp              \
+	ps2/renderer/loading_screen.cpp   \
 	ps2/save/save_api.cpp             \
 	ps2/save/slot_archive.cpp         \
 	ps2/save/save_device.cpp          \
@@ -191,7 +195,9 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/debug/stack_trace.cpp         \
 	ps2/debug/pipeline_dump.cpp       \
 	ps2/debug/exception_handler.cpp   \
-	ps2/debug/profile.cpp
+	ps2/debug/profile.cpp             \
+	ps2/debug/log_file.cpp            \
+	ps2/debug/load_trace.cpp
 
 SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.o))
 

@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_ents.c -- entity parsing and management
 
 #include "client.h"
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 extern struct model_s * cl_mod_powerscreen;
 
@@ -736,6 +737,11 @@ void CL_ParseFrame(void)
         // getting a valid frame message ends the connection process
         if (cls.state != ca_active)
         {
+            PS2_LOAD_TRACE("CL_ParseFrame: first valid frame (%d), client active; prepped %d, servercount %d "
+                           "(plaque raised at %d), plaque %s", cl.frame.serverframe, cl.refresh_prepped, cl.servercount,
+                           cls.disable_servercount, !cls.disable_screen ? "not up"
+                           : (cls.disable_servercount != cl.servercount && cl.refresh_prepped) ? "comes down"
+                           : "stays up"); // [PS2_QUAKE]
             cls.state = ca_active;
             cl.force_refdef = true;
             cl.predicted_origin[0] = cl.frame.playerstate.pmove.origin[0] * 0.125;

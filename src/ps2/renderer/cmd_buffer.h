@@ -268,7 +268,17 @@ bool Drain();
 // flight - the GS included, since a frame left drawing is still reading out of a half - and
 // abandons whatever is half-built, because the memory underneath is about to become the .bsp lump
 // staging buffer. Called from LoadBrushModel before it claims the scratch.
+//
+// The halves stay lent to the loader until EndWorldLoad: no frame may begin in between, and
+// BeginFrame asserts it. A frame built then writes its chain over the lumps being parsed. Draws
+// that can happen during a load, such as the loading screen, check LentToWorldLoad first.
 void DrainBeforeWorldLoad();
+
+// Hands the halves back once the .bsp parse is done with its scratch (BspFileReader::Close).
+void EndWorldLoad();
+
+// Whether the halves are lent to the world loader: between DrainBeforeWorldLoad and EndWorldLoad.
+bool LentToWorldLoad();
 
 // --------------------------------------------------------------------------------------------
 // Debug counters

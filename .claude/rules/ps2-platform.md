@@ -62,6 +62,12 @@ paths:
   mounted as `massN:` (N < 10, FatFs `FF_VOLUMES`): one volume per partition, in mount order,
   with GPT's EFI and MS-reserved partitions skipped. usbmass_bd drives two USB drives at once.
   The boot probes all ten units.
+- **Writing a file on USB: only `close()` puts it on the drive.** FatFs keeps a file's last
+  partial sector in its own buffer and updates the size in the directory entry only on
+  `f_sync`/`f_close`. bdmfs_fatfs's `sync` op returns EIO and libcglue's `fsync()` is
+  ENOSYS, so the only flush is to close the file. A file held open across a power cycle can
+  come back empty. BDM's block cache is write-through. `debug/log_file.cpp` opens, appends
+  and closes on every write for this reason.
 - The USB boot finds the ELF's folder from `argv[0]`. Loaders spell the device their own way
   (`mass:/dir/quake2.elf`, `mass:dir/quake2.elf`, `hdd0:__common:pfs:/...`), and the IOP reset
   renumbers the drives, so only what follows the last colon is kept and tried on every unit,

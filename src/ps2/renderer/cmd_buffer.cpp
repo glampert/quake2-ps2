@@ -31,6 +31,10 @@ namespace {
 
 static bool s_initialized = false;
 
+// Set from DrainBeforeWorldLoad until EndWorldLoad: both halves are the .bsp lump staging buffer,
+// and a frame built into either would write its chain over the lumps being parsed.
+static bool s_lentToWorldLoad = false;
+
 // The most recent *committable* allocation - what AllocMax handed out - and the NEXT tag that
 // carries the DMAC over it, which Commit has to re-aim once the real size is known.
 //
@@ -201,6 +205,7 @@ void Init(void * memory, const u32 memorySizeBytes)
 void BeginFrame()
 {
     PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
+    PS2_AssertMsg(!s_lentToWorldLoad, "cmdbuf::BeginFrame while the world loader holds the halves as its lump scratch!");
 
     // Nothing may be left un-kicked at the end of a frame: the half is about to be reused two
     // frames from now and whatever was built and never submitted would simply not have drawn.
@@ -569,6 +574,8 @@ bool Drain()
 
 void DrainBeforeWorldLoad()
 {
+    s_lentToWorldLoad = true;
+
     if (!s_initialized)
     {
         return; // a load before the renderer is up cannot be racing anything
@@ -578,6 +585,16 @@ void DrainBeforeWorldLoad()
     // buffer, so whatever the abandoned frame left in it has to stop being chain.
     Drain();
     Rewind();
+}
+
+void EndWorldLoad()
+{
+    s_lentToWorldLoad = false;
+}
+
+bool LentToWorldLoad()
+{
+    return s_lentToWorldLoad;
 }
 
 // ------------------------------------------------------------------------------------------------

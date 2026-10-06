@@ -21,6 +21,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "client.h"
 #include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
+#include "ps2/debug/load_trace.h" // [PS2_QUAKE]
 
 //=============
 //
@@ -340,6 +341,11 @@ static void CL_TouchLevelAssets(void)
 }
 #endif // PS2_QUAKE
 
+#if PS2_QUAKE_LOAD_TRACE
+// [PS2_QUAKE]: set by CL_PrepRefresh, so the first V_RenderView after it is traced.
+static qboolean cl_trace_first_view;
+#endif
+
 /*
 =================
 CL_PrepRefresh
@@ -364,6 +370,7 @@ void CL_PrepRefresh(void)
     // let the render dll load the map
     strcpy(mapname, cl.configstrings[CS_MODELS + 1] + 5); // skip "maps/"
     mapname[strlen(mapname) - 4] = 0;                     // cut off ".bsp"
+    PS2_LOAD_TRACE("CL_PrepRefresh: %s", mapname); // [PS2_QUAKE]
 
     // register models, pics, and skins
     Com_Printf("Map: %s\r", mapname);
@@ -373,6 +380,7 @@ void CL_PrepRefresh(void)
 
 #ifdef PS2_QUAKE
     CL_TouchLevelAssets(); // [PS2_QUAKE]: free the previous level's leftovers before loading
+    PS2_LOAD_TRACE("CL_PrepRefresh: touch pass done, the previous level's leftovers freed");
 #endif
 
     // precache status bar pics
@@ -382,6 +390,7 @@ void CL_PrepRefresh(void)
     Com_Printf("                                     \r");
 
     CL_RegisterTEntModels();
+    PS2_LOAD_TRACE("CL_PrepRefresh: status bar pics and temp entity models registered"); // [PS2_QUAKE]
 
     num_cl_weaponmodels = 1;
     strcpy(cl_weaponmodels[0], "weapon.md2");
@@ -418,6 +427,7 @@ void CL_PrepRefresh(void)
             Com_Printf("                                     \r");
     }
 
+    PS2_LOAD_TRACE("CL_PrepRefresh: %d models registered", i - 1); // [PS2_QUAKE]
     Com_Printf("images %i\r", i);
     SCR_UpdateScreen();
     for (i = 1; i < MAX_IMAGES && cl.configstrings[CS_IMAGES + i][0]; i++)
@@ -426,6 +436,7 @@ void CL_PrepRefresh(void)
         Sys_SendKeyEvents(); // pump message loop
     }
 
+    PS2_LOAD_TRACE("CL_PrepRefresh: %d images registered", i - 1); // [PS2_QUAKE]
     Com_Printf("                                     \r");
     for (i = 0; i < MAX_CLIENTS; i++)
     {
@@ -440,6 +451,7 @@ void CL_PrepRefresh(void)
     }
 
     CL_LoadClientinfo(&cl.baseclientinfo, "unnamed\\male/grunt");
+    PS2_LOAD_TRACE("CL_PrepRefresh: client infos loaded"); // [PS2_QUAKE]
 
     // set sky textures and speed
     Com_Printf("sky %i\r", i);
@@ -450,6 +462,7 @@ void CL_PrepRefresh(void)
 
     re.SetSky(cl.configstrings[CS_SKY], rotate, axis);
     Com_Printf("                                     \r");
+    PS2_LOAD_TRACE("CL_PrepRefresh: sky %s set", cl.configstrings[CS_SKY]); // [PS2_QUAKE]
 
     // the renderer can now free unneeded stuff
     re.EndRegistration();
@@ -463,6 +476,11 @@ void CL_PrepRefresh(void)
 
     // start the cd track
     CDAudio_Play(atoi(cl.configstrings[CS_CDTRACK]), true);
+    PS2_LOAD_TRACE("CL_PrepRefresh: done, cd track %s started", cl.configstrings[CS_CDTRACK]); // [PS2_QUAKE]
+
+#if PS2_QUAKE_LOAD_TRACE
+    cl_trace_first_view = true;
+#endif
 }
 
 /*
@@ -563,6 +581,15 @@ void V_RenderView(float stereo_separation)
     {
         return; // still loading
     }
+
+#if PS2_QUAKE_LOAD_TRACE
+    // [PS2_QUAKE]: the client's half of the load trace ends here, at the first view it builds.
+    if (cl_trace_first_view)
+    {
+        cl_trace_first_view = false;
+        PS2_LOAD_TRACE("V_RenderView: first view since CL_PrepRefresh (frame valid %d)", cl.frame.valid);
+    }
+#endif
 
     if (cl_timedemo->value)
     {

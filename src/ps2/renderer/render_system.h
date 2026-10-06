@@ -201,6 +201,9 @@ void BeginFrame(bool dither);
 // latency for the fence the EE would otherwise stand at. Clear it and this waits and flips here.
 void EndFrame(bool deferPresent);
 
+// Whether a frame is open: BeginFrame has run and EndFrame hasn't yet.
+bool FrameStarted();
+
 // Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
 void KickAndWait();
 

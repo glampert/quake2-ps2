@@ -33,6 +33,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
   */
 
 #include "client.h"
+#include "ps2/renderer/loading_screen.h" // [PS2_QUAKE]
+#include "ps2/debug/load_trace.h"        // [PS2_QUAKE]
 
 float scr_con_current; // aproaches scr_conlines at scr_conspeed
 float scr_conlines;    // 0.0 to 1.0 lines of console to display
@@ -636,8 +638,10 @@ void SCR_BeginLoadingPlaque(void)
 
     if (cls.disable_screen)
         return;
-    if (developer->value)
-        return;
+    // [PS2_QUAKE]: debug builds default developer to 1, which kept the plaque, and the loading
+    // screen with it, out of them. A level loads the same way in both builds here.
+    //if (developer->value)
+    //    return;
     if (cls.state == ca_disconnected)
         return; // if at console, don't bring up the plaque
     if (cls.key_dest == key_console)
@@ -651,6 +655,12 @@ void SCR_BeginLoadingPlaque(void)
     SCR_UpdateScreen();
     cls.disable_screen = Sys_Milliseconds();
     cls.disable_servercount = cl.servercount;
+
+    // [PS2_QUAKE]: with ps2_gs_latency on, the plaque drawn above would only reach the screen
+    // with the next frame, and nothing draws one until the level is up. The loading screen
+    // shows it now, and names each file read under it until SCR_EndLoadingPlaque.
+    PS2_LOAD_TRACE("SCR_BeginLoadingPlaque: plaque up (servercount %d)", cl.servercount);
+    PS2_LoadingScreenBegin();
 }
 
 /*
@@ -662,7 +672,10 @@ void SCR_EndLoadingPlaque(void)
 {
     Com_DPrintf("*** SCR_EndLoadingPlaque ***\n");
 
+    PS2_LOAD_TRACE("SCR_EndLoadingPlaque: plaque down after %d ms",
+                   cls.disable_screen ? Sys_Milliseconds() - (int)cls.disable_screen : 0); // [PS2_QUAKE]
     cls.disable_screen = 0;
+    PS2_LoadingScreenEnd(); // [PS2_QUAKE]
     Con_ClearNotify();
 }
 
@@ -1352,6 +1365,7 @@ void SCR_UpdateScreen(void)
         if (Sys_Milliseconds() - cls.disable_screen > 120000)
         {
             cls.disable_screen = 0;
+            PS2_LoadingScreenEnd(); // [PS2_QUAKE]
             Com_Printf("Loading plaque timed out.\n");
         }
         return;

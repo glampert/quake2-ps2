@@ -61,10 +61,10 @@ All policy lives in the backend. The engine only builds the text (`open_memstrea
 `Cvar_WriteVariablesToFile`), and `exec config.cfg` asks the backend for it.
 
 - **Write:** `<gamedir>/config.cfg` only when running from `host:` (**never** to
-  `mass:`/USB), plus `mc0:/Q2PS2/config.cfg` whenever the save device is the card. The card
+  HDD/PFS or `mass:`/USB), plus `mc0:/Q2PS2/config.cfg` whenever the save device is the card. The card
   write is skipped when unchanged.
 - **Read:** emulator = the host file first, with the card as fallback. Console = **the card
-  first**, then the USB `baseq2/config.cfg`.
+  first**, then the HDD/USB `baseq2/config.cfg`.
 - **Order:** binds in key-number order, then archived cvars sorted by name, so an unchanged
   setup writes the same bytes every quit. id wrote cvars in list order (newest first), and
   `exec config.cfg` creates most of them before registration, so every quit reversed them.
@@ -74,8 +74,8 @@ All policy lives in the backend. The engine only builds the text (`open_memstrea
   outside any `PS2_QUAKE_DEBUG`/`PS2_QUAKE_PROFILE` gate, even if nothing reads it there.
   `ps2_perftest` does this through `RegisterPerfTestCvar`. The game's cvars still drop if a
   run quits before any server starts, but the attract loop starts one within seconds.
-- The console branch was only host-tested, because this setup can't boot from `mass:`. The
-  host policy test uses directories literally named `host:`/`mass:` to catch stray writes.
+- Host policy tests use directories literally named `host:`/`mass:` to catch stray writes.
+  PCSX2 USB boot is now verified; HDD/PFS uses the same non-host memory-card save policy.
 
 ## Testing
 

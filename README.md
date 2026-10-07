@@ -44,8 +44,8 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   structures changed, and every failure is explained in an on-screen message box.
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
   GS VRAM texture heap with LRU eviction and defragmentation.
-- Runs on both the **PCSX2 emulator** (game data over `host:`) and **real hardware**
-  (game data from USB mass storage).
+- Runs on both the **PCSX2 emulator** and **real hardware**, loading game data from
+  `host:` for development, an APA/PFS PS2 HDD, or USB mass storage, in that order.
 
 ---
 
@@ -212,8 +212,8 @@ HostFs = true
 
 PCSX2 maps `host:` to the directory the ELF was loaded from — that is `build/debug/` (or
 `build/release/`), and the `run` target symlinks a `baseq2` there back to the repo's
-`baseq2/`. Without `HostFs`, the boot
-probe finds nothing and the game halts with *"No game data found"*. The equivalent UI toggle
+`baseq2/`. Without `HostFs`, boot falls through to HDD and USB; if neither has game data,
+the game halts with *"No game data found"*. The equivalent UI toggle
 (Settings → Advanced → Enable Host Filesystem) is hidden unless advanced settings are shown.
 
 #### 2. Enable the IOP console, to see the game's stdout
@@ -250,14 +250,78 @@ defaults to 1; set it to 0 to ignore the keyboard. Two quirks worth knowing:
   and never sends `0x35` (grave). The port maps `0x34` to `` ` `` so the console toggle
   works under the emulator; on real hardware, hand it back with `in_keyboardmap 0x34 '`.
 
+#### 4. Testing HDD or USB storage in PCSX2
+
+Set `HostFs = false` to exercise the console storage paths. The HDD settings are:
+
+```ini
+[DEV9/Hdd]
+HddEnable = true
+HddFile = /absolute/path/to/quake2-hdd.raw
+```
+
+For USB, use a writable raw MBR/FAT32 disk image rather than an optical-disc ISO:
+
+```ini
+[USB2]
+Type = Msd
+Msd_subtype = 0
+Msd_ImagePathMsd = /absolute/path/to/quake2-usb.img
+```
+
+To prepare a new HDD and transfer a single-build USB package:
+
+1. In **PCSX2 → Settings → Network & HDD**, enable the HDD, choose a new `.raw` image,
+   and click **Create Image**. Keep the USB image attached for the transfer.
+2. Boot uLaunchELF and open **FileBrowser → MISC → HddManager**. For the new, blank
+   image, use **R1 → Format** to create the PS2's APA partition layout.
+3. Use **R1 → Create** to make a PFS partition named **`+Q2PS2`**. **512 MiB** is enough
+   for the ELF and `pak0.pak` package; use a larger partition for music, players and videos.
+4. In FileBrowser, open **`mass:/`**, select **`quake2.elf`** and **`baseq2/`** with
+   **Square**, then choose **R1 → Copy**.
+5. Navigate to **`hdd0:/+Q2PS2/`** and choose **R1 → Paste**. Open the copied
+   **`quake2.elf`** to launch the game from HDD.
+
+For repeated tests, [make_usb_image.py](src/tools/scripts/make_usb_image.py) creates a
+writable raw MBR/FAT32 image on macOS using `hdiutil`:
+
+```sh
+make
+make release
+python3 src/tools/scripts/make_usb_image.py
+```
+
+The script packages the existing builds; it does not compile them. Its default output is
+`build/quake2-usb.img`, with volume name `Q2PS2`, sized automatically with free space and a
+minimum of 256 MiB:
+
+```
+mass:/
+  quake2_debug.elf
+  quake2_release.elf
+  baseq2/
+```
+
+`baseq2/` copies the working directory, including the current `config.cfg`, players, saves
+and videos. Music includes only `.adp` tracks; `.wav` files are omitted. The decompressed
+`baseq2/pak0/` directory is omitted when `baseq2/pak0.pak` exists. Only the stripped ELFs are
+included, renamed by configuration and
+placed beside the data. For HDD, copy `quake2_debug.elf`, `quake2_release.elf` and `baseq2/`
+together into the PFS partition. Launch either ELF in uLaunchELF.
+
+Use `--output /path/to/test.img` to choose another destination, `--size-mib 1024` to choose
+a fixed size, and `--force` to replace an existing image after a successful build. Close
+PCSX2 before replacing an attached image, then point USB2's `Msd_ImagePathMsd` at the output.
+
+Boot prints the selected device, including the APA partition name for HDD. A matching HDD
+installation wins over USB even when the ELF was launched from USB; disconnect or disable
+HDD to test USB specifically.
+
 ### Running on real hardware
 
-The boot path probes `host:` first (which fails instantly on a console), then falls back to
-USB mass storage: full IOP reset, sbv patches, and the embedded BDM/USB driver stack, waiting
-up to 10 seconds for the drive to enumerate. Copy `quake2.elf` and `baseq2/` side by side into
-any folder of a FAT32 or exFAT USB drive (or put `baseq2/` at the drive's root) and load the
-ELF with your launcher of choice. A release zip's `q2ps2_<config>_<version>/` folder already
-has this layout, so it can be copied over as it is:
+Copy `quake2.elf` and `baseq2/` side by side into a folder on an APA/PFS HDD partition or
+a FAT32/exFAT USB drive, then load the ELF with your launcher of choice. A release zip's
+`q2ps2_<config>_<version>/` folder already has this layout, so it can be copied over as it is:
 
 ```
 mass:/q2ps2_release_3.20/
@@ -265,14 +329,26 @@ mass:/q2ps2_release_3.20/
   baseq2/
 ```
 
-The folder comes from the ELF path the launcher passes (`argv[0]`). It can be up to 50
-characters long, which keeps every path the engine builds within its 128-byte limit. Next to
-the ELF wins over the root. Every FAT volume is probed (`mass0:` to `mass9:`, one per
-partition, in mount order), so the data needn't be on the first partition or the first drive.
-When none has it, the error screen shows the ELF path it got, where it looked, and the volumes
-that did mount. `none` means the drive never came up or has no FAT partition. The BDM, USB,
-keyboard and sound IRX modules are all embedded in the ELF by the Makefile's `bin2c` rule, so
-nothing else has to be on the drive.
+The boot order is **host filesystem → HDD → USB**. `host:` fails instantly on a console.
+After that probe, boot resets the IOP, applies the sbv patches and starts iomanX/fileXio.
+HDD uses the embedded DEV9/ATA/APA/PFS drivers. The partition and folder come from the ELF
+path the launcher passes (`argv[0]`), including `hdd0:+Q2PS2:pfs:/dir/quake2.elf` and
+`hdd0:/+Q2PS2/dir/quake2.elf`. The launch partition is checked first, its folder before
+its root. Other main PFS partitions are then searched, all matching folders before roots.
+This also handles a bare `pfsN:` launch path that no longer identifies its partition after
+the reset. The chosen partition remains mounted at `pfs0:` for all engine file I/O.
+
+If no HDD data is found, boot starts the embedded BDM/USB stack and waits up to 10 seconds
+for enumeration. Every FAT volume is probed (`mass0:` to `mass9:`, one per partition, in
+mount order), the launch folder on all volumes before their roots. Thus the data needn't
+be on the first partition or drive. The folder can be up to 50 characters long, keeping
+engine paths within the 128-byte limit. Root `baseq2/` is retained as a fallback on both
+devices. Missing HDD hardware or an unavailable HDD driver does not prevent USB boot.
+
+When no device has the data, the error screen shows the ELF path, search folders, HDD
+status and mounted USB volumes. `USB volumes mounted: none` means USB did not come up or
+has no FAT partition. Storage, keyboard and sound IRX modules are all embedded in the ELF,
+so no separate drivers need to be installed on the drive.
 
 ---
 
@@ -541,7 +617,7 @@ events, so the stock `default.cfg` binds work as they do on a PC. It is gated by
 
 ### System and memory
 
-[main.cpp](src/ps2/system/main.cpp) locates the game data (`host:` first, then the USB/BDM
+[main.cpp](src/ps2/system/main.cpp) locates the game data (`host:` first, then HDD/PFS, then USB/BDM
 bring-up) *before* `Qcommon_Init`, because `FS_InitFilesystem` opens pak files during init
 while the pad driver loads its `rom0:` modules later — after the IOP reset, which is the
 required order.
@@ -580,16 +656,16 @@ The engine and game still write id's save files through stdio, but not into
 by the two hooks in [save_api.cpp](src/ps2/save/save_api.cpp) the engine writes and executes it
 through (`Sys_SaveStoreConfig` from `CL_WriteConfiguration`, `Sys_SaveLoadConfig` from `exec`):
 
-| | Emulator (game data on `host:`) | Console (game data on the USB stick, `mass:`) |
+| | Game data on `host:` | Game data on HDD (`pfs0:`) or USB (`massN:`) |
 |---|---|---|
-| **Saving** | `baseq2/config.cfg` on the host, as always; plus the card's `Q2PS2/config.cfg` when saves go to the card (`ps2_savedevice mc`) | the card's `Q2PS2/config.cfg` only. Never the USB stick |
-| **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the USB stick's `baseq2/config.cfg` only if the card has none |
+| **Saving** | `baseq2/config.cfg` on the host, as always; plus the card's `Q2PS2/config.cfg` when saves go to the card (`ps2_savedevice mc`) | the card's `Q2PS2/config.cfg` only. Never the game-data drive |
+| **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the HDD/USB `baseq2/config.cfg` only if the card has none |
 
 The config is written on quit and on leaving the video menu after a change; the card copy is
 only rewritten when it differs. The archived cvars are written sorted by name (id wrote them in
 registration order, which reversed on every quit), so the same settings always give the same file. A card that is missing or full just skips it, with a line on
 the console - on a console without a memory card the settings then last until it is switched
-off. The `config.cfg` the game data's folder holds on a USB stick is never written by the game,
+off. The `config.cfg` the game data's folder holds on an HDD or USB drive is never written by the game,
 so one placed there by hand serves as the default for cards that have none.
 
 The game's pointers to functions and animations are saved as a hash of the pointee's name,
@@ -609,11 +685,15 @@ the backend registers, with its debug and release defaults and a line on what it
 
 **Log file:** `ps2_logfile` (off by default, and on in a build with the load trace on) copies
 everything the console prints, plus `Sys_Error`, to `quake2.log` next to `baseq2/`. That's
-`build/<config>/quake2.log` under PCSX2, and the ELF's folder on a USB stick. It is the only
+`build/<config>/quake2.log` on `host:`, and the selected game-data folder on HDD/USB. It is the only
 log a console run leaves. Every line is stamped with the seconds since boot, and every write
 opens, appends and closes the file. On a FAT drive that close is the only flush: bdmfs_fatfs
 has no sync, so a log kept open could come back empty after a power cycle. A run that hangs or
-crashes still leaves its log up to the last line.
+crashes still leaves its log up to the last line. On HDD, each close is followed by
+the storage boot layer's `SyncGameDataDevice()`, which uses `fileXioSync` on the selected
+`pfsN:` mount to flush cached inode/directory metadata.
+Host and USB logs skip that sync. A write, close or sync failure disables logging and prints
+a warning; PFS sync failures include the driver error code.
 
 **Load trace:** set `PS2_QUAKE_LOAD_TRACE` to 1 in
 [load_trace.h](src/ps2/debug/load_trace.h) (it ships 0), which also turns the log file on by

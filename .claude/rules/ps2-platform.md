@@ -55,8 +55,32 @@ paths:
 
 - Boot (`system/iop_boot.cpp`): the `host:` fast path doesn't reset the IOP.
   `sbv_patch_enable_lmb()` alone lets `SifExecModuleBuffer` load embedded IRX without
-  disturbing open `host:` handles. The USB path does a full IOP reset, then sbv patches and
-  BDM. Game data is located *before* `Qcommon_Init`.
+  disturbing open `host:` handles. Console storage shares a full IOP reset, sbv patches and
+  iomanX/fileXio. Boot probes host, then HDD/PFS, then USB/BDM before `Qcommon_Init`.
+- **HDD drivers and limits:** standard `ps2hdd.irx` already uses iomanX; the separately named
+  `ps2hdd-iomanx.irx` is a virtual-disk variant without DEV9/ATAD. Use ps2dev9 → ps2atad →
+  ps2hdd → ps2fs. Missing hardware/failed HDD init must fall through to USB. APA's default
+  one open handle cannot enumerate while PFS is mounted; boot uses `-o 4 -n 20`. PFS's
+  default two open files cannot cover pak/music/log/asset reads; boot uses `-m 1 -o 16 -n 40`,
+  supplying NUL-separated args. Cache buffers must be at least `2 * maxOpen + 8`.
+- **HDD selection:** retain the launch partition before reset; mount it read/write at `pfs0:`
+  so the debug log can be written. Other partitions are enumerated from `hdd0:`/`hdd1:`:
+  `HDIOC_STATUS == 0`, `stat.mode == APA_TYPE_PFS`, and no `APA_FLAG_SUB`. These constants
+  are in `hdd-ioctl.h`. The `iox_dirent_t` DMA destination must own aligned 64-byte lines.
+  Keep the winning mount alive and unmount misses before probing the next partition.
+- **PFS close does not always persist metadata.** Standard read/write mount flag `0` leaves
+  dirty inode/directory metadata cached: `pfsFioCloseFileSlot` only calls
+  `pfsCacheFlushAllDirty` when mount flag `0x02` is set (`PFS_MT_ROBUST` in `libhdd.h`).
+  `fileXioSync("pfs0:", 0)` explicitly flushes it. `system/iop_boot.cpp` keeps the selected
+  HDD mount internal and exposes `SyncGameDataDevice()`, which returns 0 without an RPC for
+  host/USB. `debug/log_file.cpp` calls it after each close, including header and fatal output,
+  without knowing fileXio or the mount name. Check close/sync results and disable logging on
+  failure. Sync uses the default blocking `FXIO_WAIT` mode and returns a negative SDK error
+  directly rather than setting libc errno. The original missing-log diagnosis remains
+  unconfirmed until a new HDD run; the available emulator log was from a later host run.
+- **USB presence is not module-loader readiness.** HDD success has reset/patched the IOP
+  without starting usbd. Track those separately so keyboard startup starts usbd exactly
+  when required, without repatching the already-prepared module loader.
 - **`mass:` is `mass0:`.** iomanX's `parsefile` reads a missing unit number as 0, and libcglue
   passes both spellings through unchanged. bdmfs_fatfs serves the N-th FAT/exFAT volume it
   mounted as `massN:` (N < 10, FatFs `FF_VOLUMES`): one volume per partition, in mount order,
@@ -68,10 +92,12 @@ paths:
   ENOSYS, so the only flush is to close the file. A file held open across a power cycle can
   come back empty. BDM's block cache is write-through. `debug/log_file.cpp` opens, appends
   and closes on every write for this reason.
-- The USB boot finds the ELF's folder from `argv[0]`. Loaders spell the device their own way
+- Console boot finds the ELF's folder from `argv[0]`. Loaders spell the device their own way
   (`mass:/dir/quake2.elf`, `mass:dir/quake2.elf`, `hdd0:__common:pfs:/...`), and the IOP reset
-  renumbers the drives, so only what follows the last colon is kept and tried on every unit,
-  before the root. PCSX2 passes `host:` plus the ELF's absolute host path. The folder is capped
+  renumbers USB drives. Preserve the HDD partition separately, and drop the partition's
+  path component for browser-style `hdd0:/partition/dir/elf` paths. Bare `pfsN:` paths need
+  partition enumeration after reset. Search folders before roots. PCSX2 passes `host:` plus
+  the ELF's absolute host path. The folder is capped
   at 50 chars: the engine builds `<base>/baseq2/<name>` in `MAX_OSPATH` (128) with names up to
   `MAX_QPATH - 1`, so the base path (`massN:` + folder) must stay within 56.
 - `rom0:FILEIO`'s `remove()` RPC handler lacks a `break`: every `remove(path)` on the fio

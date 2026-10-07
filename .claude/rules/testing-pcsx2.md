@@ -5,8 +5,9 @@
 - App: `/Applications/PCSX2.app/Contents/MacOS/PCSX2`, launched as `PCSX2 -batch -elf <elf>`
   (`make run`). `host:` maps to the ELF's directory, and `make run` symlinks
   `build/<config>/baseq2` → the repo's `baseq2/`.
-- `~/Library/Application Support/PCSX2/inis/PCSX2.ini` needs `[EmuCore] HostFs = true`
-  (otherwise "No game data found"). Game stdout needs `[Logging] EnableIOPConsole = true`,
+- Development through `host:` needs `[EmuCore] HostFs = true` in
+  `~/Library/Application Support/PCSX2/inis/PCSX2.ini`. Disable it to test HDD/USB loading.
+  Game stdout needs `[Logging] EnableIOPConsole = true`,
   because ps2sdk stdout goes through IOP fio, plus `EnableFileLogging = true` to land in
   `~/Library/Application Support/PCSX2/logs/emulog.txt`. Engine lines carry a `[Q2]` prefix.
 - **Edit PCSX2.ini only while PCSX2 is closed.** It rewrites the file on exit.
@@ -69,16 +70,84 @@ Three traps. Each one looks like a game crash, and all of them reproduce at HEAD
   [performance.md](performance.md).
 - `ps2_testcube 1` (VU1 path smoke test), `ps2_testcin 1` (cinematics).
 - **The USB boot branch:** run a copy of the ELF from a directory with no `baseq2/` (e.g. the
-  scratchpad). The `host:` probe misses, so the IOP reset, the BDM module chain and the
-  10 s `mass0:`-`mass9:` poll all run, ending on the "No game data found!" screen with
-  `USB volumes mounted: none`. PCSX2 offers no USB mass-storage device, so a mounted volume
-  needs hardware. The run stops before `Qcommon_Init` and never touches `config.cfg`. Its
+  scratchpad), with HDD disabled. The `host:` probe misses, so the IOP reset, optional HDD
+  probe, BDM module chain and 10 s `mass0:`-`mass9:` poll all run, ending on the
+  "No game data found!" screen with
+  `USB volumes mounted: none` when no emulated USB drive is attached. The run stops before
+  `Qcommon_Init` and never touches `config.cfg`. Its
   `argv[0]` is an absolute host path, longer than the 50-char ELF folder cap, so only the
   root is searched.
-- **The USB search itself** (ELF folder vs root, unit order) runs in a host harness: include
-  `iop_boot.cpp` with stub SDK headers and stub IOP calls, and run it from a directory holding
-  folders literally named `mass0:`, `mass1:`... (macOS allows the colon). `fopen` then takes
-  the probe paths as relative ones.
+- **PCSX2 emulated USB storage (3.20 debug runtime verified via uLaunchELF):**
+  `[USB2] Type = Msd`, `Msd_subtype = 0` (Iomega Zip-100 / Generic), and
+  `Msd_ImagePathMsd = /absolute/path/usb.img` attach a file-backed mass-storage device;
+  USB1 can remain `hidkbd`. PCSX2 uses raw 512-byte sectors and opens the image `r+b`,
+  so use a writable raw disk image; an MBR/FAT32 layout is a conservative test choice.
+  Put `baseq2/` at its root for a directly launched host ELF. Disable `[EmuCore] HostFs`
+  or launch from a folder without host game data, since the successful host probe skips
+  storage bring-up. Also disable HDD if it has a matching installation: HDD takes
+  precedence over USB. The embedded BDM modules probe `mass0:` through `mass9:`.
+  Attaching the image doesn't launch its ELF; loading the ELF itself from `mass:` needs
+  a homebrew launcher such as wLaunchELF. See PCSX2's
+  [usb-msd.cpp](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/USB/usb-msd/usb-msd.cpp)
+  and [USB.cpp](https://github.com/PCSX2/pcsx2/blob/master/pcsx2/USB/USB.cpp).
+- **Creating a USB image on macOS:** `hdiutil create -size 256m -fs 'MS-DOS FAT32'
+  -layout MBRSPUD -volname Q2PS2DEBUG -srcfolder <package-folder> -format UDTO
+  -nospotlight <output>.cdr`, then rename `.cdr` to `.img`. Despite the UDTO format's
+  "DVD/CD master" name, the explicit filesystem/layout produce raw MBR/FAT32 sectors,
+  without a DMG trailer or an ISO9660 filesystem. The 3.20 debug package produced a
+  256 MiB image with `quake2.elf` and `baseq2/` at the root; its partition/boot signatures,
+  FAT copies, and SHA-256 hashes of all four packaged files were verified by reading the
+  FAT32 image directly. Launch `mass:/quake2.elf` in uLaunchELF. The user verified this
+  on 2026-10-07; the log reports `mass0:/baseq2` ready after 600 ms and reads from its pak.
+  Initial debug-run loading-screen summaries report 120-131 seconds. These are instrumented
+  observations from one session, not a storage-throughput benchmark. Its emulator log was
+  preserved as `github_rel_3.20/q2ps2_debug_3.20_usb-emulog.txt` before another launch could
+  overwrite it. Keep build, map, config, and logging settings matched in comparisons.
+- **Reusable test USB image:** `python3 src/tools/scripts/make_usb_image.py` packages the
+  existing stripped debug/release ELFs at the volume root as `quake2_debug.elf` and
+  `quake2_release.elf`, beside `baseq2/`; unstripped ELFs are omitted. It copies the working
+  data/config except `baseq2/pak0/` when `pak0.pak` is present, and includes only `.adp`
+  files under `baseq2/music/` (case-insensitive, including subdirectories). macOS `hdiutil`
+  produces an auto-sized writable MBR/FAT32 image with volume name `Q2PS2` at
+  `build/quake2-usb.img`; `--output`, `--size-mib`, and `--force` override defaults.
+  The initial full-data run produced an 832 MiB image: raw FAT32 verification checked all
+  96 included files by SHA-256, with no missing/extra files or directories. Sixteen fixture
+  cases cover selection, sizing, errors and safe replacement. Both ELFs now sit next to
+  the shared data, requiring no folder fallback. Close PCSX2 before replacing an image.
+- **HDD boot:** the current source embeds DEV9/ATAD/APA/PFS and probes HDD between `host:`
+  and USB. ELFs packaged before HDD support need rebuilding.
+  Enable `[DEV9/Hdd] HddEnable = true` and set `HddFile` to a PCSX2 HDD image. Create and
+  format a new blank image with uLaunchELF's HDD Manager, create a main PFS partition
+  (e.g. `+Q2PS2`, 512 MiB), and copy the new ELF and `baseq2/` side by side into it.
+  With `HostFs = false`, launch it through uLaunchELF. The game resets the IOP and mounts
+  PFS itself: the launcher mount does not survive. Successful bring-up logs
+  `game data on pfs0:/.../baseq2 (HDD partition hdd0:+Q2PS2)` and keeps that mount alive.
+  Canonical `hdd0:+Q2PS2:pfs:/dir/quake2.elf` and browser `hdd0:/+Q2PS2/dir/quake2.elf`
+  paths retain the launch partition; bare `pfsN:` paths fall back to enumeration.
+  The launch partition's folder/root comes first; other main PFS partitions are searched
+  for the same folder before any roots. Missing HDD/drivers or no matching data falls
+  through to USB. The user verified emulated PFS boot/reads on 2026-10-07 and observed
+  noticeably faster loading than USB. The missing HDD log still needs session-specific
+  verification after adding HDD-only `fileXioSync` after log closes; see the PFS
+  metadata-flush trap in [ps2-platform.md](ps2-platform.md).
+- **Storage selection runtime harness:** include `iop_boot.cpp` with stub SDK headers
+  and IOP/mount calls, then run from a directory holding folders literally named `pfs0:`,
+  `mass0:`, `mass1:`... (macOS allows the colon). `fopen` then takes the probe paths as
+  relative ones. The HDD implementation passed 84 cases under ASan/UBSan: launch-path
+  parsing/bounds, host/HDD/USB precedence, partition filtering and mount lifetime,
+  optional HDD failure fallback, mandatory initialization failures, and keyboard USB
+  startup after HDD boot. `SyncGameDataDevice()` tests cover no-op before boot/host/USB/
+  failed HDD, selected-mount sync and raw errors, and clearing stale state on another
+  detection. This verifies selection logic, not the real drivers or DMA;
+  `make` and `make release` remain the target compile/link checks.
+- **HDD log sync runtime harness:** include `debug/log_file.cpp` with fake SDK headers,
+  real host-backed open/seek/write/close wrappers and a mocked `SyncGameDataDevice()`;
+  the boot harness checks its real fileXio implementation. Twenty-four ASan/UBSan cases
+  verify header/append/fatal persistence ordering, no sync for host/USB or disabled
+  logging, and disabling after open/seek/write/
+  partial-write/close/sync failures. Every opened descriptor closes before HDD sync, even
+  after a failed operation; an open failure never syncs. Real PFS persistence still needs
+  an emulator run with the new ELF, checking `quake2.log` beside `baseq2/` after shutdown.
 
 ## Quiet map for renderer work
 

@@ -22,7 +22,8 @@ void LogFileOpen(const char * basePath);
 // follows the cvar's default.
 void LogFileRegisterCvar();
 
-// Appends text, stamping each line with the seconds since boot. Callable from any thread.
+// Appends text, stamping each line with the seconds since boot. HDD/PFS writes sync after
+// closing the file; host:/USB writes only close. Callable from any thread.
 void LogFileWrite(const char * text);
 
 // LogFileWrite for the fatal paths (Sys_Error, the EE exception report). These can run on a

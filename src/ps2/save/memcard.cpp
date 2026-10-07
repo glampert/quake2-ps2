@@ -9,7 +9,7 @@
  *  mcGetInfo's result rather than its format flag; nothing here needs more.
  *
  *  All file I/O goes through libmc rather than stdio on "mc0:" paths: the latter reaches the
- *  card through the ROM FILEIO on the host: boot and through fileXio on the USB boot, each with
+ *  card through ROM FILEIO on host: boots and fileXio on HDD/USB boots, each with
  *  its own quirks, and can't tell a missing card from a missing file. libmc is asynchronous;
  *  every call here is followed by mcSync, which waits for the result.
  *

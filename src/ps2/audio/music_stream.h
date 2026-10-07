@@ -24,7 +24,7 @@
  *        preempts frame work, it just gets the CPU whenever the main thread sleeps, which
  *        happens several times a frame (the audsrv RPCs in SNDDMA_Submit, any file I/O), and
  *        whenever MusicStream yields to it explicitly after queueing a read. Both SDK file
- *        clients (fio for host:, fileXio for mass:) serialize their RPCs with semaphores, so
+ *        clients (fio for host:, fileXio for pfs:/mass:) serialize their RPCs with semaphores, so
  *        the reader can share them with the main thread's own file I/O safely.
  *
  * This source code is released under the GNU GPL v2 license.

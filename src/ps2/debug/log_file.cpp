@@ -9,6 +9,9 @@
  *  log held open could come back empty after the console is switched off. BDM's block cache
  *  writes through, so once the file is closed the line is on the drive. That costs a few USB
  *  commands per write, which is fine for a log written mostly while loading.
+ *  PFS keeps inode/directory metadata cached even after close with our read/write mount.
+ *  After each close the storage boot layer syncs HDD metadata; on host:/USB it does nothing.
+ *  This also covers the header and fatal paths.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -16,6 +19,7 @@
 #include "ps2/common.h"
 #include "ps2/debug/log_file.h"
 #include "ps2/debug/load_trace.h"
+#include "ps2/system/iop_boot.h"
 
 #include <cstdio>
 #include <fcntl.h>
@@ -78,10 +82,14 @@ void Flush()
     const int flags = (s_state == State::Pending) ? (O_WRONLY | O_CREAT | O_TRUNC) : O_WRONLY;
     const int fd = open(s_path, flags, 0666);
     bool written = false;
+    int syncResult = 0;
     if (fd >= 0)
     {
         written = (lseek(fd, 0, SEEK_END) >= 0) && (write(fd, s_buffer, static_cast<size_t>(s_used)) == s_used);
-        close(fd);
+        const int closeResult = close(fd);
+        // Even a partial write or failed close may have changed HDD metadata.
+        syncResult = ps2::sys::SyncGameDataDevice();
+        written = written && closeResult == 0 && syncResult == 0;
     }
 
     if (written)
@@ -92,7 +100,14 @@ void Flush()
     {
         // Give up after the first failure: a drive that refused one write would make every
         // Com_Printf after it wait on another.
-        std::printf("WARNING: can't write the log file %s (%d) - logging is off.\n", s_path, fd);
+        if (syncResult != 0)
+        {
+            std::printf("WARNING: can't sync the log file %s (PFS error %d) - logging is off.\n", s_path, syncResult);
+        }
+        else
+        {
+            std::printf("WARNING: can't write the log file %s (%d) - logging is off.\n", s_path, fd);
+        }
         s_state = State::Off;
     }
     s_used = 0;

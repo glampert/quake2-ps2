@@ -2,8 +2,7 @@
 /* ================================================================================================
  * File: iop_boot.h
  * Brief: Boot-time IOP bring-up and game-data location. Finds where the baseq2/ data
- *        lives - host: under PCSX2 (no IOP modules needed) or USB mass storage on a
- *        real console (full IOP reset + BDM driver stack) - and returns the filesystem
+ *        lives - host:, an APA/PFS HDD, or USB mass storage - and returns the filesystem
  *        base path to hand to FS_SetDefaultBasePath.
  *
  * This source code is released under the GNU GPL v2 license.
@@ -15,23 +14,29 @@ namespace ps2::sys {
 
 // Probes host: for the game data first (PCSX2 exposes the ELF's directory as
 // host: and services it without any IOP involvement - and the probe fails
-// instantly on hardware). When that misses, performs the full IOP bring-up:
-// reset, sbv patches, the embedded USB/BDM module chain, then waits for the
-// USB drive to enumerate, probing every FAT volume BDM mounts: first the
-// folder the ELF was launched from (elfPath is the loader's argv[0], or null
-// if it passed none), then the volume's root. Returns the base path ("host:",
-// "host:." or "mass0:" to "mass9:", plus that folder when the data is next to
-// the ELF); Sys_Errors when no game data can be found anywhere.
+// instantly on hardware). On a miss, resets/patches the IOP and starts iomanX/fileXio.
+// HDD comes next: optional DEV9/ATA/APA/PFS modules, the ELF's launch partition first,
+// then other main PFS partitions. Within the launch partition, its folder precedes
+// its root; other partitions' folders are all searched before their roots. If HDD
+// misses, starts USB/BDM and waits up to 10 seconds, searching the ELF folder on all
+// FAT volumes, then roots. elfPath is the loader's argv[0], or null if absent.
+// Returns "host:", "host:.", "pfs0:" or "mass0:"-"mass9:", plus the selected
+// folder. A successful HDD mount stays live; missing HDD hardware falls back to USB.
+// Sys_Errors when no game data can be found anywhere.
 //
 // Must run from main() BEFORE Qcommon_Init: FS_InitFilesystem opens pak files
 // during Qcommon_Init (before Sys_Init), and the pad driver loads its rom0:
 // modules later at IN_Init - after the IOP reset, which is the required order.
 const char * DetectBasePathAndBootIop(const char * elfPath);
 
-// True once the call above has taken the USB route: the IOP was reset, the sbv
-// patches that allow loading a module from an EE buffer are in place and usbd.irx
-// is running. False on the host: fast path, which skips all of it - IOP drivers
-// started later (see input/keyboard.cpp) must then patch and start usbd themselves.
+// Flushes cached data/metadata on the HDD mount selected by boot, after the caller closes
+// its write handle. Returns 0 without any RPC on host:/USB boots; HDD sync blocks and
+// returns 0 on success or the negative driver error code on failure.
+int SyncGameDataDevice();
+
+// True once the USB storage path has started usbd.irx. False on host: and HDD boots,
+// so the keyboard must start usbd itself. Module-loader readiness is tracked
+// separately: both HDD and USB boots already reset/patched the IOP.
 bool UsbStackStarted();
 
 // Starts an IRX image embedded in the ELF by the Makefile's bin2c rule. Unlike the

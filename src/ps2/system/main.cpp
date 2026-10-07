@@ -27,9 +27,9 @@ int main(int argc, char ** argv)
     // tags add up to stays a faithful picture of the console's 32MB.
     ps2::heap::TagsAddSystemMem();
 
-    // Locate the game data - host: under PCSX2, USB mass: on a real console
-    // (which needs the IOP module bring-up) - before Qcommon_Init runs
-    // FS_InitFilesystem. On USB it may sit next to the ELF, whose path the
+    // Locate the game data - host: first, HDD/PFS next, USB mass: last - before
+    // Qcommon_Init runs FS_InitFilesystem. On HDD/USB it sits next to the ELF,
+    // whose directory (and HDD partition) comes from the path the
     // loader passes as argv[0]. A build with -DPS2_FS_BASE_PATH=\"...\" pins
     // the base path and skips the detection, for debugging.
 #ifdef PS2_FS_BASE_PATH

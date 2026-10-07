@@ -203,8 +203,8 @@ bool Keyboard::Init()
     Cmd_AddCommand("in_keyboardmap", KeyboardMapCmd);
 
     // The keyboard driver lives on the IOP and speaks USB, so it needs usbd under
-    // it. The USB boot path already started usbd; the host: fast path skipped the
-    // whole IOP bring-up, so start it here. Either way a driver that won't come up
+    // it. The USB boot path already started usbd; host: and HDD boots didn't,
+    // so start it here. Either way a driver that won't come up
     // only costs us the keyboard, so none of this is fatal.
     if (!ps2::sys::UsbStackStarted())
     {

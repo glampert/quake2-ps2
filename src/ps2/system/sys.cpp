@@ -84,7 +84,7 @@ int Sys_Milliseconds()
 
 void Sys_Init()
 {
-    // Nothing to do: IOP bring-up (reset + USB mass-storage modules when
+    // Nothing to do: IOP bring-up (reset + HDD/USB storage modules when
     // needed) happens in main() via ps2::sys::DetectBasePathAndBootIop -
     // FS_InitFilesystem runs before Sys_Init and already needs file IO - and
     // the pad driver loads its rom0: modules later, at IN_Init.
@@ -192,7 +192,7 @@ char * Sys_GetClipboardData() { return nullptr; }
 
 // FS_CreatePath calls this for every directory along a path, the device root ("host:")
 // included, so failures - that one, and directories that already exist - are expected
-// and ignored. newlib's mkdir reaches host: through the ROM FILEIO and mass: through fileXio.
+// and ignored. newlib's mkdir reaches host: through ROM FILEIO and pfs:/mass: through fileXio.
 void Sys_Mkdir(const char * path)
 {
     mkdir(path, 0777);

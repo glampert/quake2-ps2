@@ -264,12 +264,13 @@ TOOLS_BINS      = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
 HOST_CXX       ?= c++
 HOST_CXXFLAGS  ?= -std=gnu++20 -O2 -Wall
 
-# IOP/IRX modules embedded into the ELF: the BDM USB mass-storage stack, booted
-# by ps2/system/iop_boot.cpp when the game data isn't on host: (real hardware),
+# IOP/IRX modules embedded into the ELF: HDD/PFS and BDM USB storage, booted
+# by ps2/system/iop_boot.cpp when the game data isn't on host:,
 # the USB keyboard driver started on demand by ps2/input/keyboard.cpp, and the
 # sound driver pair (libsd under audsrv) started by ps2/audio/audsrv_device.cpp.
 IRX_PATH  = $(PS2SDK)/iop/irx
 IRX_FILES = iomanX.irx fileXio.irx \
+            ps2dev9.irx ps2atad.irx ps2hdd.irx ps2fs.irx \
             bdm.irx bdmfs_fatfs.irx usbd.irx usbmass_bd.irx \
             ps2kbd.irx libsd.irx audsrv.irx
 

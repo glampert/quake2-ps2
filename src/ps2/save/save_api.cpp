@@ -11,8 +11,8 @@
  *  config.cfg is kept where the platform keeps settings (Sys_SaveStoreConfig/LoadConfig):
  *  under the emulator, the host:/ file the engine always wrote, which also wins when reading -
  *  it is the one edited by hand while developing - with the card as a copy when saves go there;
- *  on a console, the memory card, never the USB stick, which only stands in when the card has
- *  no config.cfg.
+ *  for HDD/USB game data, the memory card; the drive's config only stands in when the card
+ *  has no config.cfg, and is never written by the game.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -119,7 +119,7 @@ void WriteCardConfig(const char * text, const u32 sizeBytes)
     Com_Printf("config.cfg saved to %s.\n", card.Describe(kConfigFile));
 }
 
-// The game data's config.cfg - the host:/ file, or the one on a console's USB stick - through
+// The game data's config.cfg - the host:/ file, or the one on HDD/USB - through
 // the filesystem, as the engine read it. Null if there is none.
 char * ReadGameDataConfig(int & outLength)
 {
@@ -328,8 +328,8 @@ void Sys_SaveStoreConfig(const char * text, const int length)
     }
     const u32 sizeBytes = static_cast<u32>(length);
 
-    // The emulator's host:/ file, as the engine always wrote it. Never a console's USB stick:
-    // on a console the memory card is where settings are kept.
+    // The host:/ file, as the engine always wrote it. With HDD/USB game data,
+    // the memory card is where settings are kept.
     if (HostFilesAvailable())
     {
         WriteGameDataConfig(text, sizeBytes);
@@ -346,7 +346,7 @@ void Sys_SaveStoreConfig(const char * text, const int length)
 char * Sys_SaveLoadConfig(int * const outLength)
 {
     // Under the emulator the host:/ file comes first: it is the one edited by hand while
-    // developing. On a console the card's does: it is the player's own, and the USB stick's
+    // developing. With HDD/USB data the card's does: it is the player's own, and the drive's
     // only stands in for one the card doesn't have. Whatever ps2_savedevice says - this runs
     // before config.cfg has set it.
     char * text = nullptr;

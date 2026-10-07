@@ -2,11 +2,10 @@
  * File: iop_boot.cpp
  * Brief: Boot-time IOP bring-up and game-data location. See iop_boot.h.
  *
- *  The USB path boots the modern BDM stack: iomanX + fileXio (extended IO manager the
- *  block-device filesystem registers with), bdm + bdmfs_fatfs (block device manager and
- *  FAT driver providing mass:), usbd + usbmass_bd (USB core and mass-storage block
- *  device). fileXioInit() then swaps the newlib backend so plain fopen/fread - and with
- *  them the whole Quake filesystem - reach mass: transparently.
+ *  After the host: probe, both console paths share an IOP reset and iomanX + fileXio.
+ *  HDD uses DEV9 + ATAD + APA + PFS; USB uses BDM + FatFs + usbd + usbmass_bd.
+ *  fileXioInit() routes newlib fopen/fread - and the whole Quake filesystem - through
+ *  iomanX, reaching the mounted pfs0: partition or massN: volumes transparently.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -24,10 +23,11 @@
 #include <iopcontrol.h>
 #include <loadfile.h>
 #include <sbv_patches.h>
+#include <hdd-ioctl.h>
 
 // The header refuses direct fio/fileXio use alongside newlib unless told the
-// caller knows what it is doing. We only call fileXioInit() - which installs
-// the newlib backend, the exact supported arrangement - never raw file ops.
+// caller knows what it is doing. File reads use the newlib backend installed by
+// fileXioInit(); direct calls below enumerate, mount and sync HDD partitions.
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 
@@ -37,6 +37,14 @@ extern unsigned char iomanX_irx[];
 extern unsigned int  size_iomanX_irx;
 extern unsigned char fileXio_irx[];
 extern unsigned int  size_fileXio_irx;
+extern unsigned char ps2dev9_irx[];
+extern unsigned int  size_ps2dev9_irx;
+extern unsigned char ps2atad_irx[];
+extern unsigned int  size_ps2atad_irx;
+extern unsigned char ps2hdd_irx[];
+extern unsigned int  size_ps2hdd_irx;
+extern unsigned char ps2fs_irx[];
+extern unsigned int  size_ps2fs_irx;
 extern unsigned char bdm_irx[];
 extern unsigned int  size_bdm_irx;
 extern unsigned char bdmfs_fatfs_irx[];
@@ -78,6 +86,17 @@ constexpr const char * kProbeFile = "pak0.pak";
 // so the explicitly relative form is tried too.
 constexpr const char * kHostBasePaths[] = { "host:", "host:." };
 
+constexpr const char * kHddDevices[] = { "hdd0:", "hdd1:" };
+constexpr const char * kHddMountPath = "pfs0:";
+constexpr int kMountReadWrite = 0; // FIO_MT_RDWR in io_common.h (not a C++-safe include).
+constexpr int kMaxHddPartitionPathLen = static_cast<int>(sizeof("hdd0:") - 1) + APA_IDMAX;
+
+// APA holds an open handle for each PFS mount, plus one while listing partitions.
+// PFS defaults to only two open files; pak handles, a music stream, temporary
+// asset reads and the log can coexist. Its cache needs at least 2 * open files + 8.
+constexpr char kHddArgs[] = "-o\0" "4\0" "-n\0" "20";
+constexpr char kPfsArgs[] = "-m\0" "1\0" "-o\0" "16\0" "-n\0" "40";
+
 // bdmfs_fatfs serves the FAT/exFAT volumes it mounts as mass0: to mass9: (FatFs's
 // FF_VOLUMES), numbered in mount order. Every partition is a volume of its own, and
 // usbmass_bd drives two USB drives at once, so the data need not be on mass0:. A bare
@@ -93,12 +112,15 @@ constexpr const char * kUsbBasePaths[] = {
 constexpr int kMaxBasePathLen  = MAX_OSPATH - static_cast<int>(sizeof("/baseq2/") - 1) - MAX_QPATH;
 constexpr int kMaxElfFolderLen = kMaxBasePathLen - static_cast<int>(sizeof("mass0:") - 1);
 
-// The folder on the USB drive the ELF was launched from, "/dir/sub" or empty for the root.
+// The folder on the device the ELF was launched from, "/dir/sub" or empty for the root.
 // See ElfFolderFromPath().
 static char s_elfFolder[kMaxElfFolderLen + 1];
 
 // The USB base path DetectBasePathAndBootIop() settled on: a massN: unit plus a folder.
 static char s_usbBasePath[kMaxBasePathLen + 1];
+static char s_hddBasePath[kMaxBasePathLen + 1];
+static const char * s_hddSyncDevice = nullptr; // Only the selected, surviving HDD mount.
+static const char * s_hddStatus = "not checked";
 
 // How long to wait for the USB drive: enumeration + FAT mount happen
 // asynchronously after usbmass_bd starts, and a drive that has to spin up
@@ -126,6 +148,45 @@ bool HasGameData(const char * basePath)
     return CanOpen(probePath);
 }
 
+// Retain the launch partition before the IOP reset discards the loader's PFS mount.
+// Both the ELF-loader form (hdd0:+Q2:pfs:/dir/quake2.elf) and the file-browser
+// form (hdd0:/+Q2/dir/quake2.elf) identify it. A bare pfsN: path cannot, so the
+// HDD search below falls back to enumerating partitions in that case.
+bool HddPartitionFromPath(const char * elfPath, char (&partition)[kMaxHddPartitionPathLen + 1])
+{
+    partition[0] = '\0';
+    if (elfPath == nullptr ||
+        (std::strncmp(elfPath, "hdd0:", 5) != 0 && std::strncmp(elfPath, "hdd1:", 5) != 0))
+    {
+        return false;
+    }
+
+    const char * start = elfPath + 5;
+    while (*start == '/' || *start == '\\') { ++start; }
+    const char * end = start;
+    while (*end != '\0' && *end != ':' && *end != '/' && *end != '\\') { ++end; }
+    const int length = static_cast<int>(end - start);
+    if (length == 0 || length > APA_IDMAX || *end == '\0')
+    {
+        return false;
+    }
+    if (*end == ':')
+    {
+        const char * fileDevice = end + 1;
+        if (std::strncmp(fileDevice, "pfs:", 4) != 0 &&
+            !(std::strncmp(fileDevice, "pfs", 3) == 0 && fileDevice[3] >= '0' &&
+              fileDevice[3] <= '9' && fileDevice[4] == ':'))
+        {
+            return false;
+        }
+    }
+
+    std::memcpy(partition, elfPath, 5);
+    std::memcpy(partition + 5, start, static_cast<size_t>(length));
+    partition[5 + length] = '\0';
+    return true;
+}
+
 // The folder the loader launched the ELF from, so the game data can sit next to it rather than
 // only at the root of the drive. argv[0] holds the ELF's path, but each loader spells the device
 // its own way ("mass:/APPS/Q2/quake2.elf", "mass0:APPS/Q2/quake2.elf", "hdd0:__common:pfs:/...")
@@ -148,6 +209,17 @@ bool ElfFolderFromPath(const char * elfPath, char (&folder)[kMaxElfFolderLen + 1
         {
             path = p + 1;
         }
+    }
+
+    // The browser form puts the APA partition in the first path component; it is
+    // not part of the directory inside PFS. Canonical HDD paths were handled by
+    // the last-colon rule above, as were massN: and bare pfsN: launch paths.
+    if ((std::strncmp(elfPath, "hdd0:", 5) == 0 || std::strncmp(elfPath, "hdd1:", 5) == 0) &&
+        std::strchr(elfPath + 5, ':') == nullptr)
+    {
+        path = elfPath + 5;
+        while (*path == '/' || *path == '\\') { ++path; }
+        while (*path != '\0' && *path != '/' && *path != '\\') { ++path; }
     }
 
     // The folder ends at the last separator; without one the ELF sits at the root.
@@ -223,18 +295,126 @@ bool IsUsbVolumeMounted(const char * basePath)
     return true;
 }
 
-void ExecIopModule(const char * name, void * image, u32 sizeBytes)
+bool ExecIopModule(const char * name, void * image, u32 sizeBytes, bool required = true,
+                   u32 argsLen = 0, const char * args = nullptr)
 {
     int moduleResult = 0;
-    const int id = SifExecModuleBuffer(image, sizeBytes, 0, nullptr, &moduleResult);
+    const int id = SifExecModuleBuffer(image, sizeBytes, argsLen, args, &moduleResult);
 
     // Negative id = the load itself failed; result 1 = the module's _start
-    // bailed out (NO_RESIDENT_END) - either way the driver is not running.
-    if (id < 0 || moduleResult == 1) [[unlikely]]
+    // bailed out (NO_RESIDENT_END). Some drivers return a negative init error too.
+    if (id < 0 || moduleResult < 0 || moduleResult == 1) [[unlikely]]
     {
-        Sys_Error("IOP boot: module '%s' failed (id %d, result %d)", name, id, moduleResult);
+        if (required)
+        {
+            Sys_Error("IOP boot: module '%s' failed (id %d, result %d)", name, id, moduleResult);
+        }
+        std::printf("IOP boot: optional module '%s' unavailable (id %d, result %d).\n", name, id, moduleResult);
+        return false;
     }
     std::printf("IOP boot: started '%s' (id %d)\n", name, id);
+    return true;
+}
+
+const char * ProbeHddPartition(const char * partition, const char * folder)
+{
+    if (fileXioMount(kHddMountPath, partition, kMountReadWrite) < 0)
+    {
+        return nullptr;
+    }
+
+    std::snprintf(s_hddBasePath, sizeof(s_hddBasePath), "%s%s", kHddMountPath, folder);
+    if (!HasGameData(s_hddBasePath))
+    {
+        fileXioUmount(kHddMountPath);
+        return nullptr;
+    }
+
+    // Keep this mount alive: all subsequent engine file I/O uses pfs0:.
+    s_hddSyncDevice = kHddMountPath;
+    std::printf("IOP boot: game data on %s/baseq2 (HDD partition %s).\n", s_hddBasePath, partition);
+    return s_hddBasePath;
+}
+
+const char * FindHddGameData(const char * preferredPartition, const char * folder)
+{
+    // No DEV9/HDD is normal on a Slim or a USB-only setup. A failed optional
+    // module must not stop the remaining USB path, and no formatting is done here.
+    s_hddStatus = "drivers unavailable";
+    if (!ExecIopModule("ps2dev9", ps2dev9_irx, size_ps2dev9_irx, false) ||
+        !ExecIopModule("ps2atad", ps2atad_irx, size_ps2atad_irx, false) ||
+        !ExecIopModule("ps2hdd", ps2hdd_irx, size_ps2hdd_irx, false,
+                       static_cast<u32>(sizeof(kHddArgs)), kHddArgs) ||
+        !ExecIopModule("ps2fs", ps2fs_irx, size_ps2fs_irx, false,
+                       static_cast<u32>(sizeof(kPfsArgs)), kPfsArgs))
+    {
+        return nullptr;
+    }
+
+    s_hddStatus = "no matching PFS game data";
+    if (preferredPartition[0] != '\0')
+    {
+        if (const char * basePath = ProbeHddPartition(preferredPartition, folder))
+        {
+            return basePath;
+        }
+        if (folder[0] != '\0')
+        {
+            if (const char * basePath = ProbeHddPartition(preferredPartition, ""))
+            {
+                return basePath;
+            }
+        }
+    }
+
+    // Prefer the launch partition, then all other main PFS partitions. This also
+    // handles launchers that only pass pfsN:, and makes HDD beat USB when both
+    // hold a matching copy. Search the folder on every partition before roots,
+    // as on USB. APA subpartitions belong to their main partition.
+    const char * folders[] = { folder, "" };
+    const int numFolders = (folder[0] != '\0') ? 2 : 1;
+    for (int folderIndex = 0; folderIndex < numFolders; ++folderIndex)
+    {
+        for (const char * device : kHddDevices)
+        {
+            const int status = fileXioDevctl(device, HDIOC_STATUS, nullptr, 0, nullptr, 0);
+            if (status != 0)
+            {
+                if (folderIndex == 0)
+                {
+                    std::printf("IOP boot: %s unavailable (status %d).\n", device, status);
+                }
+                continue;
+            }
+            const int fd = fileXioDopen(device);
+            if (fd < 0)
+            {
+                continue;
+            }
+
+            alignas(64) static iox_dirent_t entry;
+            while (fileXioDread(fd, &entry) > 0)
+            {
+                if (entry.stat.mode != APA_TYPE_PFS || (entry.stat.attr & APA_FLAG_SUB) != 0)
+                {
+                    continue;
+                }
+                char partition[kMaxHddPartitionPathLen + 1];
+                std::snprintf(partition, sizeof(partition), "%s%.*s", device, APA_IDMAX, entry.name);
+                if (std::strcmp(partition, preferredPartition) == 0)
+                {
+                    continue;
+                }
+                if (const char * basePath = ProbeHddPartition(partition, folders[folderIndex]))
+                {
+                    fileXioDclose(fd);
+                    return basePath;
+                }
+            }
+            fileXioDclose(fd);
+        }
+    }
+    return nullptr;
 }
 
 // Crude millisecond wait; fine for boot-time polling.
@@ -254,9 +434,9 @@ bool EnsureModuleLoaderReady()
 
     SifInitRpc(0);
 
-    // The USB branch of DetectBasePathAndBootIop() reset the IOP and patched it
-    // already; the host: fast path skipped the whole bring-up, so do it here.
-    if (!s_usbStackStarted && sbv_patch_enable_lmb() != 0)
+    // Console boot marks this ready after resetting and patching the IOP. Only
+    // the host: fast path reaches here without that shared bring-up.
+    if (sbv_patch_enable_lmb() != 0)
     {
         Com_Printf("WARNING: sbv_patch_enable_lmb failed - no IOP module can be loaded!\n");
         return false;
@@ -270,6 +450,8 @@ bool EnsureModuleLoaderReady()
 
 const char * DetectBasePathAndBootIop(const char * elfPath)
 {
+    s_hddSyncDevice = nullptr;
+
     // host: fast path (PCSX2). Skips the IOP reset entirely.
     for (const char * basePath : kHostBasePaths)
     {
@@ -286,33 +468,10 @@ const char * DetectBasePathAndBootIop(const char * elfPath)
         }
     }
 
-    std::printf("IOP boot: no host: game data; bringing up USB mass storage...\n");
+    char preferredPartition[kMaxHddPartitionPathLen + 1];
+    HddPartitionFromPath(elfPath, preferredPartition);
 
-    // Reboot the IOP into a clean state and patch in support for loading
-    // EE-embedded modules. The pad driver's rom0: modules load later (IN_Init),
-    // safely after this reset.
-    SifInitRpc(0);
-    while (!SifIopReset("", 0)) {}
-    while (!SifIopSync()) {}
-    SifInitRpc(0);
-
-    sbv_patch_enable_lmb();
-    sbv_patch_disable_prefix_check();
-
-    ExecIopModule("iomanX",      iomanX_irx,      size_iomanX_irx);
-    ExecIopModule("fileXio",     fileXio_irx,     size_fileXio_irx);
-    ExecIopModule("bdm",         bdm_irx,         size_bdm_irx);
-    ExecIopModule("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx);
-    ExecIopModule("usbd",        usbd_irx,        size_usbd_irx);
-    ExecIopModule("usbmass_bd",  usbmass_bd_irx,  size_usbmass_bd_irx);
-
-    s_usbStackStarted = true;
-
-    // Route newlib file IO through fileXio -> iomanX: bdmfs registers mass:
-    // with iomanX, which the plain kernel fio path cannot reach.
-    fileXioInit();
-
-    // What gets looked for on each volume, for the boot log and the error screen.
+    // Save the launch directory/partition before the reset discards all loader mounts.
     char searched[MAX_OSPATH];
     if (!ElfFolderFromPath(elfPath, s_elfFolder))
     {
@@ -328,7 +487,48 @@ const char * DetectBasePathAndBootIop(const char * elfPath)
     }
 
     const char * const launchedAs = (elfPath != nullptr && elfPath[0] != '\0') ? elfPath : "(no path from the loader)";
-    std::printf("IOP boot: launched as '%s'; looking for %s on each USB volume.\n", launchedAs, searched);
+    std::printf("IOP boot: no host: game data; looking for HDD, then USB...\n");
+    std::printf("IOP boot: launched as '%s'; looking for %s.\n", launchedAs, searched);
+
+    // Reboot the IOP into a clean state and patch in support for loading
+    // EE-embedded modules. The pad driver's rom0: modules load later (IN_Init),
+    // safely after this reset.
+    SifInitRpc(0);
+    while (!SifIopReset("", 0)) {}
+    while (!SifIopSync()) {}
+    SifInitRpc(0);
+
+    if (sbv_patch_enable_lmb() != 0 || sbv_patch_disable_prefix_check() != 0)
+    {
+        Sys_Error("IOP boot: module-loader patches failed");
+        return nullptr; // unreachable; Sys_Error halts
+    }
+
+    s_moduleLoaderReady = true;
+
+    ExecIopModule("iomanX",  iomanX_irx,  size_iomanX_irx);
+    ExecIopModule("fileXio", fileXio_irx, size_fileXio_irx);
+
+    // Both PFS and FatFs register with iomanX, reached through fileXio, rather
+    // than the ROM FILEIO backend. Initialize before probing either device.
+    if (fileXioInit() < 0)
+    {
+        Sys_Error("IOP boot: fileXio initialization failed");
+        return nullptr; // unreachable; Sys_Error halts
+    }
+
+    if (const char * basePath = FindHddGameData(preferredPartition, s_elfFolder))
+    {
+        return basePath;
+    }
+
+    std::printf("IOP boot: HDD: %s; bringing up USB mass storage...\n", s_hddStatus);
+    ExecIopModule("bdm",         bdm_irx,         size_bdm_irx);
+    ExecIopModule("bdmfs_fatfs", bdmfs_fatfs_irx, size_bdmfs_fatfs_irx);
+    ExecIopModule("usbd",        usbd_irx,        size_usbd_irx);
+    ExecIopModule("usbmass_bd",  usbmass_bd_irx,  size_usbmass_bd_irx);
+
+    s_usbStackStarted = true;
 
     for (int waited = 0; waited <= kUsbWaitTotalMsec; waited += kUsbWaitStepMsec)
     {
@@ -364,13 +564,22 @@ const char * DetectBasePathAndBootIop(const char * elfPath)
     // Lines kept within the debug screen's 64 columns.
     Sys_Error("No game data found!\n"
               "Emulator: enable the host filesystem; baseq2/ goes by the ELF.\n"
-              "Console: put baseq2/ (%s etc) next to the ELF, or at the\n"
-              "root of a FAT32/exFAT USB drive.\n"
+              "HDD: baseq2/ goes by the ELF on an APA/PFS partition.\n"
+              "USB: put baseq2/ (%s etc) next to the ELF, or at the\n"
+              "root of a FAT32/exFAT drive.\n"
               "Launched as: %s\n"
               "Looked for: %s\n"
+              "HDD: %s\n"
               "USB volumes mounted:%s",
-              kProbeFile, launchedAs, searched, (mountedVolumes[0] != '\0') ? mountedVolumes : " none");
+              kProbeFile, launchedAs, searched, s_hddStatus, (mountedVolumes[0] != '\0') ? mountedVolumes : " none");
     return nullptr; // unreachable; Sys_Error halts
+}
+
+int SyncGameDataDevice()
+{
+    // PFS caches inode/directory metadata after close with our read/write mount.
+    // Host and USB need no sync RPC, including after an unsuccessful HDD probe.
+    return (s_hddSyncDevice != nullptr) ? fileXioSync(s_hddSyncDevice, 0) : 0;
 }
 
 bool UsbStackStarted()

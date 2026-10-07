@@ -91,7 +91,9 @@ paths:
   `f_sync`/`f_close`. bdmfs_fatfs's `sync` op returns EIO and libcglue's `fsync()` is
   ENOSYS, so the only flush is to close the file. A file held open across a power cycle can
   come back empty. BDM's block cache is write-through. `debug/log_file.cpp` opens, appends
-  and closes on every write for this reason.
+  and closes on every write for this reason. On a real console over USB that costs **~23 ms
+  per logged line** (2026-10-07). A load-trace run's base1 load logged ~1040 lines, about
+  24 s of its 76 s, so hardware load times with the log on mostly measure the log.
 - Console boot finds the ELF's folder from `argv[0]`. Loaders spell the device their own way
   (`mass:/dir/quake2.elf`, `mass:dir/quake2.elf`, `hdd0:__common:pfs:/...`), and the IOP reset
   renumbers USB drives. Preserve the HDD partition separately, and drop the partition's

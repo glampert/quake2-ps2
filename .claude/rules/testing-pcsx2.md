@@ -164,6 +164,18 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
 
 ## Crash triage
 
+- **On a console, `quake2.log` is the only report.** Fatal reports (pipeline hang dump, stack
+  traces, out-of-memory stats) go through `ps2::debug::DumpPrintf` (log_file.h), to stdout and
+  the log. Anything new printed on a fatal path must use it, not `printf`: the first hardware
+  pipeline hang (2026-10-07) logged only `Sys_Error: Render pipeline hang: ... See the pipeline
+  dump above.`, because the dump went to stdout alone.
+- **A hardware pipeline hang ended on a solid green screen**, with no `Sys_Error` text drawn,
+  though the log had the `Sys_Error` line. Likely, but unconfirmed: `ScrInit` resets the GS,
+  then its PATH3 transfers can't get through a GIF still holding PATH1/PATH2 open, so
+  `DmaWaitGif` spins. `ScrInit` now runs `ResetGraphicsPaths` first (scr_print.cpp), libgs's
+  `GsResetPath` order: stop DMA channels 1 and 2 under a DMAC suspend, reset VIF1, VU1 (if
+  the thread has COP2), then the GIF. PCSX2 shows the error screen still drawing after it, but
+  can't wedge the GIF, so whether it cures the green screen needs the next hardware hang.
 - Debug builds print an EE exception report (cause, EPC, BadVAddr, stack). Resolve addresses
   against **the same build's** `quake2_unstripped.elf`:
   `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>` or

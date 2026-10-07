@@ -684,7 +684,9 @@ everything else defaults to the normal rendering path. [CVARS.md](CVARS.md) list
 the backend registers, with its debug and release defaults and a line on what it does.
 
 **Log file:** `ps2_logfile` (off by default, and on in a build with the load trace on) copies
-everything the console prints, plus `Sys_Error`, to `quake2.log` next to `baseq2/`. That's
+everything the console prints, plus `Sys_Error` and the reports printed on the way to it
+(the render pipeline dump, stack traces, the out-of-memory stats), to `quake2.log` next to
+`baseq2/`. That's
 `build/<config>/quake2.log` on `host:`, and the selected game-data folder on HDD/USB. It is the only
 log a console run leaves. Every line is stamped with the seconds since boot, and every write
 opens, appends and closes the file. On a FAT drive that close is the only flush: bdmfs_fatfs
@@ -770,6 +772,19 @@ pointer - the report says so and unwinds from `$ra` instead, since the backward 
 unwinder uses can't read code it has no symbols for. If walking the stack faults too, the report
 goes out without it.
 
+**Render pipeline hangs:** in debug builds every wait on the GS
+([cmd_buffer.cpp](src/ps2/renderer/cmd_buffer.cpp) `WaitIdle`) gives up after about a second.
+It then dumps the pipeline and calls `Sys_Error("Render pipeline hang: ...")`. The dump
+([pipeline_dump.cpp](src/ps2/debug/pipeline_dump.cpp)) has the VIF1 DMA channel, VIF1,
+VU1's run state (VPU-STAT), the GIF and its tag registers, and the GS CSR, each raw and
+decoded. Then come the frame chain's qwords up to `D1_TADR` (the tags and VIFcodes VIF1 had
+been working through), the VU1 batch header and output-window GIF tags, and the call stack of
+the wait that gave up. All of it goes to stdout and to the log file, so a hang on a console
+leaves the whole report in `quake2.log`. Before the error screen draws, it stops DMA channels 1
+and 2 and resets VIF1, VU1 and the GIF, in libgs's `GsResetPath` order
+([scr_print.cpp](src/ps2/debug/scr_print.cpp)). Otherwise a GIF still holding a path open could
+keep its own transfers out and leave a blank screen.
+
 **Commands:** `ps2_dump_iop_mods` lists the currently loaded IOP modules;
 `in_keyboardmap <usage> <key>` remaps a USB scan code; `ps2_saveinfo` lists the save working
 set (raw and deflated sizes) and the files on the save device.
@@ -795,7 +810,8 @@ killserver ; deathmatch 1 ; cheats 1 ; map base1
 
 #### Reading a stack trace
 
-Fatal allocation failures print the call stack to stdout before halting (see
+Fatal allocation failures and render pipeline hangs print the call stack to stdout and the
+log file before halting (see
 [src/ps2/debug/stack_trace.cpp](src/ps2/debug/stack_trace.cpp)). Because the ELF that runs
 is stripped, what comes out is raw addresses:
 

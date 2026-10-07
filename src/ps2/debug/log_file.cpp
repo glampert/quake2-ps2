@@ -21,6 +21,7 @@
 #include "ps2/debug/load_trace.h"
 #include "ps2/system/iop_boot.h"
 
+#include <cstdarg>
 #include <cstdio>
 #include <fcntl.h>
 #include <unistd.h>
@@ -257,6 +258,21 @@ void LogFileWriteFatal(const char * text)
     {
         Unlock();
     }
+}
+
+void DumpPrintf(const char * const format, ...)
+{
+    // Static, like Sys_Error's log line: these run on whichever thread's stack failed.
+    static char s_line[512];
+
+    va_list args;
+    va_start(args, format);
+    std::vsnprintf(s_line, sizeof(s_line), format, args);
+    va_end(args);
+
+    std::fputs(s_line, stdout);
+    std::fflush(stdout);
+    LogFileWriteFatal(s_line);
 }
 
 } // namespace ps2::debug

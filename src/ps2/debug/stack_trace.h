@@ -56,9 +56,10 @@ int CaptureStackTrace(u32 * outFrames, int maxFrames)
     return detail::WalkStack(pc, sp, outFrames, maxFrames);
 }
 
-// Captures the stack and writes it to stdout, one "#N 0x00000000" line per frame
-// inside a banner, followed by the addr2line invocation that resolves them.
-// Flushes stdout, since the callers of this do not intend to come back.
+// Captures the stack and writes it to stdout and the log file (DumpPrintf), one
+// "#N 0x00000000" line per frame inside a banner, followed by the addr2line
+// invocation that resolves them. Flushes both, since the callers of this do not
+// intend to come back.
 void PrintStackTrace() Q_COLD_FUNC;
 
 } // namespace ps2::debug

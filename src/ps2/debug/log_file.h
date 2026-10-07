@@ -10,6 +10,8 @@
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
+#include "ps2/common.h"
+
 namespace ps2::debug {
 
 // Points the log at "<basePath>/quake2.log". Called once, from main() as soon as the game data
@@ -30,5 +32,12 @@ void LogFileWrite(const char * text);
 // thread whose own write the failure interrupted, still holding the log's lock, so this waits
 // for the lock only when another thread holds it. It also starts on a fresh line.
 void LogFileWriteFatal(const char * text);
+
+// printf for the reports printed on the way to a fatal error: the render pipeline dump, the
+// stack trace, the heap's out-of-memory stats. To stdout and to the log, written as
+// LogFileWriteFatal writes, and not to the game console, which these can't count on. A hardware
+// run has no stdout anyone reads, so a report printed only there is lost. Each call should end
+// its line(s). Not reentrant: one fatal report at a time.
+void DumpPrintf(const char * format, ...) Q_PRINTF_FUNC(1, 2);
 
 } // namespace ps2::debug

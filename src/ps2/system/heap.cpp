@@ -9,6 +9,7 @@
 
 #include "ps2/system/heap.h"
 #include "ps2/common.h"            // Sys_Error, etc
+#include "ps2/debug/log_file.h"    // DumpPrintf
 #include "ps2/debug/stack_trace.h" // PrintStackTrace
 
 #include <new>
@@ -183,42 +184,42 @@ static void PrintDlmallocStats(const size_t failedRequest)
 
     char a[kMemUnitStrSize], b[kMemUnitStrSize], c[kMemUnitStrSize];
 
-    std::printf("-------------------------- DLMALLOC ---------------------------\n");
-    std::printf("Arena (sbrk'd)   : %s\n", FormatMemoryUnit(arena, true, a, sizeof(a)));
-    std::printf("In use           : %s\n", FormatMemoryUnit(inUse, true, a, sizeof(a)));
-    std::printf("Free total       : %s  in %zu chunks (avg %s)\n",
-                FormatMemoryUnit(freeTot, true, a, sizeof(a)), freeChks,
-                FormatMemoryUnit((freeChks != 0u) ? (freeTot / freeChks) : 0u, true, b, sizeof(b)));
-    std::printf("Top releasable   : %s\n", FormatMemoryUnit(keepCost, true, a, sizeof(a)));
-    std::printf("Largest free blk : %s   (the failed request wanted %s)\n",
-                FormatMemoryUnit(largest, true, a, sizeof(a)),
-                FormatMemoryUnit(failedRequest, true, b, sizeof(b)));
+    ps2::debug::DumpPrintf("-------------------------- DLMALLOC ---------------------------\n");
+    ps2::debug::DumpPrintf("Arena (sbrk'd)   : %s\n", FormatMemoryUnit(arena, true, a, sizeof(a)));
+    ps2::debug::DumpPrintf("In use           : %s\n", FormatMemoryUnit(inUse, true, a, sizeof(a)));
+    ps2::debug::DumpPrintf("Free total       : %s  in %zu chunks (avg %s)\n",
+                           FormatMemoryUnit(freeTot, true, a, sizeof(a)), freeChks,
+                           FormatMemoryUnit((freeChks != 0u) ? (freeTot / freeChks) : 0u, true, b, sizeof(b)));
+    ps2::debug::DumpPrintf("Top releasable   : %s\n", FormatMemoryUnit(keepCost, true, a, sizeof(a)));
+    ps2::debug::DumpPrintf("Largest free blk : %s   (the failed request wanted %s)\n",
+                           FormatMemoryUnit(largest, true, a, sizeof(a)),
+                           FormatMemoryUnit(failedRequest, true, b, sizeof(b)));
 
     // The verdict, spelled out, so the log answers the question without arithmetic.
     if (freeTot >= failedRequest)
     {
-        std::printf("VERDICT: FRAGMENTATION. %s free in total, but the largest single run is\n"
-                    "         only %s. The bytes exist; they are not adjacent.\n",
-                    FormatMemoryUnit(freeTot, true, a, sizeof(a)),
-                    FormatMemoryUnit(largest, true, c, sizeof(c)));
+        ps2::debug::DumpPrintf("VERDICT: FRAGMENTATION. %s free in total, but the largest single run is\n"
+                               "         only %s. The bytes exist; they are not adjacent.\n",
+                               FormatMemoryUnit(freeTot, true, a, sizeof(a)),
+                               FormatMemoryUnit(largest, true, c, sizeof(c)));
     }
     else
     {
-        std::printf("VERDICT: EXHAUSTION. Only %s free in total, less than the request.\n",
-                    FormatMemoryUnit(freeTot, true, a, sizeof(a)));
+        ps2::debug::DumpPrintf("VERDICT: EXHAUSTION. Only %s free in total, less than the request.\n",
+                               FormatMemoryUnit(freeTot, true, a, sizeof(a)));
     }
-    std::printf("-------------------------- DLMALLOC ---------------------------\n");
-    std::fflush(stdout);
+    ps2::debug::DumpPrintf("-------------------------- DLMALLOC ---------------------------\n");
 }
 
 __attribute__((cold, noinline))
 static void OutOfMemory(const size_t requestSize, const MemTag tag, const char * const funcName)
 {
-    // The call stack goes to stdout, not to Sys_Error: the panic screen it
-    // paints has 24 lines to spend on the message and the memtag table, and
-    // stdout is where the PCSX2/ps2client log goes.
-    std::printf("%s: failed to allocate %zu bytes (tag: %s)\n",
-                funcName, requestSize, s_memTagNames[MemTagToIndex(tag)]);
+    // The call stack goes to stdout and the log file, not to Sys_Error: the panic
+    // screen it paints has 24 lines to spend on the message and the memtag table.
+    // stdout is where the PCSX2/ps2client log goes, and the log file is all a
+    // console run leaves.
+    ps2::debug::DumpPrintf("%s: failed to allocate %zu bytes (tag: %s)\n",
+                           funcName, requestSize, s_memTagNames[MemTagToIndex(tag)]);
 
     PrintDlmallocStats(requestSize);
     ps2::debug::PrintStackTrace();

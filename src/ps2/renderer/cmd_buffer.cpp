@@ -10,8 +10,11 @@
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/debug/pipeline_dump.h"
+#include "ps2/debug/log_file.h"    // DumpPrintf
+#include "ps2/debug/stack_trace.h" // PrintStackTrace
 
 #include <cstdint>
+#include <cstdio>
 #include <dma.h>
 #include <kernel.h> // FlushCache
 #include <packet2_chain.h>
@@ -481,14 +484,58 @@ constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
 // DMA registers - so print them before dying, while they still hold the stalled state.
 static HangReportFn s_hangReportHook = nullptr;
 
+// Where the DMAC stopped, as a place in the frame chain, and the qwords leading up to it. TADR is
+// the next tag the DMAC will read, so the tags and VIFcodes VIF1 was working through - the
+// chunk's CNT unpack, its REF, the FLUSH + MSCAL that ran it - sit right behind it. A chunk is
+// about a dozen qwords, so this covers the last one or two.
+Q_COLD_FUNC void DumpChainPosition()
+{
+    constexpr int kQwordsBehind = 24;
+    constexpr int kQwordsAhead  = 2; // the tag at TADR and the qword after it
+
+    debug::DumpPrintf("Frame chain: building half %d, %u qwords built, %d kicked.\n",
+                      s_half, packet2_get_qw_count(s_packets[s_half]), s_kickedQwords);
+
+    const u32 tadr = *R_EE_D1_TADR;
+    for (int i = 0; i < 2; ++i)
+    {
+        const qword_t * const base = s_packets[i]->base;
+        const u32 basePhys = static_cast<u32>(reinterpret_cast<std::uintptr_t>(base) & 0x0FFFFFFFu);
+        if (tadr < basePhys || tadr >= basePhys + kHalfBytes)
+        {
+            continue;
+        }
+
+        const int tagQw = static_cast<int>((tadr - basePhys) / 16u);
+        const int first = (tagQw > kQwordsBehind) ? (tagQw - kQwordsBehind) : 0;
+        const int end   = static_cast<int>(kHalfQwords);
+        const int last  = (tagQw + kQwordsAhead < end) ? (tagQw + kQwordsAhead) : end;
+
+        char what[64];
+        std::snprintf(what, sizeof(what), "Half %d, up to D1_TADR at qword %d", i, tagQw);
+        debug::DumpQwords(what, base + first, first, last - first);
+        return;
+    }
+
+    // A REF's payload is elsewhere (the model hunk, a baked world chunk), but TADR only ever walks
+    // tags, which are all in the halves.
+    debug::DumpPrintf("D1_TADR %08x is outside both chain halves.\n", tadr);
+}
+
 Q_COLD_FUNC void ReportPipelineHang(const char * const what)
 {
     debug::DumpPipelineState(what);
+    DumpChainPosition();
 
     if (s_hangReportHook != nullptr)
     {
         s_hangReportHook();
     }
+
+    // Which wait gave up says where the frame was: the flip at the next BeginFrame, a fence
+    // before a VRAM or lightmap upload, or the kick of an overflowing chain.
+    debug::PrintStackTrace();
+    debug::DumpPrintf("=== end of pipeline dump ===\n");
 
     Sys_Error("Render pipeline hang: %s. See the pipeline dump above.", what);
 }

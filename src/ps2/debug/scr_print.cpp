@@ -210,6 +210,17 @@ constexpr u32 kDmaChcrStart         = 1 << 8; // STR: set to start, cleared by t
 // D_CTRL bits.
 constexpr u32 kDmaCtrlEnable = 1 << 0; // DMAE: global DMA transfer enable
 
+// D_ENABLER/D_ENABLEW bits.
+constexpr u32 kDmaEnableSuspend = 1 << 16; // CPND: suspend every channel
+
+// Reset bits of VIF1_FBRST and GIF_CTRL, and VU1's in VU0 control register 28 (FBRST).
+constexpr u32 kVif1FbrstReset  = 1 << 0; // RST
+constexpr u32 kGifCtrlReset    = 1 << 0; // RST
+constexpr u32 kVuFbrstResetVu1 = 1 << 9; // RS1
+
+// COP0 Status bit that makes the COP2 (VU0 macro mode) instructions usable.
+constexpr u32 kCop0StatusCu2 = 1u << 30;
+
 // D_STAT interrupt status bits for every DMA channel except SIF0/SIF1/SIF2
 // (bits 5-7), which belong to the IOP<->EE RPC layer and must be left alone,
 // plus the stall/MFIFO-empty/bus-error status bits.
@@ -255,6 +266,53 @@ void SetVideoMode()
     *R_EE_GS_DISPLAY2 = 0x001BF9FF0983227C;
 }
 
+// Frees every path into the GS before the debug screen takes PATH3. A fatal error
+// can land while the renderer's chain is in flight, or because it wedged: a VU1
+// program that never ends, a GIF packet that never reaches EOP. Then the GIF
+// never grants PATH3, the first DmaWaitGif() spins forever, and the screen
+// ResetGs() has already blanked is all that is left. That is the likely story of
+// the solid green screen a console showed after a pipeline hang, with the error
+// only in the log.
+//
+// The order is libgs's GsResetPath (ee/libgs/src/ResetPath.s): VIF1, then VU1,
+// then the GIF, each one after whatever feeds it, so nothing restarts what was
+// just reset. The DMA channels go first, for the same reason.
+void ResetGraphicsPaths()
+{
+    // Stop the VIF1 chain and any GIF transfer in flight. Channel 2 in particular:
+    // the rest of an interrupted texture upload would reach the freshly reset GIF
+    // as tags. A running channel may only be stopped with the DMAC suspended.
+    const u32 dmaEnable = *R_EE_D_ENABLER;
+    *R_EE_D_ENABLEW = dmaEnable | kDmaEnableSuspend;
+    *R_EE_D1_CHCR = 0;
+    *R_EE_D2_CHCR = 0;
+    *R_EE_D_ENABLEW = dmaEnable;
+
+    // VIF1 first, so it starts no further microprogram or DIRECT transfer.
+    *R_EE_VIF1_FBRST = kVif1FbrstReset;
+
+    // VU1, or a program still running would XGKICK into the GIF again, and one
+    // stalled in an XGKICK would resume with half a packet. Its reset lives in
+    // VU0's control register 28, so it takes COP2, which a thread may not have
+    // enabled; without it, this would fault and turn the error into a CPU
+    // exception report. Read-modify-write, as libgs does, to keep the D/T-bit
+    // enables in the same register.
+    u32 cop0Status;
+    asm volatile("mfc0 %0, $12" : "=r"(cop0Status));
+    if ((cop0Status & kCop0StatusCu2) != 0)
+    {
+        u32 vuFbrst;
+        asm volatile("cfc2 %0, $28" : "=r"(vuFbrst));
+        vuFbrst |= kVuFbrstResetVu1;
+        asm volatile("ctc2 %0, $28 \n\t"
+                     "sync.p       \n\t"
+                     : : "r"(vuFbrst) : "memory");
+    }
+
+    // Last, the GIF: drops the open path and anything queued in its FIFO.
+    *R_EE_GIF_CTRL = kGifCtrlReset;
+}
+
 // Reset DMA channel 2 (GIF) plus the global DMAC registers, so that we can drive
 // the GIF by hand no matter what state the engine's renderer left the DMAC in.
 // Modelled on Sony's bulk DMAC init, which is why parts of it look redundant.
@@ -264,8 +322,8 @@ void DmaReset()
 
     // NOTE: the SDK routine this was transcribed from clears channel 3's CHCR
     // here (0x1000B000) and never touches D2_CHCR. Current ps2sdk reads that as
-    // a typo and clears D2_CHCR instead. Kept as-is since this is the behavior
-    // that has been working, and DmaWaitGif() covers an in-flight GIF transfer.
+    // a typo and clears D2_CHCR instead. Kept as-is: ResetGraphicsPaths() has
+    // already stopped channel 2.
     *R_EE_D3_CHCR = 0;
 
     *R_EE_D2_TADR = 0;
@@ -328,6 +386,7 @@ void NextLine()
 
 void ScrInit()
 {
+    ResetGraphicsPaths();
     DmaReset();
 
     // Interlaced; FRAME field mode, which SetVideoMode() below flips back to FIELD.

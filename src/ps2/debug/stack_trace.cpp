@@ -6,7 +6,7 @@
  * ================================================================================================ */
 
 #include "ps2/debug/stack_trace.h"
-#include <cstdio>
+#include "ps2/debug/log_file.h" // DumpPrintf
 
 /*
  * Unwinding the EE comes down to two numbers per frame: how many bytes the
@@ -313,30 +313,27 @@ Q_COLD_FUNC void PrintStackTrace()
     u32 frames[kStackTraceMaxFrames];
     const int count = CaptureStackTrace(frames, kStackTraceMaxFrames);
 
-    std::printf("%s", "------------------------- STACK TRACE -------------------------\n");
+    DumpPrintf("%s", "------------------------- STACK TRACE -------------------------\n");
 
     for (int i = 0; i < count; ++i)
     {
-        std::printf("#%-2d 0x%08x\n", i, frames[i]);
+        DumpPrintf("#%-2d 0x%08x\n", i, frames[i]);
     }
 
     if (count == 0)
     {
-        std::printf("%s", "<unavailable - could not unwind the call stack>\n");
+        DumpPrintf("%s", "<unavailable - could not unwind the call stack>\n");
     }
     else if (count == kStackTraceMaxFrames)
     {
-        std::printf("%s", "... (truncated)\n");
+        DumpPrintf("%s", "... (truncated)\n");
     }
 
     // The ELF that runs is stripped; its symbols stay in the _unstripped one built
     // beside it, which is what these addresses resolve against.
-    std::printf("%s", "Resolve with: mips64r5900el-ps2-elf-addr2line -f -C -e "
-                      "build/<config>/quake2_unstripped.elf <addr>\n");
-    std::printf("%s", "------------------------- STACK TRACE -------------------------\n");
-
-    // Callers of this do not intend to return, so nothing downstream will flush.
-    std::fflush(stdout);
+    DumpPrintf("%s", "Resolve with: mips64r5900el-ps2-elf-addr2line -f -C -e "
+                     "build/<config>/quake2_unstripped.elf <addr>\n");
+    DumpPrintf("%s", "------------------------- STACK TRACE -------------------------\n");
 }
 
 } // namespace ps2::debug

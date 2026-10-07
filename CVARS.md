@@ -83,7 +83,7 @@ bigger picture.
 | `ps2_show_drawstats` | `1` | `0` | Arch. | Nodes, surfaces, triangles, batches, entities, particles and dlights per frame. |
 | `ps2_show_profile` | `1` | `0` | Arch. | Per-stage frame timings panel; does nothing in release, where the profiler is compiled out. |
 | `ps2_frame_log` | `0` | — | | Log per-frame timings and counters to stdout in batches, for the `frame_log` scripts. |
-| `ps2_logfile` | `0` | `0` | | Copy the console and `Sys_Error` to `quake2.log` next to `baseq2/`, one open/append/close per write so a hang leaves the log on the drive. Defaults to `1` in a build with `PS2_QUAKE_LOAD_TRACE` set to 1. |
+| `ps2_logfile` | `0` | `0` | | Copy the console, `Sys_Error` and the reports printed before it (pipeline hang dump, stack traces, out-of-memory stats) to `quake2.log` next to `baseq2/`, one open/append/close per write so a hang leaves the log on the drive. Defaults to `1` in a build with `PS2_QUAKE_LOAD_TRACE` set to 1. |
 | `ps2_perftest` | `0` | `0` | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits; does nothing in release, where the profiler is compiled out. |
 
 ## Sound and music

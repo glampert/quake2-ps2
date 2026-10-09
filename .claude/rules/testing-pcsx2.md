@@ -183,6 +183,13 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
   (if the thread has COP2) and the GIF. Confirmed on hardware 2026-10-09: the same hang now
   shows the error on screen. PCSX2 can't wedge the GIF, so only a console shows the
   difference. Any new fatal-path screen must go through `ScrInit`.
+- **To exercise the pipeline hang report for real** (not a zero timeout, whose registers show
+  a finished DMA): emit a DIRECT block whose GIF tag promises more than it carries, e.g.
+  `GIF_SET_TAG(0x7FFF, 1, 0, 0, GIF_FLG_IMAGE, 0)` plus one qword, with the renderer's
+  `OpenDirect`/`DirectCursor`/`SetDirectCursor`/`CloseDirect` on the Nth 3D frame, after
+  `RenderWorldModel` so MSCALs precede it. PCSX2 wedges like hardware would: `D1_CHCR STR=1`,
+  VIF1 `VGW=1` on a FLUSH, GIF `APATH=PATH2 OPH=1`, and the chain trail flags the packet.
+  PCSX2 reads the GIF tag registers and VPU-STAT as 0; only a console fills those in.
 - Debug builds print an EE exception report (cause, EPC, BadVAddr, stack). Resolve addresses
   against **the same build's** `quake2_unstripped.elf`:
   `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>` or

@@ -777,10 +777,20 @@ goes out without it.
 It then dumps the pipeline and calls `Sys_Error("Render pipeline hang: ...")`. The dump
 ([pipeline_dump.cpp](src/ps2/debug/pipeline_dump.cpp)) has the VIF1 DMA channel, VIF1,
 VU1's run state (VPU-STAT), the GIF and its tag registers, and the GS CSR, each raw and
-decoded. Then come the frame chain's qwords up to `D1_TADR` (the tags and VIFcodes VIF1 had
-been working through), the VU1 batch header and output-window GIF tags, and the call stack of
-the wait that gave up. All of it goes to stdout and to the log file, so a hang on a console
-leaves the whole report in `quake2.log`. Before the error screen draws, it stops DMA channels 1
+decoded. Then come:
+
+- the raw qwords just before `D1_TADR`;
+- the chain trail: every DMA tag from the start of the stuck chain up to `D1_TADR` is walked,
+  and the last 32 are printed with their VIFcodes decoded (UNPACKs, `MSCAL` addresses, FLUSHes,
+  DIRECT sizes). A DIRECT's GIF packet is followed tag by tag, so a packet that asks for more
+  data than its block holds is called out: that one holds PATH2 open forever;
+- which microprogram ran last (the last `MSCAL` on the way), and its GS packet in VU1 memory
+  checked the same way, in that program's layout;
+- all 16 KB of VU1 data memory;
+- the call stack of the wait that gave up.
+
+All of it goes to stdout and to the log file, so a hang on a console leaves the whole report
+in `quake2.log`, about 1,100 lines. Before the error screen draws, it stops DMA channels 1
 and 2 and resets VIF1, VU1 and the GIF, in libgs's `GsResetPath` order
 ([scr_print.cpp](src/ps2/debug/scr_print.cpp)). Otherwise a GIF still holding a path open could
 keep its own transfers out and leave a blank screen.

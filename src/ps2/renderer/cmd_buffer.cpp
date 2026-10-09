@@ -484,14 +484,16 @@ constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
 // DMA registers - so print them before dying, while they still hold the stalled state.
 static HangReportFn s_hangReportHook = nullptr;
 
-// Where the DMAC stopped, as a place in the frame chain, and the qwords leading up to it. TADR is
-// the next tag the DMAC will read, so the tags and VIFcodes VIF1 was working through - the
-// chunk's CNT unpack, its REF, the FLUSH + MSCAL that ran it - sit right behind it. A chunk is
-// about a dozen qwords, so this covers the last one or two.
+// Where the DMAC stopped, as a place in the frame chain: the raw qwords around D1_TADR, then the
+// trail of tags that led there, decoded. TADR is the next tag the DMAC will read, so the commands
+// VIF1 was working through - unpacks, the MSCALs that ran them, DIRECT blocks for the GIF - sit
+// behind it. The trail reaches back further than any raw window could, since most of a chain is
+// vertex payload.
 Q_COLD_FUNC void DumpChainPosition()
 {
-    constexpr int kQwordsBehind = 24;
+    constexpr int kQwordsBehind = 8;
     constexpr int kQwordsAhead  = 2; // the tag at TADR and the qword after it
+    constexpr int kTrailTags    = 32;
 
     debug::DumpPrintf("Frame chain: building half %d, %u qwords built, %d kicked.\n",
                       s_half, packet2_get_qw_count(s_packets[s_half]), s_kickedQwords);
@@ -514,6 +516,7 @@ Q_COLD_FUNC void DumpChainPosition()
         char what[64];
         std::snprintf(what, sizeof(what), "Half %d, up to D1_TADR at qword %d", i, tagQw);
         debug::DumpQwords(what, base + first, first, last - first);
+        debug::DumpChainTrail(base, static_cast<int>(kHalfQwords), tagQw, kTrailTags);
         return;
     }
 

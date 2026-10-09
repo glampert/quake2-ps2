@@ -25,6 +25,13 @@ paths:
   "isn't enabled", compile the macro standalone on the host and inspect the bits.
 - `packet_init`/`packet2_create` each `calloc` a header and `memalign(64)` the buffer. Read the
   SDK source when internal behaviour matters.
+- **`close()` on a fileXio path (`mass:`, `pfs:`) returns a positive number on success.**
+  `iomanX_close` returns `f - file_table`, the descriptor's slot (`HANDLE_RESULT_RETURN_FD`
+  in iomanx/src/iomanX.c), and libcglue's `__transform_errno` passes any non-negative value
+  through. Only `< 0` is a failure. `host:` goes through ROM FILEIO and returns 0, so PCSX2
+  host runs hide it. A `close(fd) == 0` check in `log_file.cpp` turned the log off after its
+  header line on every USB/HDD run from ed03e18 until 2026-10-09. newlib's `fclose` checks
+  `< 0` and is fine. bdmfs_fatfs's `write` returns 0, not an error, when FatFs fails.
 
 ## EE CPU and FPU
 

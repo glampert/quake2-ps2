@@ -87,10 +87,13 @@ void Flush()
     if (fd >= 0)
     {
         written = (lseek(fd, 0, SEEK_END) >= 0) && (write(fd, s_buffer, static_cast<size_t>(s_used)) == s_used);
+        // Only a negative close is a failure. On USB and HDD the close goes through fileXio to
+        // iomanX, whose close returns the descriptor's slot number on success, and libcglue
+        // passes that through. Requiring 0 turned the log off after its first line.
         const int closeResult = close(fd);
         // Even a partial write or failed close may have changed HDD metadata.
         syncResult = ps2::sys::SyncGameDataDevice();
-        written = written && closeResult == 0 && syncResult == 0;
+        written = written && closeResult >= 0 && syncResult == 0;
     }
 
     if (written)

@@ -129,7 +129,11 @@ Three traps. Each one looks like a game crash, and all of them reproduce at HEAD
   through to USB. The user verified emulated PFS boot/reads on 2026-10-07 and observed
   noticeably faster loading than USB. The missing HDD log still needs session-specific
   verification after adding HDD-only `fileXioSync` after log closes; see the PFS
-  metadata-flush trap in [ps2-platform.md](ps2-platform.md).
+  metadata-flush trap in [ps2-platform.md](ps2-platform.md). Builds from ed03e18 up to the
+  2026-10-09 fix also stopped every USB/HDD log after its header line: they required
+  `close() == 0`, and iomanX returns the slot number (see ps2-platform.md). The fix was
+  verified on emulated USB (uLaunchELF, `mass:quake2_debug.elf`): a full 1349-line
+  `quake2.log` from boot to quit, and no logging warning in emulog.
 - **Storage selection runtime harness:** include `iop_boot.cpp` with stub SDK headers
   and IOP/mount calls, then run from a directory holding folders literally named `pfs0:`,
   `mass0:`, `mass1:`... (macOS allows the colon). `fopen` then takes the probe paths as
@@ -141,7 +145,9 @@ Three traps. Each one looks like a game crash, and all of them reproduce at HEAD
   detection. This verifies selection logic, not the real drivers or DMA;
   `make` and `make release` remain the target compile/link checks.
 - **HDD log sync runtime harness:** include `debug/log_file.cpp` with fake SDK headers,
-  real host-backed open/seek/write/close wrappers and a mocked `SyncGameDataDevice()`;
+  real host-backed open/seek/write/close wrappers and a mocked `SyncGameDataDevice()`.
+  A host `close()` returns 0, unlike iomanX's slot number, so make the wrapper return a
+  positive value on success or the harness can't see that trap;
   the boot harness checks its real fileXio implementation. Twenty-four ASan/UBSan cases
   verify header/append/fatal persistence ordering, no sync for host/USB or disabled
   logging, and disabling after open/seek/write/
@@ -169,13 +175,14 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
   the log. Anything new printed on a fatal path must use it, not `printf`: the first hardware
   pipeline hang (2026-10-07) logged only `Sys_Error: Render pipeline hang: ... See the pipeline
   dump above.`, because the dump went to stdout alone.
-- **A hardware pipeline hang ended on a solid green screen**, with no `Sys_Error` text drawn,
-  though the log had the `Sys_Error` line. Likely, but unconfirmed: `ScrInit` resets the GS,
-  then its PATH3 transfers can't get through a GIF still holding PATH1/PATH2 open, so
-  `DmaWaitGif` spins. `ScrInit` now runs `ResetGraphicsPaths` first (scr_print.cpp), libgs's
-  `GsResetPath` order: stop DMA channels 1 and 2 under a DMAC suspend, reset VIF1, VU1 (if
-  the thread has COP2), then the GIF. PCSX2 shows the error screen still drawing after it, but
-  can't wedge the GIF, so whether it cures the green screen needs the next hardware hang.
+- **A pipeline hang on a console used to end on a solid green screen**, with no `Sys_Error`
+  text drawn, though the log had the `Sys_Error` line. `ScrInit` reset the GS, then its PATH3
+  transfers couldn't get through a GIF still held by the wedged pipeline, so `DmaWaitGif`
+  spun. `ScrInit` now runs `ResetGraphicsPaths` first (scr_print.cpp), in libgs's
+  `GsResetPath` order: stop DMA channels 1 and 2 under a DMAC suspend, then reset VIF1, VU1
+  (if the thread has COP2) and the GIF. Confirmed on hardware 2026-10-09: the same hang now
+  shows the error on screen. PCSX2 can't wedge the GIF, so only a console shows the
+  difference. Any new fatal-path screen must go through `ScrInit`.
 - Debug builds print an EE exception report (cause, EPC, BadVAddr, stack). Resolve addresses
   against **the same build's** `quake2_unstripped.elf`:
   `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>` or

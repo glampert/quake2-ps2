@@ -112,7 +112,7 @@ bigger picture.
 | `joy_sidethreshold` | `0.15` | `0.15` | | Left stick horizontal dead zone. |
 | `in_rumble` | `1` | `1` | Arch. | Gamepad force feedback (the Options menu's "gamepad rumble"). |
 | `in_rumbledebug` | `0` | `0` | | Print each rumble effect as it starts. |
-| `in_keyboard` | `1` | `1` | Arch. | Bring up the USB keyboard driver (one-shot; the IOP modules load once). |
+| `in_keyboard` | `1` | `0` | Arch. | Bring up the USB keyboard driver (one-shot; the IOP modules load once). A keyboard is polled every frame while in use (a key within 10 s, or one held), four times a second otherwise. |
 | `in_keyboarddebug` | `0` | `0` | | Print every raw USB scan code the keyboard driver delivers. |
 
 ## Save games

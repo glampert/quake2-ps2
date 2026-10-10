@@ -29,6 +29,18 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   The loop to the ambient track uses stream pass counts, and the wraps are seamless (verified
   bit-exact on target by hash). Behaviour follows id's `cd_win.c` (`cd_loopcount`,
   `cd_looptrack`).
+- **A main-thread file call waits out a music read.** The SDK file client and the IOP's file
+  server take one request at a time. So anything the main thread reads or writes while the
+  reader has a read out waits for it, and on a console USB drive that took ~300 ms. The USB
+  keyboard poll is a `read()` on `usbkbd:dev` every frame. A 2026-10-10 console capture showed
+  it stalling a frame every 640 ms: 83 s of 171 s of gameplay. It now skips while
+  `audio::MusicReadPending()`, and the driver keeps the keys queued until then. A console run
+  with the keyboard off confirmed the cause: the stalls were gone. It also polls
+  only four times a second unless a key arrived in the last 10 s or is held (keyboard.h), and
+  `in_keyboard` is off by default in release builds. Keep any other per-frame file I/O off the
+  main thread the same way. PCSX2's `host:` reads are too quick to show it. In PCSX2 a
+  per-frame poll cost ~86 µs; with the idle polling the Input column averages 27 µs, against
+  20 µs for the pad alone.
 - **WAV fallback (the user's request, for whoever skips `make music`):** per search directory,
   `trackNN.adp`, then `trackNN.wav`, then `Track%02d.wav` (as `make music` accepts; FAT and
   macOS hosts ignore case anyway). The format comes from the header (`"Q2MU"` or RIFF/WAVE),

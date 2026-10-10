@@ -53,6 +53,11 @@ PS2_PROFILE_DECLARE_EVENT(FsIo);
 // CDAudio_Update: the music stream's decode and raw-sample top-up (ps2/audio/cd_audio.cpp).
 PS2_PROFILE_DECLARE_EVENT(Music);
 
+// IN_Frame: the gamepad and USB keyboard polls (ps2/input/input.cpp). The keyboard's are file
+// reads, which can wait behind other file I/O. Like Server and ClParse it runs before
+// PS2_BeginFrame rolls the profiler over, so the frame log has it one row early.
+PS2_PROFILE_DECLARE_EVENT(Input);
+
 } // namespace ps2::prof_evt
 
 // ------------------------------------------------------------------------------------------------

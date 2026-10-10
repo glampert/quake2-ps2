@@ -14,6 +14,7 @@
  * ================================================================================================ */
 
 #include "ps2/input/keyboard.h"
+#include "ps2/audio/music_stream.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/common.h"
 
@@ -246,6 +247,13 @@ void Keyboard::Shutdown()
         m_available = false;
     }
     m_numEvents = 0;
+
+    for (bool & held : m_held)
+    {
+        held = false;
+    }
+    m_numHeld = 0;
+    m_keySeen = false;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -261,8 +269,31 @@ void Keyboard::Update()
         return;
     }
 
+    // Every frame while the keyboard is in use, every kIdlePollMsec otherwise (see keyboard.h).
+    const int  nowMsec = Sys_Milliseconds();
+    const bool inUse   = (m_numHeld > 0) || (m_keySeen && (nowMsec - m_lastKeyMsec) < kActiveMsec);
+    if (!inUse && (nowMsec - m_lastPollMsec) < kIdlePollMsec)
+    {
+        return;
+    }
+
     for (int reads = 0; reads < kMaxReadsPerFrame; ++reads)
     {
+        // Each read is a read() on the usbkbd:dev device file, through the same file client and
+        // IOP file server as the music stream's reads. One made while the music reader has a
+        // read out waits for it to land, and over USB on a console that stalled this frame by
+        // ~300 ms, every 640 ms. The driver keeps the keys queued, so they are picked up the
+        // frame the read is done; checked per read, since each one sleeps and lets the reader
+        // start.
+        if (audio::MusicReadPending())
+        {
+            break;
+        }
+
+        // A poll made, as against one the music read put off: only this one restarts the idle
+        // interval, so a deferred poll is retried the next frame.
+        m_lastPollMsec = nowMsec;
+
         PS2KbdRawKey raw = {};
         if (PS2KbdReadRaw(&raw) <= 0)
         {
@@ -271,6 +302,15 @@ void Keyboard::Update()
 
         const bool down = (raw.state == PS2KBD_RAWKEY_DOWN);
         const int  key  = s_keyTable.keys[raw.key];
+
+        // Someone is at the keyboard, whether or not Quake has a use for this key.
+        m_keySeen     = true;
+        m_lastKeyMsec = nowMsec;
+        if (m_held[raw.key] != down)
+        {
+            m_held[raw.key] = down;
+            m_numHeld += down ? 1 : -1;
+        }
 
         if (s_traceKeys->value != 0.0f)
         {

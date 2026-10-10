@@ -88,6 +88,12 @@ public:
     // Seamless wraps back to the start since the last call.
     int TakeWraps();
 
+    // True while a buffer is queued for the reader thread or being read. A file call the main
+    // thread makes meanwhile goes through the same SDK client and the same single-threaded IOP
+    // file server, so it waits for the read to land. On a console USB drive that has been over
+    // 300 ms (see MusicReadPending).
+    bool ReadPending() const;
+
 private:
     static constexpr int kNumBuffers = 2;
     static constexpr int kStackBytes = 8 * 1024;
@@ -210,5 +216,12 @@ private:
 
     Buffer m_buffers[kNumBuffers];
 };
+
+// Whether the game's music stream (cd_audio.cpp owns the one there is) has a read queued or in
+// flight: MusicStream::ReadPending on it. For the main thread's per-frame file calls - the USB
+// keyboard poll is a read() on the usbkbd:dev device file - which would otherwise wait out a
+// music read inside the frame. On a console that was a 300 ms stall every 640 ms; host: reads
+// are too quick for PCSX2 to show it.
+bool MusicReadPending();
 
 } // namespace ps2::audio

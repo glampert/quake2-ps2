@@ -768,4 +768,16 @@ int MusicStream::TakeWraps()
     return wraps;
 }
 
+bool MusicStream::ReadPending() const
+{
+    for (const Buffer & buffer : m_buffers)
+    {
+        if (buffer.state == BufferState::Pending)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace ps2::audio

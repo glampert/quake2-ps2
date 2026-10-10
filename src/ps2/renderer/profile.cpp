@@ -52,6 +52,7 @@ PS2_PROFILE_DEFINE_EVENT(ClScene,    "ClScene",     kScreenOverlay, 29);
 PS2_PROFILE_DEFINE_EVENT(SndMix,     "SndMix",      kScreenOverlay, 30);
 PS2_PROFILE_DEFINE_EVENT(FsIo,       "FsIo",        kScreenOverlay, 31);
 PS2_PROFILE_DEFINE_EVENT(Music,      "Music",       kScreenOverlay, 32);
+PS2_PROFILE_DEFINE_EVENT(Input,      "Input",       kScreenOverlay, 33);
 
 } // namespace ps2::prof_evt
 
@@ -106,7 +107,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 33;
+constexpr int kNumEvents = 34;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -190,7 +191,7 @@ void WriteBatch()
         std::printf("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,"
+                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,Input,"
                     "nodes,surfs,surfsAlpha,surfsTurb,skyFaces,tris,trisClipped,trisCulled,"
                     "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
                     "boxesCulled,batches,entities,particles,dlights,"
@@ -285,7 +286,7 @@ void FrameLogCapture()
         &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
         &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,     &prof_evt::Server,
         &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,    &prof_evt::FsIo,
-        &prof_evt::Music,
+        &prof_evt::Music,       &prof_evt::Input,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {

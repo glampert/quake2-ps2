@@ -30,10 +30,11 @@ public:
     void Shutdown();
 
     // Drains the driver's queue into the event buffer below, dropping keys with no
-    // Quake equivalent. Call exactly once per client frame before reading the events.
-    // Set in_keyboarddebug to echo the raw scan codes as they arrive - which USB
-    // usage a physical key sends depends on the keyboard's layout, so that trace is
-    // what to reach for when a particular key appears to do nothing.
+    // Quake equivalent. Call exactly once per client frame before reading the events;
+    // a frame that isn't a poll reports none (see kIdlePollMsec). Set in_keyboarddebug
+    // to echo the raw scan codes as they arrive - which USB usage a physical key sends
+    // depends on the keyboard's layout, so that trace is what to reach for when a
+    // particular key appears to do nothing.
     void Update();
 
     // Key transitions collected by the last Update(), in the order they arrived.
@@ -46,9 +47,25 @@ private:
     // after a long stall - and then dropping the overflow is the right call anyway.
     static constexpr int kMaxEventsPerFrame = 32;
 
+    // How often the driver is polled. Every poll is a file read - an IOP round trip,
+    // which also waits behind any other file I/O in flight - and the driver can't say
+    // whether a keyboard is plugged in at all: its read comes back empty either way.
+    // So a keyboard nobody is using is polled every kIdlePollMsec, which puts the first
+    // key after a quiet spell up to that late, and one in use every frame: until
+    // kActiveMsec after the last key, and for as long as any key is held, so letting go
+    // after a long hold (running forward) is never the late one.
+    static constexpr int kActiveMsec   = 10 * 1000;
+    static constexpr int kIdlePollMsec = 250;
+
     bool m_available = false;
     int m_numEvents = 0;
     Event m_events[kMaxEventsPerFrame] = {};
+
+    bool m_held[256]    = {};    // by raw USB usage, as the driver reports them
+    int  m_numHeld      = 0;     // how many of m_held are set
+    bool m_keySeen      = false; // whether m_lastKeyMsec holds anything yet
+    int  m_lastKeyMsec  = 0;     // Sys_Milliseconds of the last raw event, mapped or not
+    int  m_lastPollMsec = 0;     // ... of the last read actually made
 };
 
 } // namespace ps2::input

@@ -19,6 +19,7 @@
 #include "ps2/input/keyboard.h"
 #include "ps2/input/pad.h"
 #include "ps2/input/rumble.h"
+#include "ps2/renderer/profile.h"
 
 // The input backend is client code (the engine's own win32/in_win.c is the same):
 // sticks write straight into cl.viewangles and the outgoing usercmd_t, and button
@@ -122,7 +123,10 @@ static const cvar_t * s_pitchThreshold;
 static const cvar_t * s_forwardThreshold;
 static const cvar_t * s_sideThreshold;
 
-// Gates the keyboard only; the gamepad keeps working either way.
+// Gates the keyboard only; the gamepad keeps working either way. On by default in debug builds
+// only: the keyboard is a development tool here, and a build that never brings the driver up
+// loads none of its IOP modules and never polls it. Archived, so a value in config.cfg holds
+// in either build.
 static const cvar_t * s_inKeyboard;
 
 // ------------------------------------------------------------------------------------------------
@@ -206,7 +210,7 @@ void IN_Init()
     s_pitchThreshold     = Cvar_Get("joy_pitchthreshold",     "0.15", 0);
     s_forwardThreshold   = Cvar_Get("joy_forwardthreshold",   "0.15", 0);
     s_sideThreshold      = Cvar_Get("joy_sidethreshold",      "0.15", 0);
-    s_inKeyboard         = Cvar_Get("in_keyboard",            "1",    CVAR_ARCHIVE);
+    s_inKeyboard         = Cvar_Get("in_keyboard",            PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
 
     ps2::input::InitRumble(s_gamepad);
 
@@ -233,6 +237,8 @@ void IN_Shutdown()
 
 void IN_Frame()
 {
+    PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Input);
+
     s_gamepad.Update();
     ps2::input::UpdateRumble();
 

@@ -17,7 +17,8 @@
   [save-games.md](save-games.md).
 - `[USB1] Type = hidkbd` attaches a host-passthrough USB keyboard. It reports itself as JIS,
   and its boot `Missing host mapping for QKey` warnings are harmless. It sends HID usage
-  `0x34` for the host's `` ` `` key, never `0x35`.
+  `0x34` for the host's `` ` `` key, never `0x35`. `in_keyboard` defaults to 1 in debug builds
+  only, so a release build ignores it unless the config sets `in_keyboard "1"`.
 - `Pad: DS2 Config Finished ... VS: Normal - VL: Normal` in the log means the vibration motors
   were mapped (`padSetActAlign`).
 

@@ -241,8 +241,10 @@ Type = hidkbd
 ```
 
 This attaches a HID keyboard that passes host keystrokes straight through — no per-key
-bindings to set up. The game brings the keyboard driver up at boot, since `in_keyboard`
-defaults to 1; set it to 0 to ignore the keyboard. Two quirks worth knowing:
+bindings to set up. A debug build brings the keyboard driver up at boot, since `in_keyboard`
+defaults to 1 there; a release build defaults it to 0, so set it to 1 to use the keyboard
+with one. The cvar is archived, so a value in `config.cfg` holds in either build. Two quirks
+worth knowing:
 
 - The emulated device reports itself as a JIS keyboard, so at boot it logs a batch of
   harmless `Missing host mapping for QKey '<name>'` warnings for JIS-only keys.
@@ -611,9 +613,14 @@ as it starts. The per-event tuning is in the tables at the top of rumble.cpp.
 **Keyboard.** [`Keyboard`](src/ps2/input/keyboard.h) starts `usbd.irx` + `ps2kbd.irx` on
 demand and reads the driver in raw scan-code mode, translating USB HID usages into Quake key
 events, so the stock `default.cfg` binds work as they do on a PC. It is gated by
-`in_keyboard` (a one-shot bring-up — the IOP modules must not be loaded twice), traced by
-`in_keyboarddebug 1`, and individual usages can be remapped at runtime with
-`in_keyboardmap <usage> <key>` since keyboards disagree on which usage a physical key sends.
+`in_keyboard` (a one-shot bring-up — the IOP modules must not be loaded twice; on by default
+in debug builds only), traced by `in_keyboarddebug 1`, and individual usages can be remapped
+at runtime with `in_keyboardmap <usage> <key>` since keyboards disagree on which usage a
+physical key sends. Every poll is a file read on the driver, and the driver can't say whether a
+keyboard is plugged in, so a keyboard is read every frame only while in use (a key in the last
+10 s, or one held) and four times a second otherwise. No poll is made while the CD music has a
+read in flight: it would wait for that read on the IOP's one file server, which over USB on a
+console stalled a frame for ~300 ms.
 
 ### System and memory
 

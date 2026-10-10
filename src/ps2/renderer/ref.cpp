@@ -475,9 +475,9 @@ void DrawDrawStatsOverlay()
         // much of a chain half a full console wants on top of the world.
         { "Gif2DPk", ps2::rs::Gif2DPeakQwords() },
         // The frame DMA chain: high-water in KB against its capacity, how many
-        // times it was kicked last frame, and how many of those kicks were the
-        // overflow emergency rather than the end of the frame. One kick and zero
-        // emergency drains is the target; a drain firing every frame means
+        // times it was kicked last frame, and how many of those kicks were an
+        // overflow into the other half rather than the end of the frame. One
+        // kick and no overflow is the target; one every frame means
         // cmdbuf::kHalfBytes is too small for the level.
         { "ChainKB",  static_cast<int>(ps2::cmdbuf::PeakBytes() / 1024u) },
         { "ChainKck", ps2::cmdbuf::KicksLastFrame()                      },

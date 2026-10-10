@@ -27,19 +27,21 @@ paths:
   weapons. Decode matters as much as I/O: v_rail's md2+skin cost ~8.9 ms, of which only
   ~1.7 ms was I/O. The design is in the user's plan file
   `~/.claude/plans/i-want-you-to-binary-spindle.md`.
-- **Parked: emergency chain drains** (`cmdbuf::Reserve`'s overflow path). When a frame outgrows
-  its 512 KB half, Reserve kicks what's built, waits for the GS to draw all of it
-  (`Drain()`), and rebuilds in the same half (`Rewind()`), so the EE idles while the GS works
-  through the first half-megabyte. The kick has already waited out the previous frame, so the
-  other half is free. Kicking and carrying on there means the EE waits only for the segment
-  before, as any kick does, while the GS draws this one. The halves then alternate per segment
-  within a frame, and BeginFrame's swap stays right because each kick waits for the one before.
-  On the PAL console 11% of demo frames drained (the heavy views, ~6.8K triangles), at 21.4 ms
-  against 19.9: within a 50 Hz field. Forced to NTSC, drains were 80% of the dropped frames
-  (6.8% of steady frames dropped, 2026-10-11). PCSX2 charges a
-  drain ~2 ms, so only a console capture can measure the fix. Check the payloads a half's
-  chain REFs (`cmdbuf::Alloc`) before reusing it, and the VRAM-reuse and 2D-pending rules in
-  `gs-renderer.md`.
+- **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
+  used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
+  the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those
+  frames were 80% of the dropped ones. Now it kicks and carries on in the other half, which that
+  kick has already waited out (`s_inFlightHalf` guards the one case where `Kick` sends nothing).
+  The halves also grew from 512 to 768 KB, and the world arena by 512 KB with them. In PCSX2 the
+  perf demos no longer overflow at all (the largest chain is 656 KB). A stress build with 256 KB
+  halves drew the same work with no assert or stall: 8,191 overflows in 7,679 frames, up to 3 in
+  one frame. On the console under NTSC (same settings as before) it removed every drain: 533
+  frames to 0. View p95 fell from 15.2 to 6.4 ms and Entities p95 from 11.6 to 3.3, but
+  dropped frames only went from 6.8% to 5.8% (56.1 to 56.7 fps). What drops now is views of
+  6,000+ triangles, 48% of them, at ~18 ms: 9.1 ms of EE work plus 9.0 ms of GsWait. Each frame
+  is kicked once, at its end, so **the GS idles while the EE builds a frame and the EE then
+  waits while the GS draws it**. The overflow's mid-frame kick used to overlap the two by
+  accident; at 768 KB nothing overflows. Next lever: kick mid-frame on purpose.
 
 ## EE codegen facts
 

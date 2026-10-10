@@ -57,7 +57,8 @@ paths:
   (`ps2/renderer/loading_screen.h`).
 - The load trace (`PS2_LOAD_TRACE`, `ps2/debug/load_trace.h`) covers the path from
   `SCR_FinishCinematic` to the first `R_EndFrame` after registration. `PS2_QUAKE_LOAD_TRACE`
-  ships as 0; set it to 1 to debug a load, and back to 0 before committing.
+  ships as 0. To debug a load, pass `-DPS2_QUAKE_LOAD_TRACE=1` in `CONFIG_DEFS` (clear
+  `build/<config>/src` first), or set it in the header and back to 0 before committing.
 
 ## Save game duty
 

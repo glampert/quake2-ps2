@@ -139,10 +139,12 @@ struct FrameSample
     int vramUploads, vramOomSyncs, vramResident;
 
     // chain counters. The chain is built front to back across a whole frame and
-    // only rewound when it runs out, so chainKB against cmdbuf::kHalfBytes
-    // is what says whether the capacity is right - and chainDrains is what says
-    // it was not: every one of those is a full pipeline stall the frame did not
-    // ask for. chainKicks is the number this refactor exists to bring down.
+    // only moves to the other half when it runs out, so chainKB against
+    // cmdbuf::kHalfBytes is what says whether the capacity is right - and
+    // chainDrains is what says it was not: every one of those is a mid-frame kick
+    // the frame did not ask for (it was a full pipeline stall until the overflow
+    // stopped waiting for the GS). chainKicks is the number this refactor exists
+    // to bring down.
     int chainKB, chainKicks, chainDrains;
 };
 
@@ -427,7 +429,8 @@ void FrameLogCapture()
     s.vramResident = v.residentTextures;
 
     // cmdbuf::EndFrame has not run for the new frame either, so these are still the finished
-    // frame's. Rounded to KB because the interesting comparison is against a 512 KB half.
+    // frame's. Rounded to KB because the interesting comparison is against a half, which is
+    // cmdbuf::kHalfBytes.
     s.chainKB     = static_cast<int>(cmdbuf::BytesLastFrame() / 1024u);
     s.chainKicks  = cmdbuf::KicksLastFrame();
     s.chainDrains = cmdbuf::EmergencyDrainsLastFrame();

@@ -270,8 +270,8 @@ void SetDirectCursor(qword_t * const cursor)
 // Opens a DIRECT block and points a GIF writer at its payload.
 //
 // 'minQwords' is what the caller must be able to write before the block is closed and another
-// opened. Reserving it may drain and rewind, which is safe at every call site for one reason: a
-// block only ever opens where no span into the buffer is live.
+// opened. Reserving it may move to a fresh chain, which is safe at every call site for one
+// reason: a block only ever opens where no span into the buffer is live.
 //
 // The block's capacity is everything left in the half rather than what was reserved, because the
 // 2D overlay's real size is not knowable up front. Reserve is the floor, GifData the ceiling.
@@ -430,7 +430,7 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
 // framebuffers, the one being drawn into and the one being scanned out must be the two different
 // ones, so the flip has to happen before any of the next frame reaches the GS. Here, ahead of the
 // clear, the whole build runs with the display parked on the previous image - so a mid-frame kick
-// from an overflow rewind or a texture fence lands somewhere nobody is looking.
+// from an overflow or a texture fence lands somewhere nobody is looking.
 void PresentFrameInFlight()
 {
     // Nothing to show: EndFrame presented immediately, or nothing has been kicked yet. The early
@@ -1017,7 +1017,7 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
 // three draw paths share.
 //
 // The constants are reserved with every chunk rather than once because a reservation that
-// overflows rewinds the buffer, taking them with it; the next chunk would then transform against
+// overflows moves to a fresh chain without them; the next chunk would then transform against
 // whatever the previous draw left in VU memory. 'firstChunk' emits them at the top of a call.
 // 'lerp' is a lerp draw's per-draw block, and null for everything else; see BeginDrawChain.
 void ReserveChunk(const int chunkQwords, const math::Mat4 & mvp, const DrawFlags flags,

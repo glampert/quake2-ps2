@@ -37,6 +37,13 @@ paths:
   city3's steady state either way: **29.44 MB** with `.adp` tracks (2 × 8 KB buffers) and
   **29.54 MB** with every track falling back to a 44.1 kHz WAV (2 × 64 KB), 1.98 MB still
   free. Exactly the 112 KB of buffer difference.
+- **The frame chain halves grew from 512 to 768 KB on 2026-10-11**, and the world arena (whose
+  lump scratch holds both) from 7904 to 8416 KB. The worst moment rose to **30.08 MB**, city3
+  again, ADPCM music, debug build. Every map's total rose 0.62-0.64 MB: the 0.5 MB arena plus
+  ~0.13 MB of code added since 2026-10-05. The lowest free point fell from 1.96 to 1.12 MB, in
+  the city3 -> strike load. All 39 maps still load, and the top chunk ended at 1.11 MB. An
+  overflow no longer waits for the GS (see `performance.md`), so the halves can go back to
+  512 KB if this headroom is ever needed: frames would overflow, cheaply, instead.
 - **Fixed segregated heaps for textures/models were rejected.** A partition must cover
   max(tex+mdl) + max(everything else), and those peak at different moments, so it costs about
   1.2 MB more than fragmentation does. Fragmentation (arena minus live peak) measured
@@ -49,4 +56,5 @@ paths:
 
 Reference summaries live in `build/baselines/` (local, untracked): `mapcycle-fbl0` (before
 free-before-load), `mapcycle-fbl1`, `mapcycle-mip0`/`mip1`, `mapcycle-vwep`,
-`mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, current code), `mapcycle-cdwav` (WAV only).
+`mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, 512 KB chain halves), `mapcycle-cdwav` (WAV only),
+`mapcycle-chain768` (ADPCM, 768 KB halves, current code).

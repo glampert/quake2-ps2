@@ -497,6 +497,15 @@ chunk while VU1 still works on the current one. There are two microprograms, wri
   model's shade; and turbulent surfaces warp their texture coordinates there too.
 - `particles.vcl` — camera-facing billboards expanded to GS sprites.
 
+**Frame chain** ([cmd_buffer.h](src/ps2/renderer/cmd_buffer.h)). Everything a frame sends — the
+clear, every VU1 batch, the 2D overlay — is one DMA source chain built into one of two 768 KB
+halves. The halves alternate per frame and live in the world loader's lump scratch, which is
+dead during gameplay. With `ps2_gs_latency` on, the GS draws a frame while the EE runs the
+next one's game work. A frame that outgrows its half kicks what it has built and carries on in
+the other half, which that kick has already waited out, so the GS draws the first part while
+the EE builds the rest. At 768 KB the perf demos never overflow; their heaviest frames reach
+about 660 KB.
+
 Each batch's A+D block programs `TEST`, `ALPHA` and `ZBUF` alongside `TEX0`/`TEX1`, so a
 batch draws with the right z-test, blend equation and depth-write mask regardless of what
 the surrounding 2D packets left behind.

@@ -67,6 +67,10 @@ static int s_reserveEnd = 0;
 // still working on an earlier frame" to everything that has to care - see WaitIdle.
 static bool s_kickInFlight = false;
 
+// The half the kick in flight was sent from. Reserve's overflow carries on in the other half, which
+// is only safe while nothing the DMAC is still reading came from there.
+static int s_inFlightHalf = 0;
+
 // How much of the current half has already been submitted. The write cursor never goes back
 // within a frame, so a kick sends the slice from here to the cursor and moves this up to meet
 // it - each segment a self-contained chain, ending in its own terminator, with the next one
@@ -124,18 +128,13 @@ Q_ALWAYS_INLINE void AimSkipTag(dma_tag_t * const tag, const qword_t * const tar
     tag->ADDR = static_cast<u64>(reinterpret_cast<std::uintptr_t>(target) & 0x0FFFFFFFu);
 }
 
-// Throws the current half away and starts it over. Everything the frame has built so far goes
-// with it, so this may only run where nothing is live: the top of a frame, an overflow that has
-// already drained, and the world load that is about to take the memory back.
-//
-// The high-water goes in here rather than only at EndFrame, or a frame that overflowed would
-// report the size of its last segment instead of the size that made it overflow.
-void Rewind()
+// Counts what the current half holds into the frame's total and the high-water mark. Here rather
+// than only at EndFrame, or a frame that overflowed would report the size of its last segment
+// instead of the size that made it overflow.
+void BankCurrentHalf()
 {
-    packet2_t * const pkt = Current();
-
 #if PS2_QUAKE_PROFILE
-    const u32 used = static_cast<u32>(packet2_get_qw_count(pkt));
+    const u32 used = static_cast<u32>(packet2_get_qw_count(Current()));
     if (used > s_stats.peakQwords)
     {
         s_stats.peakQwords = used;
@@ -145,12 +144,26 @@ void Rewind()
     // than only the segment it happened to end on. BeginFrame zeroes this after its own rewind.
     s_stats.frameQwords += used;
 #endif // PS2_QUAKE_PROFILE
+}
 
-    packet2_reset(pkt, /*clear_mem=*/0);
+// Empties the current half for building, and forgets the allocation and reservation state that
+// pointed into it. Nothing the DMAC may still read can be in it: see the callers.
+void ResetCurrentHalf()
+{
+    packet2_reset(Current(), /*clear_mem=*/0);
     s_kickedQwords = 0;
     s_allocSkipTag = nullptr;
     s_lastAlloc    = nullptr;
     s_reserveEnd   = 0;
+}
+
+// Throws the current half away and starts it over. Everything built in it goes with it, so this
+// may only run where nothing is live: the top of a frame, and the world load that is about to
+// take the memory back.
+void Rewind()
+{
+    BankCurrentHalf();
+    ResetCurrentHalf();
 }
 
 } // namespace
@@ -283,11 +296,31 @@ bool Reserve(const int qwords)
                   qwords, capacity);
     }
 
-    // Everything built so far still has to reach the GS, so send it and wait, then hand the
-    // caller an empty chain. The rewind is what makes this different from an ordinary Drain,
-    // and what costs the caller everything it had built.
-    Drain();
-    Rewind();
+    // Everything built so far still has to reach the GS: send it, and carry on in the other half
+    // without waiting for it to be drawn. The kick waits out the segment before this one first -
+    // one chain at a time on the channel - and with it everything the other half held, the
+    // previous frame or this one's earlier overflow, so that half is free the moment the kick
+    // returns. The GS draws this segment while the EE builds the rest of the frame there. This
+    // used to drain and rewind the same half, which left the EE idle until the GS had drawn
+    // everything built so far: about 5 ms on a console, PCSX2 charging it nearly nothing.
+    //
+    // BeginFrame's swap stays right: each kick waits for the one before it, so by the time the
+    // next frame flips, the half it lands in is the one this frame left first.
+    Kick();
+
+    // Kick returns early when nothing new was built, having waited for nothing. A kick still in
+    // flight from the other half would then be read while this frame writes over it. No path is
+    // known to get here like that - it would take an overflow straight after one - but the wait
+    // costs nothing when there is nothing to wait for.
+    if (s_kickInFlight && s_inFlightHalf != s_half)
+    {
+        WaitIdle();
+    }
+
+    BankCurrentHalf();
+    s_half ^= 1;
+    PublishCurrent();
+    ResetCurrentHalf();
 
     s_reserveEnd = QwordCount() + qwords;
     PS2_PROFILE_ONLY(++s_stats.emergencyDrains);
@@ -462,6 +495,7 @@ void Kick()
 
         s_kickedQwords = static_cast<int>(packet2_get_qw_count(pkt));
         s_kickInFlight = true;
+        s_inFlightHalf = s_half;
         PS2_PROFILE_ONLY(++s_stats.kicks);
     }
 }

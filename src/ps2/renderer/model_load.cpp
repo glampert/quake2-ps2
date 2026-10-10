@@ -83,7 +83,7 @@ constexpr u32 kHunkAlign = 16;
 // Alignment of the arena block itself, which is a cache line rather than a qword: the
 // scratch half of it is a DMA chain buffer during gameplay, written by the EE and read
 // by the DMAC. kWorldHunkCapacity is a multiple of 64 too, so the scratch base inherits
-// this and so does the second chain half at +512 KB.
+// this and so does the second chain half at +cmdbuf::kHalfBytes.
 constexpr u32 kArenaAlign = 64;
 
 // The hunk is the measured worst case +/- ~4%. The margin is deliberately thin: every
@@ -92,11 +92,11 @@ constexpr u32 kArenaAlign = 64;
 // failure from the world hunk to a 1 MB model load. A map that overruns either
 // capacity says so and names the constant to raise, so being wrong is loud.
 //
-// The scratch is 1 MB because that is exactly two 512 KB frame chain halves; it happens
-// to leave lab.bsp 9.9% of headroom rather than the 4.3% it had when the loader was its
-// only user. See the note above before changing it.
+// The scratch is 1.5 MB because that is exactly two 768 KB frame chain halves, raised from
+// 2 x 512 KB when a console showed heavy frames overflowing (see cmd_buffer.h); lab.bsp needs
+// 0.91 MB of it. See the note above before changing it.
 constexpr u32 kWorldHunkCapacity    = 6880u * 1024u; // 6.72 MB, power2.bsp (6.39 MB) + 5%
-constexpr u32 kWorldScratchCapacity = 1024u * 1024u; // 1.00 MB, 2 x cmdbuf::kHalfBytes
+constexpr u32 kWorldScratchCapacity = 1536u * 1024u; // 1.50 MB, 2 x cmdbuf::kHalfBytes
 constexpr u32 kWorldArenaBytes      = kWorldHunkCapacity + kWorldScratchCapacity;
 
 static_assert(2u * cmdbuf::kHalfBytes <= kWorldScratchCapacity,

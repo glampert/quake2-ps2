@@ -269,7 +269,7 @@ void SeedClutBuffer()
 
 static_assert(kPresentTicksPerSec == kBUSCLKBY256, "The present clock counts T2 ticks");
 
-// See gs.h. Init sets what one field lasts on it, by region.
+// See gs.h. Init sets what one field lasts on it, by the standard it set up.
 static PresentClock s_presentClock;
 static u32          s_ticksPerField;
 
@@ -375,12 +375,18 @@ void Init(const Config & cfg)
     detail::g_state.litPaletteClut    = s_litPaletteClut.vramAddr;
     detail::g_state.alphaRampClut     = s_alphaRampClut.vramAddr;
 
-    // Display framebuffer 0 first; auto-detects NTSC/PAL.
-    graph_initialize(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, 0, 0);
+    // Display framebuffer 0 first, in the config's standard. These are graph_initialize's calls -
+    // interlaced FIELD mode with the flicker filter, a black background, frame 0 on both read
+    // circuits - with the mode passed in, where graph_initialize can only take the console's own.
+    graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(cfg.standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
+    graph_set_screen(0, 0, cfg.width, cfg.height);
+    graph_set_bgcolor(0, 0, 0);
+    graph_set_framebuffer_filtered(static_cast<int>(frames[0].address), cfg.width, framePsm, 0, 0);
+    graph_enable_output();
 
-    // The region graph_initialize picked the video mode by, which fixes the field rate the present
-    // clock counts in: 50 a second on PAL, 59.94 on NTSC.
-    s_ticksPerField = (graph_get_region() == GRAPH_MODE_PAL) ? (kPresentTicksPerSec / 50u)
+    // The standard fixes the field rate the present clock counts in: 50 a second on PAL, 59.94
+    // on NTSC.
+    s_ticksPerField = (cfg.standard == video::Standard::Pal) ? (kPresentTicksPerSec / 50u)
                                                              : (((kPresentTicksPerSec * 1001u) + 30000u) / 60000u);
 
     s_texUploadPacket.Init(kTexUploadQwords);

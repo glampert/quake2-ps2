@@ -429,8 +429,13 @@ The renderer implements `refexport_t` in [ps2/renderer/ref.cpp](src/ps2/renderer
 the same interface `ref_gl` and `ref_soft` implemented, but we link statically rather than
 having a DLL as the original Quake 2 did.
 
-**Video mode and VRAM budget.** 640x448, NTSC/PAL auto-detected, double-buffered using both
-GS drawing contexts. The framebuffer format is chosen by `ps2_fb_16bit` (default on): 16-bit
+**Video mode and VRAM budget.** 640x448 on NTSC and 640x512 on PAL, double-buffered using both
+GS drawing contexts. `ps2_video_mode` ("video mode" in the video options, after a restart)
+picks the standard: `auto` takes the console's own (from its BIOS ROM name), and `ntsc` or
+`pal` force one, so a PAL console can run at 60 Hz on a TV that takes it
+([video_mode.h](src/ps2/system/video_mode.h), which the fatal-error screen shares).
+`ps2_fb_height` 0 follows the standard's full height; 512 lines leave 240 KB less VRAM for
+textures than 448. The framebuffer format is chosen by `ps2_fb_16bit` (default on): 16-bit
 buffers cost 560 KB each instead of 1120 KB, which is where most of the texture heap's
 headroom comes from, and halve the GS's colour write and blend-read bandwidth — at the cost
 of 5:5:5 colour, which `ps2_fb_dither` can smooth over. Depth is 16-bit either way (the GS

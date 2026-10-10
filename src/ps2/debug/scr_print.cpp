@@ -6,12 +6,12 @@
  * ================================================================================================ */
 
 #include "ps2/debug/scr_print.h"
+#include "ps2/system/video_mode.h"
 
 // PS2DEV libraries:
 #include <stdio.h>
 #include <stdarg.h>
 #include <kernel.h>     // SetGsCrt, GsPutIMR, UNCACHED_SEG
-#include <rom0_info.h>  // GetRomName
 #include <ee_regs.h>    // R_EE_* pointers to the GS privileged and DMAC registers
 #include <gif_tags.h>   // GIF_SET_TAG, GIF_REG_AD, GIF_FLG_*, GIF_PRIM_*
 #include <gs_gp.h>      // GS_REG_*/GS_SET_* general purpose register addresses and packers
@@ -78,9 +78,20 @@ constexpr int ScrToFixed12_4(const int pixels)
     return pixels * 16;
 }
 
-// Video modes accepted by SetGsCrt().
-constexpr s16 kScrVideoModeNtsc = 2;
-constexpr s16 kScrVideoModePal  = 3;
+// The GS DISPLAY register, packed by hand: DX, DY, MAGH and MAGV (minus one), then DW and DH
+// (minus one) in the high word.
+constexpr u64 MakeDisplay(const u32 dx, const u32 dy, const u32 magh, const u32 magv, const u32 dw, const u32 dh)
+{
+    return static_cast<u64>(dx & 0xFFFu)
+         | (static_cast<u64>(dy & 0x7FFu) << 12)
+         | (static_cast<u64>(magh & 0xFu) << 23)
+         | (static_cast<u64>(magv & 0x3u) << 27)
+         | (static_cast<u64>(dw & 0xFFFu) << 32)
+         | (static_cast<u64>(dh & 0x7FFu) << 44);
+}
+
+static_assert(MakeDisplay(636, 50, 3, 1, 2559, 447) == 0x001BF9FF0983227Cull,
+              "MakeDisplay must pack the value the SDK debug screen wrote by hand");
 
 // ------------------------------------------------------------------------------------------------
 // GIF packet layouts
@@ -230,14 +241,6 @@ constexpr u32 kDmaStatNonSifBits = 0xFF1F;
 // it, but Sony's own DMAC init writes it and so does the SDK debug screen.
 constexpr u32 kScrD2SadrAddr = 0x1000A080;
 
-// PAL consoles carry an 'E' as the 5th character of their ROM name. From gsKit.
-bool IsPalConsole()
-{
-    char romName[16] = {};
-    GetRomName(romName);
-    return romName[4] == 'E';
-}
-
 // Soft reset the GS and reprogram the CRT controller for the given video mode.
 void ResetGs(s16 interlace, s16 videoMode, s16 fieldMode)
 {
@@ -246,9 +249,10 @@ void ResetGs(s16 interlace, s16 videoMode, s16 fieldMode)
     SetGsCrt(interlace, videoMode, fieldMode);
 }
 
-// Point read circuit 2 at our framebuffer and stretch it over the visible raster.
-// These four values are inherited verbatim from the SDK debug screen.
-void SetVideoMode()
+// Point read circuit 2 at our framebuffer and stretch it over the visible raster. The
+// register values are the SDK debug screen's, apart from where the picture starts, which
+// follows the standard.
+void SetVideoMode(const ps2::video::Standard standard)
 {
     // EN1 0 / EN2 1 (only read circuit 2 is enabled), MMOD/AMOD take the output
     // alpha from the ALP field instead of the framebuffer, ALP 0xFF (opaque).
@@ -261,9 +265,13 @@ void SetVideoMode()
     // FBP 0, FBW 10 (640 pixels), PSM PSMCT32, no X/Y offset into the buffer.
     *R_EE_GS_DISPFB2 = 0x1400;
 
-    // DX 636, DY 50, MAGH 4x, MAGV 2x, DW 2560, DH 448. The 4x/2x magnification
-    // is what blows our comparatively tiny 640x224 buffer up to fill the screen.
-    *R_EE_GS_DISPLAY2 = 0x001BF9FF0983227C;
+    // MAGH 4x, MAGV 2x, DW 2560, DH 448: the 4x/2x magnification is what blows our comparatively
+    // tiny 640x224 buffer up to fill the screen - all of NTSC's 448 lines, PAL's top 448 of 512.
+    // DX/DY are libgraph's origin for the standard, so the text sits where the game's own picture
+    // does. On NTSC that is 4 pixels right of the SDK debug screen's DX of 636.
+    const u32 dx = static_cast<u32>(ps2::video::DisplayX(standard));
+    const u32 dy = static_cast<u32>(ps2::video::DisplayY(standard));
+    *R_EE_GS_DISPLAY2 = MakeDisplay(dx, dy, 3, 1, 2559, 447);
 }
 
 // Frees every path into the GS before the debug screen takes PATH3. A fatal error
@@ -389,9 +397,13 @@ void ScrInit()
     ResetGraphicsPaths();
     DmaReset();
 
+    // In the standard the game chose (ps2_video_mode), or the console's own if it hasn't yet - an
+    // error screen in a standard the TV can't take would show nothing at all.
+    const ps2::video::Standard standard = ps2::video::Selected();
+
     // Interlaced; FRAME field mode, which SetVideoMode() below flips back to FIELD.
-    ResetGs(true, (IsPalConsole() ? kScrVideoModePal : kScrVideoModeNtsc), 1);
-    SetVideoMode();
+    ResetGs(true, ps2::video::GsCrtMode(standard), 1);
+    SetVideoMode(standard);
 
     DmaWaitGif();
     DmaSendToGif(&s_scrSetupPacket, kScrSetupPacketQwords);

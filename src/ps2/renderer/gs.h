@@ -12,6 +12,7 @@
 #include "ps2/renderer/gif_writer.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/vram.h"
+#include "ps2/system/video_mode.h"
 
 #include <tamtypes.h>
 #include <gs_gp.h>
@@ -53,14 +54,15 @@ constexpr u64 ContextReg(const int reg, const DrawContext ctx)
 
 struct Config
 {
-    const u32 * palette;          // 256 RGBA entries; the palette every indexed image samples
-    float       intensity;        // lit-CLUT brightening, >= 1 (below that would darken)
-    int         width, height;    // framebuffer dimensions, in pixels
-    bool        framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
+    const u32 *     palette;          // 256 RGBA entries; the palette every indexed image samples
+    float           intensity;        // lit-CLUT brightening, >= 1 (below that would darken)
+    int             width, height;    // framebuffer dimensions, in pixels; height fits the standard
+    bool            framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
+    video::Standard standard;         // NTSC or PAL (ps2_video_mode, see system/video_mode.h)
 };
 
-// Brings up the GS: allocates the framebuffers and z-buffer, initialises the video mode (auto
-// NTSC/PAL), programs both drawing contexts and builds and uploads the CLUTs. Call once. The
+// Brings up the GS: allocates the framebuffers and z-buffer, sets the video mode for the config's
+// standard, programs both drawing contexts and builds and uploads the CLUTs. Call once. The
 // config is latched - it fixes the VRAM layout, so none of it can change afterwards.
 void Init(const Config & cfg);
 

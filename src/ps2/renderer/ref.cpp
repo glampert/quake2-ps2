@@ -12,6 +12,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/system/video_mode.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
@@ -552,7 +553,27 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::test::RegisterPerfTestCvar(); // Archived, so registered in every build; see perf_run.h.
 
     const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
-    const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "448", CVAR_ARCHIVE);
+    const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "0",   CVAR_ARCHIVE);
+
+    // NTSC or PAL, latched here like the framebuffer: "auto" takes the console's own. The height
+    // follows the standard - its full 448 or 512 lines for ps2_fb_height 0, and never more than
+    // it can show - since a framebuffer taller than the picture would lose its bottom rows.
+    const cvar_t * const videoMode = Cvar_Get("ps2_video_mode", "auto", CVAR_ARCHIVE);
+    bool videoModeKnown = true;
+    const ps2::video::Standard standard = ps2::video::SelectStandard(videoMode->string, &videoModeKnown);
+    if (!videoModeKnown)
+    {
+        Com_Printf("ps2_video_mode: '%s' is not auto, ntsc or pal; using the console's own, %s.\n",
+                   videoMode->string, ps2::video::Name(standard));
+    }
+
+    const int requestedHeight = static_cast<int>(fbHeight->value);
+    const int fbHeightLines   = ps2::video::FramebufferHeight(standard, requestedHeight);
+    if (requestedHeight > 0 && fbHeightLines != requestedHeight)
+    {
+        Com_Printf("ps2_fb_height: %s shows %d lines; using %d instead of %d.\n",
+                   ps2::video::Name(standard), ps2::video::VisibleLines(standard), fbHeightLines, requestedHeight);
+    }
 
     // The cvars the GS and the texture cache are configured with. Both are latched here: the
     // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
@@ -574,8 +595,9 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
         .palette          = global_palette,
         .intensity        = intensityScale,
         .width            = static_cast<int>(fbWidth->value),
-        .height           = static_cast<int>(fbHeight->value),
-        .framebuffer16Bit = (fb16Bit->value != 0.0f)
+        .height           = fbHeightLines,
+        .framebuffer16Bit = (fb16Bit->value != 0.0f),
+        .standard         = standard
     };
     ps2::rs::Init(gsConfig, scratch.base, scratch.sizeBytes);
 
@@ -595,7 +617,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::rs::SetClearColor(0, 0, 0);
 #endif // PS2_QUAKE_DEBUG
 
-    Com_DPrintf("PS2 refresh initialised: %dx%d\n", viddef.width, viddef.height);
+    Com_DPrintf("PS2 refresh initialised: %dx%d %s\n", viddef.width, viddef.height,
+                ps2::video::Name(standard));
     Com_DPrintf("Debug: %s, Asserts: %s\n",
                 PS2_QUAKE_DEBUG   ? "yes" : "no",
                 PS2_QUAKE_ASSERTS ? "yes" : "no");

@@ -42,6 +42,16 @@ The README's "Rendering" section is the architecture overview. The renderer file
 
 ## GS and libdraw
 
+- **The TV standard is ours to pick, not libgraph's.** `graph_initialize` always takes the
+  console's region (`graph_get_region()`: an `E` as the ROM name's 5th character is PAL) and
+  has no override. So `gs::Init` makes its calls itself with the mode `ps2_video_mode` chose,
+  through `system/video_mode.h`, which the fatal-error screen reads too. libgraph's interlaced
+  FIELD mode shows 448 lines on NTSC and 512 on PAL (224/256 per field), and puts the picture at
+  DX 652/DY 50 and 680/72. A 640x512 16-bit framebuffer pair plus Z costs 30 more VRAM pages
+  than 640x448: the texture heap drops from 2408 to 2168 KB. The perf demos in PCSX2 showed no
+  out-of-memory syncs, though fewer textures stayed resident (73 against 79 on average). The
+  present clock's field rate follows the chosen standard, not the console's. Forcing NTSC on a
+  PAL console works on hardware (2026-10-11): the perf test paced at 59.94 Hz.
 - **Alpha 0x80 = 1.0.** 0xFF is about 2× overbright under `(Cs-Cd)*As/128+Cd`. Scale
   engine-facing 0..255 alpha with `a >> 1`. In MODULATE, vertex colour 0x80 is identity.
 - The ALPHA register computes `(A - B) * C + D` where **C is a scalar alpha** (As/Ad/FIX), not

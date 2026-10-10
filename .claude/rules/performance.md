@@ -35,7 +35,8 @@ paths:
   before, as any kick does, while the GS draws this one. The halves then alternate per segment
   within a frame, and BeginFrame's swap stays right because each kick waits for the one before.
   On the PAL console 11% of demo frames drained (the heavy views, ~6.8K triangles), at 21.4 ms
-  against 19.9: within a 50 Hz field, but ~18 ms of work misses an NTSC one. PCSX2 charges a
+  against 19.9: within a 50 Hz field. Forced to NTSC, drains were 80% of the dropped frames
+  (6.8% of steady frames dropped, 2026-10-11). PCSX2 charges a
   drain ~2 ms, so only a console capture can measure the fix. Check the payloads a half's
   chain REFs (`cmdbuf::Alloc`) before reusing it, and the VRAM-reuse and 2D-pending rules in
   `gs-renderer.md`.
@@ -88,10 +89,11 @@ paths:
 The same debug ELF ran `ps2_perftest` on a console and in PCSX2. That test build also narrowed
 the guard band to 0.25 through a test cvar (since removed), so the PCSX2 comparison used it too.
 
-- **A PAL console runs at 50 Hz.** `gs::Init` takes the field rate from `graph_get_region()`, so
-  a frame there has 20 ms and the frame rate tops out at 50. The "~48 fps" seen on a release
-  build was that cap with a few percent of frames taking two fields. PCSX2 runs NTSC. Use
-  `frame_budget.py --pal` for a PAL capture.
+- **A PAL console runs at 50 Hz** with `ps2_video_mode auto`, the console's own standard. A frame
+  there has 20 ms and the frame rate tops out at 50. The "~48 fps" seen on a release build was
+  that cap with a few percent of frames taking two fields. PCSX2's BIOS here is NTSC. Use
+  `frame_budget.py --pal` for a PAL capture, and `ps2_video_mode pal` reproduces the pacing in
+  PCSX2: 6635 frames for the perf test's 7911, with no steady frame dropped.
 - **EE work (Frame - VSync - GsWait) was 1.56x PCSX2's**, 7.2 against 4.6 ms. TexChains was
   1.95x, World 1.6x, LmChains 1.46x, EntGeom 1.3x, Sound and SndMix 1.65-2x. This is the cache
   PCSX2 doesn't model, and it puts real numbers on the cache bullet above.
@@ -119,6 +121,11 @@ the guard band to 0.25 through a test cvar (since removed), so the PCSX2 compari
   and GsWait 5.5 ms against 0.04. Chain drains, on 11% of frames, averaged 21.4 ms with 3.2 ms
   of vsync left, against 9.0 for the rest: within a PAL field, but 18 ms of work would miss an
   NTSC one.
+- **The same console forced to NTSC** (`ps2_video_mode ntsc`, 2026-10-11, the profiling release,
+  448 lines) ran at 56.1 fps over gameplay, with 6.8% of steady frames dropped against 0.77% at
+  50 Hz. The work per frame matched PAL's: EE 6.0 ms and GsWait 5.3 ms. Only the budget shrank.
+  80% of the dropped frames had a chain drain (368 of 461), doing 19.3 ms of work against
+  16.7 ms. The rest were heavy views (~6.2K triangles) at the GS's own limit.
 - **The guard band's width costs the GS nothing measurable:** GsWait was 5.39 ms at 0.25 and
   5.42 ms at 0.8 on the console, with EE work about the same. So narrowing it buys no speed, and
   the test cvar was dropped.

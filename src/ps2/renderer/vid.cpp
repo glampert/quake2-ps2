@@ -149,8 +149,9 @@ struct Setting
 };
 
 constexpr Choice kOffOn[]        = { { "0", "off" }, { "1", "on" } };
+constexpr Choice kVideoModes[]   = { { "auto" }, { "ntsc", "NTSC" }, { "pal", "PAL" } };
 constexpr Choice kFbWidths[]     = { { "512" }, { "640" } };
-constexpr Choice kFbHeights[]    = { { "448" }, { "512" } }; // Full height for NTSC and PAL.
+constexpr Choice kFbHeights[]    = { { "0", "auto" }, { "448" }, { "512" } }; // auto: the video mode's full height.
 constexpr Choice kFbFormats[]    = { { "1", "16-bit" }, { "0", "32-bit" } };
 constexpr Choice kIntensities[]  = { { "1" }, { "1.5" }, { "2" }, { "2.5" }, { "3" } };
 constexpr Choice kMipFilters[]   = { { "nearest" }, { "bilinear" }, { "trilinear" } };
@@ -163,8 +164,9 @@ constexpr Choice kDLightScales[] = { { "0.05" }, { "0.1" }, { "0.15" }, { "0.2" 
 constexpr Setting kSettings[] = {
     { "ps2_debug_overlays",    "debug overlays",    "show developer debug info (draw/mem/profile stats)",    Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_show_fps",          "show fps",          "show frames per second at the top right of the screen", Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
-    { "ps2_fb_width",          "screen width",      "framebuffer width in pixels; needs a restart",          Applies::Restart, true,  kFbWidths,     ps2::ArrayLength(kFbWidths)     },
-    { "ps2_fb_height",         "screen height",     "448 fits NTSC, 512 fits PAL; needs a restart",          Applies::Restart, false, kFbHeights,    ps2::ArrayLength(kFbHeights)    },
+    { "ps2_video_mode",        "video mode",        "auto is the console's own standard; needs a restart",   Applies::Restart, true,  kVideoModes,   ps2::ArrayLength(kVideoModes)   },
+    { "ps2_fb_width",          "screen width",      "framebuffer width in pixels; needs a restart",          Applies::Restart, false, kFbWidths,     ps2::ArrayLength(kFbWidths)     },
+    { "ps2_fb_height",         "screen height",     "auto: the mode's full 448/512 lines; needs a restart",  Applies::Restart, false, kFbHeights,    ps2::ArrayLength(kFbHeights)    },
     { "ps2_fb_16bit",          "color depth",       "16-bit leaves more VRAM for textures; needs a restart", Applies::Restart, false, kFbFormats,    ps2::ArrayLength(kFbFormats)    },
     { "ps2_fb_dither",         "dithering",         "smooths the color banding of 16-bit color",             Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_gs_latency",        "gs latency",        "draw a frame ahead: faster, one frame more input lag",  Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },

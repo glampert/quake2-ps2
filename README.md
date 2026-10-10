@@ -3,6 +3,11 @@
 
 ![Quake 2 PS2](misc/screens/banner.jpg "Quake 2 PS2")
 
+> **Tested on real hardware.** The game boots and plays on a PS2 console, loading its data from
+> a USB drive, as well as in the PCSX2 emulator. Both TV standards are supported, **PAL (50 Hz)
+> and NTSC (60 Hz)**: auto-detected from the console, or forced with `ps2_video_mode` (also in
+> the video options menu), so a PAL console can run at 60 Hz on a TV that takes it.
+
 ## Overview
 
 This is an unofficial fan-made port, targeting the PlayStation 2 console, of the original
@@ -45,7 +50,8 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
   GS VRAM texture heap with LRU eviction and defragmentation.
 - Runs on both the **PCSX2 emulator** and **real hardware**, loading game data from
-  `host:` for development, an APA/PFS PS2 HDD, or USB mass storage, in that order.
+  `host:` for development, an APA/PFS PS2 HDD, or USB mass storage, in that order, with PAL
+  or NTSC video.
 
 ---
 
@@ -351,6 +357,13 @@ When no device has the data, the error screen shows the ELF path, search folders
 status and mounted USB volumes. `USB volumes mounted: none` means USB did not come up or
 has no FAT partition. Storage, keyboard and sound IRX modules are all embedded in the ELF,
 so no separate drivers need to be installed on the drive.
+
+**Video mode.** By default the game runs in the console's own standard: 50 Hz on a PAL console,
+60 Hz on an NTSC one. Set `ps2_video_mode` to `ntsc` or `pal` (or pick "video mode" in the
+video options) to force one after a restart. A PAL console can drive NTSC if the TV accepts
+60 Hz; over composite a PAL-only set may lose the colour, while RGB SCART and component are
+fine. `ps2_fb_height` 0, the default, gives each standard its full height: 448 lines for NTSC,
+512 for PAL.
 
 ---
 
@@ -893,7 +906,8 @@ against a release ELF you get function names from the symbol table but no file o
 **Build and project**
 
 - Package a ready-to-run **`.iso`/ELF release** so it can be tried without a toolchain.
-- Real-hardware testing; hardware-only issues (timing, IOP module quirks, USB enumeration) are the most likely place for surprises.
+- More real-hardware coverage. So far a PAL console has been tested booting from USB, under its
+  own PAL and forced NTSC. HDD/PFS boot and the USB keyboard have only been exercised in PCSX2.
 
 Contributions are welcome. The one style rule worth stating up front: the backend is held to
 `-Werror` with a strict warning set (`-Wconversion`, `-Wsign-conversion`, `-Wshadow`,

@@ -70,6 +70,11 @@ static const cvar_t * s_enableDither = nullptr;
 // memory and VRAM as well as on screen.
 static const cvar_t * s_wallMipmaps = nullptr;
 
+// ps2_st_rebase: whether the world loader moves each face's wall texture coordinates to start
+// near zero (see mod::SetRebaseWallSt). Read when a map loads, like ps2_mipmaps, because the
+// coordinates are baked into the world's vertices.
+static const cvar_t * s_rebaseWallSt = nullptr;
+
 // Built-ins used every frame, cached at init to skip the name lookup.
 static const ps2::tex::Texture * s_texConchars = nullptr;
 static const ps2::tex::Texture * s_texBacktile = nullptr;
@@ -537,6 +542,7 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     s_gsLatency         = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
     s_enableDither      = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
     s_wallMipmaps       = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
+    s_rebaseWallSt      = Cvar_Get("ps2_st_rebase",  "1", CVAR_ARCHIVE);
     s_showDebugOverlays = Cvar_Get("ps2_debug_overlays", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
     s_showFpsCount      = Cvar_Get("ps2_show_fps",       PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
     s_showMemStats      = Cvar_Get("ps2_show_memstats",  PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
@@ -637,6 +643,14 @@ void PS2_BeginRegistration(const char * mapName)
     {
         PS2_ReleaseWorldModel(nullptr);
         ps2::tex::SetWallMipmaps(wallMipmaps);
+    }
+
+    // A ps2_st_rebase change likewise: the cached world was built with the other coordinates.
+    const bool rebaseWallSt = (s_rebaseWallSt->value != 0.0f);
+    if (rebaseWallSt != ps2::mod::RebaseWallSt())
+    {
+        PS2_ReleaseWorldModel(nullptr);
+        ps2::mod::SetRebaseWallSt(rebaseWallSt);
     }
 
     ps2::mod::BeginRegistration(mapName);

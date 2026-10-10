@@ -34,6 +34,7 @@ bigger picture.
 | `ps2_mipmaps` | `1` | `1` | Arch., Menu | Load walls with their WAL mip levels; applies on the next map load. |
 | `ps2_mip_filter` | `bilinear` | `bilinear` | Arch., Menu | Wall and model skin filtering: `nearest`, `bilinear` or `trilinear`. |
 | `ps2_mip_bias` | `0` | `0` | Arch., Menu | Wall mip level bias, in levels; positive is blurrier. |
+| `ps2_st_rebase` | `1` | `1` | Arch. | Shift each wall face's texture coordinates by whole repeats so they start near zero, which keeps precision the GS would lose on large values; the same texels either way. Applies on the next map load. |
 | `ps2_skymip` | `0` | `0` | Arch., Menu | Load the sky faces at half resolution to save VRAM (`ref_gl`'s `gl_skymip`). |
 | `ps2_sky_full_bounds` | `0` | `0` | | Debug: draw all six sky faces whole, ignoring what is visible. |
 

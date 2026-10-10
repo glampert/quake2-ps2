@@ -72,6 +72,17 @@ The README's "Rendering" section is the architecture overview. The renderer file
   coordinates in [0,1] with `tex::StScaleFor()`. A *tiling* non-POT texture needs resampling
   on load (33 of 2118 `.wal` files), not a coordinate scale. The 2D path uses `PRIM_MAP_UV`
   texel coordinates and is unaffected.
+- **Keep S/T small: a console's GS loses precision on large values, and PCSX2 doesn't.** id's
+  wall projection gives coordinates relative to the texture's world origin. In base2 a face's
+  largest |S| or |T| has a median of 13.5 repeats and a max of 160 (16x16 tiles reach the most).
+  On hardware some walls drew stretched and warped, and others swam as the camera moved. PCSX2's
+  Metal renderer showed none of it. The world loader now shifts each face's coordinates by whole
+  repeats so the smallest lands in [0, 1) (`ps2_st_rebase`, `mod::SetRebaseWallSt`). Under
+  REPEAT this samples the same texels, mip levels included, and leaves base2's max at 15.
+  Confirmed on hardware 2026-10-10, with the guard band at its usual 0.8. A first run had also
+  narrowed the band to 0.25 through a test cvar, since removed. A second run without it showed
+  the walls were fixed by the shift alone. Anything new that sends large S/T (warped water still
+  does, in texels) is a candidate for the same artifacts.
 
 ## CLUTs and palettized textures
 

@@ -113,6 +113,9 @@ static u8 * s_worldArena = nullptr;
 static u32 s_hunkPeakUsed    = 0;
 static u32 s_scratchPeakUsed = 0;
 
+// ps2_st_rebase, as of the last BeginRegistration. See SetRebaseWallSt.
+static bool s_rebaseWallSt = true;
+
 Q_ALWAYS_INLINE u8 * WorldHunkBase()    { return s_worldArena; }
 Q_ALWAYS_INLINE u8 * WorldScratchBase() { return s_worldArena + kWorldHunkCapacity; }
 
@@ -1085,6 +1088,29 @@ void BuildPolygonFromSurface(const BspGeometry & geom, const SurfaceEdges & edge
         poly->vertexes[i].lightmap_t = lmt / kAtlasSpanT;
     }
 
+    // Whole repeats off the colour coordinates, so the face's smallest lands in [0, 1): see
+    // SetRebaseWallSt. Per polygon rather than per surface, which is just as exact: every
+    // triangle draws on its own. Only the wall texture moves - the lightmap coordinates address
+    // an atlas and are small already.
+    if (s_rebaseWallSt && numVerts > 0)
+    {
+        float minS = poly->vertexes[0].s;
+        float minT = poly->vertexes[0].t;
+        for (int i = 1; i < numVerts; ++i)
+        {
+            minS = (poly->vertexes[i].s < minS) ? poly->vertexes[i].s : minS;
+            minT = (poly->vertexes[i].t < minT) ? poly->vertexes[i].t : minT;
+        }
+
+        const float shiftS = std::floor(minS);
+        const float shiftT = std::floor(minT);
+        for (int i = 0; i < numVerts; ++i)
+        {
+            poly->vertexes[i].s -= shiftS;
+            poly->vertexes[i].t -= shiftT;
+        }
+    }
+
     TriangulatePolygon(*poly);
 }
 
@@ -1587,6 +1613,16 @@ bool ComputeBrushHunkSize(const dheader_t * header, const PrePassLumps & pre, co
 }
 
 } // namespace
+
+void SetRebaseWallSt(const bool rebase)
+{
+    s_rebaseWallSt = rebase;
+}
+
+bool RebaseWallSt()
+{
+    return s_rebaseWallSt;
+}
 
 // ------------------------------------------------------------------------------------------------
 // WORLD MODEL SCRATCH ARENA

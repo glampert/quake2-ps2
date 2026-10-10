@@ -432,6 +432,17 @@ bool IsRegistering();
 void SetTouchOnly(bool enable);
 void FreeUnregistered();
 
+// Whether a world load moves each face's wall texture coordinates by whole repeats so that they
+// start near zero (ps2_st_rebase). id's projection gives coordinates relative to the texture's
+// world origin, which grow with distance from it: base2 reaches 160 repeats, and a median face
+// sits at 13. The GS keeps fewer bits of S and T than PCSX2's hardware renderer does, and on a
+// console those walls drew stretched and warped, or swam as the camera moved. Under REPEAT
+// wrapping, which every wall uses, a whole-repeat shift samples exactly the same texels, mip
+// levels included. Read when the world loads; set it before BeginRegistration, and release the
+// world for a change to reach a map that is already cached.
+void SetRebaseWallSt(bool rebase);
+bool RebaseWallSt();
+
 const ModelInstance * Find(const char * name);
 
 // Frees the resident world model, unless it is already 'fullName' (a "maps/*.bsp"

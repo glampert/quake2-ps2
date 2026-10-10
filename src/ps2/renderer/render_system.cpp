@@ -724,6 +724,19 @@ void KickAndWait()
     cmdbuf::Drain();
 }
 
+void KickBuilt()
+{
+    PS2_AssertMsg(s_frameStarted, "KickBuilt outside a frame!");
+
+    // A kick may only go out with no tag open, and a pending 2D batch holds one.
+    FlushPending2D();
+
+    if (!cmdbuf::KickInFlight())
+    {
+        cmdbuf::Kick();
+    }
+}
+
 #if PS2_QUAKE_PROFILE
 int Gif2DPeakQwords()
 {

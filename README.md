@@ -501,9 +501,11 @@ chunk while VU1 still works on the current one. There are two microprograms, wri
 clear, every VU1 batch, the 2D overlay — is one DMA source chain built into one of two 768 KB
 halves. The halves alternate per frame and live in the world loader's lump scratch, which is
 dead during gameplay. With `ps2_gs_latency` on, the GS draws a frame while the EE runs the
-next one's game work. A frame that outgrows its half kicks what it has built and carries on in
-the other half, which that kick has already waited out, so the GS draws the first part while
-the EE builds the rest. At 768 KB the perf demos never overflow; their heaviest frames reach
+next one's game work. Within a frame, the world pass (walls, lightmaps, sky) is kicked as soon
+as it's built, so the GS draws it while the EE builds the models, particles, translucent
+surfaces and 2D; on a console that took NTSC from 56.7 to 59.9 fps over the perf demos. A frame
+that outgrows its half kicks what it has built and carries on in the other half, which that
+kick has already waited out, so the GS draws the first part while the EE builds the rest. At 768 KB the perf demos never overflow; their heaviest frames reach
 about 660 KB.
 
 Each batch's A+D block programs `TEST`, `ALPHA` and `ZBUF` alongside `TEX0`/`TEX1`, so a

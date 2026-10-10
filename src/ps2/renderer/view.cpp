@@ -2676,6 +2676,15 @@ void RenderFrame(const refdef_t & viewDef)
 
     // Opaque world surfaces and skybox, followed by opaque and translucent entities.
     RenderWorldModel(viewDef);
+
+    // Hand the world to the GS now, rather than with the rest of the frame at EndFrame: it is the
+    // bulk of the frame's GS work, and the GS would otherwise sit idle while the EE builds the
+    // entities, particles, translucent surfaces and 2D, then the EE would wait while it drew. A
+    // console showed that on the heaviest views (6,000+ triangles): EE and GS back to back, about
+    // 18 ms, half of them missing an NTSC field. It doesn't wait: the previous frame was fenced at
+    // BeginFrame, and the call is skipped if anything else is still in flight.
+    rs::KickBuilt();
+
     RenderEntities(viewDef, /*isTranslucentPass=*/false);
     RenderEntities(viewDef, /*isTranslucentPass=*/true);
 

@@ -41,7 +41,17 @@ paths:
   6,000+ triangles, 48% of them, at ~18 ms: 9.1 ms of EE work plus 9.0 ms of GsWait. Each frame
   is kicked once, at its end, so **the GS idles while the EE builds a frame and the EE then
   waits while the GS draws it**. The overflow's mid-frame kick used to overlap the two by
-  accident; at 768 KB nothing overflows. Next lever: kick mid-frame on purpose.
+  accident; at 768 KB nothing overflows.
+- **A deliberate kick after the world pass** (`rs::KickBuilt` in `view::RenderFrame`,
+  2026-10-11) lets the GS draw the walls, lightmaps and sky while the EE builds the entities,
+  particles, translucent surfaces and 2D. It never waits mid-frame: it's skipped while anything
+  is in flight. Same console, NTSC, 768 KB halves: **59.9 fps over gameplay** (from 56.7),
+  steady frames dropped **0.4%** (27, from 5.8%), and frames without 1.7 ms to spare 4.0% (from
+  9.1%). GsWait fell from 5.3 to 3.4 ms a frame. The perf test reached frame 7212 of PCSX2's
+  7911, against 6835. Back at 512 KB halves with the kick it made no difference: 59.8 fps, 0.38%
+  dropped. 11.5% of frames overflowed, at 17.3 ms with 2.8 ms of vsync left. The halves stay at
+  768 KB anyway, as margin for views heavier than the perf demos': an overflowing frame is the
+  one most likely to be near the edge already.
 
 ## EE codegen facts
 

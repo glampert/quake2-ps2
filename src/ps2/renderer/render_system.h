@@ -207,6 +207,12 @@ bool FrameStarted();
 // Full sync/drain of the underlying cmdbuf. Kicks what has been recorded and waits for it.
 void KickAndWait();
 
+// Sends what this frame has built so far, without waiting for it to be drawn, so the GS starts
+// on it while the EE builds the rest. Skipped when an earlier kick is still in flight, because
+// sending would first wait for that one: this never waits mid-frame. Must be called between
+// draws, where no stream holds a claim on the chain. See view::RenderFrame for why it is there.
+void KickBuilt();
+
 // Makes the texture's pixels resident in GS VRAM, uploading on a miss and evicting the
 // least-recently-bound textures when the heap is full. A resident texture only has its LRU stamp
 // refreshed, unless its pixels are dirty, which re-uploads in place.

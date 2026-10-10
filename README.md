@@ -785,7 +785,8 @@ decoded. Then come:
   DIRECT sizes). A DIRECT's GIF packet is followed tag by tag, so a packet that asks for more
   data than its block holds is called out: that one holds PATH2 open forever;
 - which microprogram ran last (the last `MSCAL` on the way), and its GS packet in VU1 memory
-  checked the same way, in that program's layout;
+  checked the same way, in that program's layout. A particle header holding a count the EE
+  can't send is flagged, and the packet is read where that count made the program kick;
 - all 16 KB of VU1 data memory;
 - the call stack of the wait that gave up.
 

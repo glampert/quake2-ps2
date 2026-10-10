@@ -508,11 +508,19 @@ static_assert(sizeof(LerpDrawAttrib) == 16, "LerpDrawAttrib must be exactly 1 qw
 // Particles, must match particles.vcl
 // ------------------------------------------------------------------------------------------------
 
-// Particles one VU run carries. Input is 1 qword each and the sprite output 5, so a chunk
-// occupies kPrtDataAddr + 6n qwords of a double-buffer half; 77 is what fits the 474 the clip
-// scratch left, and this is the one batch ceiling that binds against it - the triangle and lerp
-// layouts had slack to give.
-constexpr int kMaxParticlesPerBatch = 77;
+// Particles one VU run carries. The GS packet is built right after the input particles: the 7 GIF
+// tag qwords copied from the batch head, then 5 qwords per sprite. With 1 input qword each, a
+// chunk occupies kPrtDataAddr + kNumGifTagQwords + 6n qwords of a double-buffer half. 76 fills the
+// 474 the clip scratch left exactly, and this is the one batch ceiling that binds against it - the
+// triangle and lerp layouts had slack to give.
+//
+// Only a console shows an overrun. VIF1 unpacks the next batch into the other half while this one
+// runs, so a program in the lower half that writes past its end lands on that batch's header. At
+// 77, which left the tag block out of the sum, the last sprite's ADC word (0x7FFF) became the next
+// batch's count: its sprites wrapped around all of VU1 memory until a kick found no EOP, and the
+// GIF held PATH1 for good. PCSX2 runs the program to its end before the next unpack, which then
+// overwrites the overrun.
+constexpr int kMaxParticlesPerBatch = 76;
 
 constexpr int kPrtBatchHeaderAddr = 0;  // particle count in .w
 constexpr int kPrtQuadOffsetAddr  = 1;  // clip-space corner offset in .xyz, blow-up rate in .w
@@ -522,7 +530,7 @@ constexpr int kPrtGifTagsAddr     = 4;  // the same 7-qword block as the world p
 constexpr int kPrtDataAddr        = kPrtGifTagsAddr + kNumGifTagQwords; // 1 qword per particle
 
 static_assert(kPrtQuadOffsetAddr == 1 && kPrtUV0Addr == 2 && kPrtUV1Addr == 3 && kPrtGifTagsAddr == 4 && kPrtDataAddr == 11, "Batch layout must match the #defines in particles.vcl");
-static_assert(kPrtDataAddr + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
+static_assert(kPrtDataAddr + kNumGifTagQwords + (6 * kMaxParticlesPerBatch) <= kDoubleBufferOffset, "Particle batch input + GS packet must fit one double-buffer half");
 
 // ref_gl's "hack a scale up to keep particles from disappearing": past 20 units
 // the billboard grows with distance so it stays wide enough to cover a pixel.

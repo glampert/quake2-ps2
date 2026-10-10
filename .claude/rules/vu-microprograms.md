@@ -67,6 +67,15 @@ there are two output windows XGKICKed alternately. The clip scratch is 956..1009
 light block starts at 1010. The batch tag block is 7 qwords with no room to grow (see
 [gs-renderer.md](gs-renderer.md)).
 
+- **A write past the program's half breaks only on a console.** VIF1 unpacks the next batch
+  into the other half while the program runs, so an overrun from the lower half lands on that
+  batch's header. PCSX2 runs the program to its end at the `MSCAL`, before the next unpack,
+  which then overwrites the overrun: every PCSX2 run is clean. The particle program wrote past
+  its half from f2f0452 (2026-09-21) until 2026-10-10 (6 qwords at 77 particles per batch). Its
+  fit check counted the header, the input and 5 qwords per sprite, but not the 7 tag qwords it
+  copies to the packet head. A full batch made the next count 0x7FFF, and the first
+  big particle burst hung the frame on hardware. Size a layout from the program's last write.
+
 ## Writing VCL
 
 - Above every non-trivial `#macro` and `#vuprog`, after the prose, add an indented

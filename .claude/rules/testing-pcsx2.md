@@ -190,6 +190,13 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
   `RenderWorldModel` so MSCALs precede it. PCSX2 wedges like hardware would: `D1_CHCR STR=1`,
   VIF1 `VGW=1` on a FLUSH, GIF `APATH=PATH2 OPH=1`, and the chain trail flags the packet.
   PCSX2 reads the GIF tag registers and VPU-STAT as 0; only a console fills those in.
+- **VU1 memory that repeats one output shape** throughout means a microprogram looped on a
+  corrupt count, its output wrapping around all 1024 qwords, constants included. In the
+  2026-10-10 console log, five particle-sprite qwords filled all of it. Simulate the program's
+  writes (start, stride, count, wrap at 1024) against the dumped memory. Only TOP 8 with count
+  0x7FFF matched every qword, and it put the XGKICK on the qword the `GIF_TAG` registers held:
+  no EOP anywhere, so PATH1 never closed. The cause was a particle batch overrun (see
+  [vu-microprograms.md](vu-microprograms.md)). The dump now flags a particle count out of range.
 - Debug builds print an EE exception report (cause, EPC, BadVAddr, stack). Resolve addresses
   against **the same build's** `quake2_unstripped.elf`:
   `mips64r5900el-ps2-elf-addr2line -f -C -e build/debug/quake2_unstripped.elf <addr>` or

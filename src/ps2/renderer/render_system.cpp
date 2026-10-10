@@ -602,10 +602,25 @@ Q_COLD_FUNC void DumpVuWorkInProgress()
     }
     else if (mscal == particles)
     {
-        // Built right after the input particles: the 7 tag qwords, then 5 per particle.
-        const u32 count = debug::Vu1DataWord(top + vu1::kPrtBatchHeaderAddr, 3);
-        const int n = static_cast<int>((count < static_cast<u32>(vu1::kMaxParticlesPerBatch)) ? count : static_cast<u32>(vu1::kMaxParticlesPerBatch));
-        debug::DumpVu1GifPacket("Particles, its GS packet", top + vu1::kPrtDataAddr + n, vu1::kNumGifTagQwords + (5 * n));
+        // Built right after the input particles: the 7 tag qwords, then 5 per particle. The program
+        // takes the count as it finds it - the low 16 bits, through a VI register - and the EE
+        // asserts every count it sends, so one out of range was written over the header in VU
+        // memory. The program then looped that many times, its sprites wrapping around VU1 memory,
+        // and kicked wherever that count put the packet, which is the qword to decode.
+        const u32 count = debug::Vu1DataWord(top + vu1::kPrtBatchHeaderAddr, 3) & 0xFFFFu;
+        if (count == 0 || count > static_cast<u32>(vu1::kMaxParticlesPerBatch))
+        {
+            const int kick = static_cast<int>((static_cast<u32>(top + vu1::kPrtDataAddr) + count) &
+                                              static_cast<u32>(debug::kVu1DataMemoryQwords - 1));
+            debug::DumpPrintf("VU1: THE PARTICLE COUNT IN THE HEADER IS %u, NOT 1..%d - something overwrote "
+                              "it in VU memory.\n", count, vu1::kMaxParticlesPerBatch);
+            debug::DumpVu1GifPacket("Particles, where that count put the kick", kick, debug::kVu1DataMemoryQwords);
+        }
+        else
+        {
+            const int n = static_cast<int>(count);
+            debug::DumpVu1GifPacket("Particles, its GS packet", top + vu1::kPrtDataAddr + n, vu1::kNumGifTagQwords + (5 * n));
+        }
     }
     else
     {

@@ -122,10 +122,14 @@ the guard band to 0.25 through a test cvar (since removed), so the PCSX2 compari
 - **The guard band's width costs the GS nothing measurable:** GsWait was 5.39 ms at 0.25 and
   5.42 ms at 0.8 on the console, with EE work about the same. So narrowing it buys no speed, and
   the test cvar was dropped.
-- **Capturing on a console:** the frame log only goes to stdout. That capture used a local
-  patch, not in the tree, that appended each 64-frame dump to `baseq2/frame_log.txt` with one
-  open/write/close. Keep `ps2_logfile` off for a capture, since every console print through it
-  is a ~23 ms USB write. The perf test allows 240 s for a USB map load.
+- **Capturing on a console:** the frame log goes to stdout, which a console has nobody reading.
+  Build with `PS2_QUAKE_FRAME_LOG_FILE=1` (profile.h, shipped as 0) and each 64-frame dump is
+  also appended to `baseq2/frame_log.txt` with one open/write/close. A profiling release for a
+  console capture:
+  `rm -rf build/release/src && make release CONFIG_DEFS='-DPS2_QUAKE_DEBUG=0 -DPS2_QUAKE_ASSERTS=0 -DPS2_QUAKE_PROFILE=1 -DPS2_QUAKE_FRAME_LOG_FILE=1 -DNDEBUG'`,
+  then the same `rm -rf` and a plain `make release` afterwards. Keep `ps2_logfile` off for a
+  capture, since every console print through it is a ~23 ms USB write. The perf test allows
+  240 s for a USB map load.
 
 ## Capture recipe (`ps2_perftest`, ~2.5 min, debug build)
 

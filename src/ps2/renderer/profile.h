@@ -76,6 +76,16 @@ PS2_PROFILE_DECLARE_EVENT(Input);
 //
 // Rows are prefixed "FLOG" so they can be grepped out of a PCSX2 emulog that
 // has the engine's own console output mixed in.
+//
+// PS2_QUAKE_FRAME_LOG_FILE 1 also appends every dump to <gamedir>/frame_log.txt,
+// one open/write/close each: how a capture gets off a console, which has no
+// stdout anyone reads. It ships as 0. Set it here, or for one build pass
+// -DPS2_QUAKE_FRAME_LOG_FILE=1 in CONFIG_DEFS (make doesn't track flags, so clear
+// build/<config>/src first). It only matters with PS2_QUAKE_PROFILE on.
+#ifndef PS2_QUAKE_FRAME_LOG_FILE
+#define PS2_QUAKE_FRAME_LOG_FILE 0
+#endif
+
 namespace ps2::debug {
 
 // Records the frame that just completed. Call from PS2_BeginFrame right after

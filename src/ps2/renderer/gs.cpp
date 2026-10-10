@@ -208,6 +208,13 @@ void UploadCluts(const tex::Clut * first, const tex::Clut * second)
     {
         if (clut != nullptr)
         {
+            // The CPU has just built these entries and the chain REFs them in place. SendChain
+            // writes back only the tag buffer, so without this the GS loads whatever RAM held: on a
+            // console that can be a CLUT of zeros, which makes every palettized texel transparent
+            // and leaves only untextured fills on screen. PCSX2 has no data cache to show it.
+            u32 * const entries = const_cast<u32 *>(clut->entries);
+            SyncDCache(entries, entries + tex::Clut::kNumEntries);
+
             upload.TextureTransfer(clut->entries, tex::Clut::kImageWidth, tex::Clut::kImageHeight,
                                    GS_PSM_32, clut->vramAddr, tex::Clut::kTransferWidth);
         }

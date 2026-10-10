@@ -57,6 +57,15 @@ paths:
   written back over the DMA'd bytes. A plain `static char[128]` only gets 8-byte alignment.
   Check with `mips64r5900el-ps2-elf-nm build/debug/quake2_unstripped.elf | grep <sym>`.
   `SyncDCache(buf, buf + size)` before the transfer is the matching half.
+- **`dma_channel_send_chain` writes back only the tag buffer** (`data` to `data + qwc`), never
+  the data its REF tags point at. Anything the CPU wrote and a chain REFs needs its own
+  `SyncDCache` first, or the DMAC reads stale RAM. PCSX2 has no data cache, so only a console
+  shows it, and whether the lines happen to be written back in time varies from build to build.
+  `gs::UploadCluts` missed it until 2026-10-10. A console run then drew only untextured fills
+  (the red damage flash) with everything palettized gone, loading screen and HUD included,
+  while a build a day earlier had drawn its loading screen. With the flush, a release build
+  draws and plays on the console (2026-10-10). `UploadTexture` flushes on `dirtyPixels`, and
+  the frame chain does a `FlushCache(0)` per kick.
 
 ## IOP modules, ROM FILEIO, memory card
 

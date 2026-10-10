@@ -1362,7 +1362,7 @@ void SCR_UpdateScreen(void)
     // do nothing at all
     if (cls.disable_screen)
     {
-        if (Sys_Milliseconds() - cls.disable_screen > 120000)
+        if (Sys_Milliseconds() - cls.disable_screen > 150000) // [PS2_QUAKE]: was 120000; a USB load can run past two minutes
         {
             cls.disable_screen = 0;
             PS2_LoadingScreenEnd(); // [PS2_QUAKE]

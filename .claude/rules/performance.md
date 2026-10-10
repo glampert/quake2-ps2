@@ -27,6 +27,18 @@ paths:
   weapons. Decode matters as much as I/O: v_rail's md2+skin cost ~8.9 ms, of which only
   ~1.7 ms was I/O. The design is in the user's plan file
   `~/.claude/plans/i-want-you-to-binary-spindle.md`.
+- **Parked: emergency chain drains** (`cmdbuf::Reserve`'s overflow path). When a frame outgrows
+  its 512 KB half, Reserve kicks what's built, waits for the GS to draw all of it
+  (`Drain()`), and rebuilds in the same half (`Rewind()`), so the EE idles while the GS works
+  through the first half-megabyte. The kick has already waited out the previous frame, so the
+  other half is free. Kicking and carrying on there means the EE waits only for the segment
+  before, as any kick does, while the GS draws this one. The halves then alternate per segment
+  within a frame, and BeginFrame's swap stays right because each kick waits for the one before.
+  On the PAL console 11% of demo frames drained (the heavy views, ~6.8K triangles), at 21.4 ms
+  against 19.9: within a 50 Hz field, but ~18 ms of work misses an NTSC one. PCSX2 charges a
+  drain ~2 ms, so only a console capture can measure the fix. Check the payloads a half's
+  chain REFs (`cmdbuf::Alloc`) before reusing it, and the VRAM-reuse and 2D-pending rules in
+  `gs-renderer.md`.
 
 ## EE codegen facts
 
@@ -96,10 +108,17 @@ the guard band to 0.25 through a test cvar (since removed), so the PCSX2 compari
   own column. **Confirmed** by a second capture with `in_keyboard 0` and the 0.8 band: 7 slow
   frames for 2.6 s of 121 s, and 49.0 fps over gameplay. 2.6% of steady frames were dropped.
   Of the 7 slow frames, two were mid-demo asset loads (the slugs ammo model, the railgun hum),
-  one a 134 ms Server spike and one the demo switch; three left nothing in the log. The fix
-  (no poll while a read is pending, and the idle polling) hasn't had a console run with a
-  keyboard on yet. It's not known whether the reads take that long without the capture's own
-  writes to the drive.
+  one a 134 ms Server spike and one the demo switch; three left nothing in the log. A third
+  capture, the profiling release with `in_keyboard 1`, confirmed the fix (no poll while a read
+  is pending, and the idle polling). It had the same 7 slow frames, 2.9 s, and a keyboard poll
+  cost ~221 µs on hardware, on 4.7% of frames. It's not known whether the reads take that long
+  without the capture's own writes to the drive.
+- **The profiling release on the PAL console is at the 50 Hz cap:** 49.9 fps over gameplay, 0.77%
+  of steady frames dropped, and 3.6% with under 1.7 ms to spare. On the same ELF, EE work was
+  6.2 ms against PCSX2's 3.8 (1.63x; TexChains and LmChains ~2x, World 1.77x, EntGeom 1.57x),
+  and GsWait 5.5 ms against 0.04. Chain drains, on 11% of frames, averaged 21.4 ms with 3.2 ms
+  of vsync left, against 9.0 for the rest: within a PAL field, but 18 ms of work would miss an
+  NTSC one.
 - **The guard band's width costs the GS nothing measurable:** GsWait was 5.39 ms at 0.25 and
   5.42 ms at 0.8 on the console, with EE work about the same. So narrowing it buys no speed, and
   the test cvar was dropped.

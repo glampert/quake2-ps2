@@ -35,7 +35,8 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   keyboard poll is a `read()` on `usbkbd:dev` every frame. A 2026-10-10 console capture showed
   it stalling a frame every 640 ms: 83 s of 171 s of gameplay. It now skips while
   `audio::MusicReadPending()`, and the driver keeps the keys queued until then. A console run
-  with the keyboard off confirmed the cause: the stalls were gone. It also polls
+  with the keyboard off confirmed the cause, and one with it on and these fixes confirmed the
+  cure: no stalls either way. It also polls
   only four times a second unless a key arrived in the last 10 s or is held (keyboard.h), and
   `in_keyboard` is off by default in release builds. Keep any other per-frame file I/O off the
   main thread the same way. PCSX2's `host:` reads are too quick to show it. In PCSX2 a

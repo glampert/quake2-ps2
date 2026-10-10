@@ -71,6 +71,43 @@ paths:
   the EE mean is about ±2%.
 - PCSX2 timing ≠ hardware for I/O and FPU latency either.
 
+## The first console capture (2026-10-10, debug build, USB)
+
+The same debug ELF ran `ps2_perftest` on a console and in PCSX2. That test build also narrowed
+the guard band to 0.25 through a test cvar (since removed), so the PCSX2 comparison used it too.
+
+- **A PAL console runs at 50 Hz.** `gs::Init` takes the field rate from `graph_get_region()`, so
+  a frame there has 20 ms and the frame rate tops out at 50. The "~48 fps" seen on a release
+  build was that cap with a few percent of frames taking two fields. PCSX2 runs NTSC. Use
+  `frame_budget.py --pal` for a PAL capture.
+- **EE work (Frame - VSync - GsWait) was 1.56x PCSX2's**, 7.2 against 4.6 ms. TexChains was
+  1.95x, World 1.6x, LmChains 1.46x, EntGeom 1.3x, Sound and SndMix 1.65-2x. This is the cache
+  PCSX2 doesn't model, and it puts real numbers on the cache bullet above.
+- **GsWait: 5.4 ms a frame against 0.05.** On hardware the GS/VU1 side takes ~12-13 ms per
+  frame for ~4K triangles. PCSX2 charges it nothing.
+- **Emergency chain drains cost ~8.6 ms on hardware.** These are frames whose chain outgrows the
+  512 KB half: ~9-12% of demo frames, the heavy views at ~6.8K triangles. On the console they
+  averaged 28.7 ms against 20.1 ms for the rest. View rose to 17 ms, because the EE waits for
+  the GS mid-frame. In PCSX2 the same frames cost ~2 ms more. They were the console's dropped
+  frames.
+- **259 hitches of ~314 ms (median), one every 640 ms: 83 s of the 171 s of gameplay.** No
+  column held the time, and PCSX2 had none. The cause was the keyboard poll waiting out the
+  music reader's USB reads: 640 ms is two 8 KB music buffers (see `audio.md`). Input now has its
+  own column. **Confirmed** by a second capture with `in_keyboard 0` and the 0.8 band: 7 slow
+  frames for 2.6 s of 121 s, and 49.0 fps over gameplay. 2.6% of steady frames were dropped.
+  Of the 7 slow frames, two were mid-demo asset loads (the slugs ammo model, the railgun hum),
+  one a 134 ms Server spike and one the demo switch; three left nothing in the log. The fix
+  (no poll while a read is pending, and the idle polling) hasn't had a console run with a
+  keyboard on yet. It's not known whether the reads take that long without the capture's own
+  writes to the drive.
+- **The guard band's width costs the GS nothing measurable:** GsWait was 5.39 ms at 0.25 and
+  5.42 ms at 0.8 on the console, with EE work about the same. So narrowing it buys no speed, and
+  the test cvar was dropped.
+- **Capturing on a console:** the frame log only goes to stdout. That capture used a local
+  patch, not in the tree, that appended each 64-frame dump to `baseq2/frame_log.txt` with one
+  open/write/close. Keep `ps2_logfile` off for a capture, since every console print through it
+  is a ~23 ms USB write. The perf test allows 240 s for a USB map load.
+
 ## Capture recipe (`ps2_perftest`, ~2.5 min, debug build)
 
 1. Back up `baseq2/config.cfg` and set `ps2_perftest "1"` in it. `make run`.

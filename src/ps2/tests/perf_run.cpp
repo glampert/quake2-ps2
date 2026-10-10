@@ -48,8 +48,9 @@ constexpr int kServerDead = 0; // ss_dead
 
 // A demo that never comes up, or never ends, is a failed run rather than a reason
 // to sit there forever. Both are far past anything the stock demos take, so if
-// either fires something is actually wrong.
-constexpr int kLoadTimeoutMs = 90 * 1000;
+// either fires something is actually wrong. The load allowance is a console's:
+// over USB a map load has taken from 78 s to over two minutes.
+constexpr int kLoadTimeoutMs = 240 * 1000;
 constexpr int kPlayTimeoutMs = 10 * 60 * 1000;
 
 enum class State

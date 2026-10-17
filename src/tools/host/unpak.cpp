@@ -15,6 +15,10 @@
 // For mkdir/stat
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#ifdef _MSC_VER // _mkdir on msvc
+#include <direct.h>
+#endif
 
 /*
  * From Quake2:
@@ -59,10 +63,17 @@ static void make_path(const char * path_ended_with_sep_or_filename)
             *pPath = '\0';
             if (stat(dir_path, &dir_stat) != 0)
             {
+#ifdef _MSC_VER
+                if (_mkdir(dir_path) != 0)
+                {
+                    fprintf(stderr, "_mkdir('%s') failed!\n", dir_path);
+                }
+#else
                 if (mkdir(dir_path, 0777) != 0)
                 {
                     fprintf(stderr, "mkdir('%s', 0777) failed!\n", dir_path);
                 }
+#endif
             }
             else // Path already exists.
             {

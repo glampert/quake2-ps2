@@ -507,21 +507,12 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 # Host tools: each is a single self-contained .cpp compiled straight to a binary.
 tools: $(TOOLS_BINS)
 
-$(TOOLS_CXX_BINS): $(BUILD_DIR)/tools/%: $(HOST_TOOLS_PATH)/%.cpp
-	@mkdir -p $(dir $@)
-	$(HOST_CXX) $(HOST_CXXFLAGS) $< -o $@
+$(TOOLS_CXX_BINS):
+	cmake -S src/tools/host -B build/tools -DCMAKE_BUILD_TYPE=RelWithDebInfo
+	cmake --build build/tools --config RelWithDebInfo
 
 # musenc shares the ADPCM decoder with the game, so it plays back exactly what it measured.
 $(BUILD_DIR)/tools/musenc: $(SRC_DIR)/ps2/audio/spu_adpcm.h
-
-# miniz for the host tools: C99, its warnings not ours to fix, as in the game build.
-$(HOST_MINIZ_OBJS): $(BUILD_DIR)/tools/miniz/%.o: $(MINIZ_PATH)/%.c $(HOST_MINIZ_CFG_PATH)/miniz_export.h
-	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CFLAGS) -w -I$(MINIZ_PATH) -I$(HOST_MINIZ_CFG_PATH) -c $< -o $@
-
-$(TOOLS_MINIZ_BINS): $(BUILD_DIR)/tools/%: $(HOST_TOOLS_PATH)/%.cpp $(HOST_MINIZ_OBJS)
-	@mkdir -p $(dir $@)
-	$(HOST_CXX) $(HOST_CXXFLAGS) -isystem $(MINIZ_PATH) -isystem $(HOST_MINIZ_CFG_PATH) $< $(HOST_MINIZ_OBJS) -o $@
 
 # pakzip writes the pack layout the game reads, from the same header.
 $(BUILD_DIR)/tools/pakzip: $(SRC_DIR)/ps2/fs/pkz_format.h

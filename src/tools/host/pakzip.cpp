@@ -486,7 +486,7 @@ bool ParseInt(const char * text, const int lo, const int hi, int & out)
     return true;
 }
 
-bool ParseArgs(const int argc, char ** argv, Options & opts)
+bool ParseArgs(const int argc, char *argv[], Options & opts)
 {
     int positional = 0;
     for (int i = 1; i < argc; ++i)
@@ -551,7 +551,7 @@ bool ParseArgs(const int argc, char ** argv, Options & opts)
 
 } // namespace
 
-int main(int argc, char ** argv)
+int main(int argc, char *argv[])
 {
     Options opts;
     if (!ParseArgs(argc, argv, opts))

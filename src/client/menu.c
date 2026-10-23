@@ -480,7 +480,7 @@ MAIN MENU
 
 enum
 {
-    MAIN_ITEMS = 5
+    MAIN_ITEMS = 4 // [PS2_QUAKE]: was 5, no Multiplayer (see M_Main_Draw)
 };
 
 void M_Main_Draw(void)
@@ -495,7 +495,7 @@ void M_Main_Draw(void)
     char * names[] =
     {
       "m_main_game",
-      "m_main_multiplayer",
+      //"m_main_multiplayer", // [PS2_QUAKE]: the PS2 has no network play, so no Multiplayer item
       "m_main_options",
       "m_main_video",
       "m_main_quit",
@@ -557,25 +557,26 @@ const char * M_Main_Key(int key)
     case K_ENTER:
         m_entersound = true;
 
+        // [PS2_QUAKE]: no Multiplayer (see M_Main_Draw), so the items after it moved up one.
         switch (m_main_cursor)
         {
         case 0:
             M_Menu_Game_f();
             break;
 
-        case 1:
-            M_Menu_Multiplayer_f();
-            break;
+        //case 1:
+        //    M_Menu_Multiplayer_f();
+        //    break;
 
-        case 2:
+        case 1:
             M_Menu_Options_f();
             break;
 
-        case 3:
+        case 2:
             M_Menu_Video_f();
             break;
 
-        case 4:
+        case 3:
             M_Menu_Quit_f();
             break;
         }
@@ -1370,7 +1371,7 @@ void Options_MenuInit(void)
     ** configure controls menu and menu items
     */
     s_options_menu.x = viddef.width / 2;
-    s_options_menu.y = viddef.height / 2 - 68; // [PS2_QUAKE]: was - 58, re-centred for the music volume and debug rows.
+    s_options_menu.y = viddef.height / 2 - 58;
     s_options_menu.nitems = 0;
 
     s_options_sfxvolume_slider.generic.type = MTYPE_SLIDER;
@@ -1396,11 +1397,18 @@ void Options_MenuInit(void)
     s_options_cdvolume_box.generic.type = MTYPE_SPINCONTROL;
     s_options_cdvolume_box.generic.x = 0;
     s_options_cdvolume_box.generic.y = 20;
-    s_options_cdvolume_box.generic.name = "CD music";
+    s_options_cdvolume_box.generic.name = "background music"; // [PS2_QUAKE]: was "CD music": the soundtrack streams from files (ps2/audio/cd_audio.cpp)
     s_options_cdvolume_box.generic.callback = UpdateCDVolumeFunc;
     s_options_cdvolume_box.itemnames = cd_music_items;
     s_options_cdvolume_box.curvalue = !Cvar_VariableValue("cd_nocd");
 
+    // [PS2_QUAKE] 2026-10-23
+    // No sound quality or sound compatibility rows, and the rows below moved up two for them.
+    // Quality's callback has done nothing since 2015 (UpdateSoundQualityFunc), and compatibility
+    // is s_primary, the win32 DirectSound primary buffer, which nothing reads here. The cvars
+    // quality set, s_khz and s_loadas8bit, still work from config.cfg (16-bit sounds take twice
+    // the sound cache, see snd_mem.c).
+    /*
     s_options_quality_list.generic.type = MTYPE_SPINCONTROL;
     s_options_quality_list.generic.x = 0;
     s_options_quality_list.generic.y = 30;
@@ -1417,29 +1425,37 @@ void Options_MenuInit(void)
     s_options_compatibility_list.generic.callback = UpdateSoundQualityFunc;
     s_options_compatibility_list.itemnames = compatibility_items;
     s_options_compatibility_list.curvalue = Cvar_VariableValue("s_primary");
+    */
 
     s_options_sensitivity_slider.generic.type = MTYPE_SLIDER;
     s_options_sensitivity_slider.generic.x = 0;
-    s_options_sensitivity_slider.generic.y = 60;
-    s_options_sensitivity_slider.generic.name = "mouse speed";
+    s_options_sensitivity_slider.generic.y = 40;
+    s_options_sensitivity_slider.generic.name = "camera rotation speed"; // [PS2_QUAKE]: was "mouse speed": the right stick's (ps2/input/input.cpp)
     s_options_sensitivity_slider.generic.callback = MouseSpeedFunc;
     s_options_sensitivity_slider.minvalue = 2;
     s_options_sensitivity_slider.maxvalue = 22;
 
     s_options_alwaysrun_box.generic.type = MTYPE_SPINCONTROL;
     s_options_alwaysrun_box.generic.x = 0;
-    s_options_alwaysrun_box.generic.y = 70;
+    s_options_alwaysrun_box.generic.y = 50;
     s_options_alwaysrun_box.generic.name = "always run";
     s_options_alwaysrun_box.generic.callback = AlwaysRunFunc;
     s_options_alwaysrun_box.itemnames = yesno_names;
 
     s_options_invertmouse_box.generic.type = MTYPE_SPINCONTROL;
     s_options_invertmouse_box.generic.x = 0;
-    s_options_invertmouse_box.generic.y = 80;
-    s_options_invertmouse_box.generic.name = "invert mouse";
+    s_options_invertmouse_box.generic.y = 60;
+    s_options_invertmouse_box.generic.name = "invert look Y axis"; // [PS2_QUAKE]: was "invert mouse": the right stick's (ps2/input/input.cpp)
     s_options_invertmouse_box.generic.callback = InvertMouseFunc;
     s_options_invertmouse_box.itemnames = yesno_names;
 
+    // [PS2_QUAKE] 2026-10-23
+    // No lookspring, lookstrafe or free look rows, and the rows below moved up three for them.
+    // The right stick always looks up and down (ps2/input/input.cpp), which is free look on for
+    // good. The other two acted on the mouse only while +mlook was held (win32/in_win.c):
+    // lookspring centred the view as it let go, with free look off, and lookstrafe had the mouse
+    // strafe instead of turn. There is no mouse or +mlook here, and nothing reads the three.
+    /*
     s_options_lookspring_box.generic.type = MTYPE_SPINCONTROL;
     s_options_lookspring_box.generic.x = 0;
     s_options_lookspring_box.generic.y = 90;
@@ -1460,10 +1476,11 @@ void Options_MenuInit(void)
     s_options_freelook_box.generic.name = "free look";
     s_options_freelook_box.generic.callback = FreeLookFunc;
     s_options_freelook_box.itemnames = yesno_names;
+    */
 
     s_options_crosshair_box.generic.type = MTYPE_SPINCONTROL;
     s_options_crosshair_box.generic.x = 0;
-    s_options_crosshair_box.generic.y = 120;
+    s_options_crosshair_box.generic.y = 70;
     s_options_crosshair_box.generic.name = "crosshair";
     s_options_crosshair_box.generic.callback = CrosshairFunc;
     s_options_crosshair_box.itemnames = crosshair_names;
@@ -1479,8 +1496,8 @@ void Options_MenuInit(void)
 
     s_options_joystick_box.generic.type = MTYPE_SPINCONTROL;
     s_options_joystick_box.generic.x = 0;
-    s_options_joystick_box.generic.y = 130;
-    s_options_joystick_box.generic.name = "use joystick";
+    s_options_joystick_box.generic.y = 80;
+    s_options_joystick_box.generic.name = "gamepad movement"; // [PS2_QUAKE]: was "use joystick": in_joystick gates the sticks (ps2/input/input.cpp)
     s_options_joystick_box.generic.callback = JoystickFunc;
     s_options_joystick_box.itemnames = yesno_names;
 
@@ -1488,34 +1505,34 @@ void Options_MenuInit(void)
     // Gamepad vibration (ps2/input/rumble.cpp). The actions below moved down a row for it.
     s_options_rumble_box.generic.type = MTYPE_SPINCONTROL;
     s_options_rumble_box.generic.x = 0;
-    s_options_rumble_box.generic.y = 140;
+    s_options_rumble_box.generic.y = 90;
     s_options_rumble_box.generic.name = "gamepad rumble";
     s_options_rumble_box.generic.callback = RumbleFunc;
     s_options_rumble_box.itemnames = yesno_names;
 
     s_options_customize_options_action.generic.type = MTYPE_ACTION;
     s_options_customize_options_action.generic.x = 0;
-    s_options_customize_options_action.generic.y = 160;
+    s_options_customize_options_action.generic.y = 110;
     s_options_customize_options_action.generic.name = "customize controls";
     s_options_customize_options_action.generic.callback = CustomizeControlsFunc;
 
     s_options_defaults_action.generic.type = MTYPE_ACTION;
     s_options_defaults_action.generic.x = 0;
-    s_options_defaults_action.generic.y = 170;
+    s_options_defaults_action.generic.y = 120;
     s_options_defaults_action.generic.name = "reset defaults";
     s_options_defaults_action.generic.callback = ControlsResetDefaultsFunc;
 
     s_options_console_action.generic.type = MTYPE_ACTION;
     s_options_console_action.generic.x = 0;
-    s_options_console_action.generic.y = 180;
-    s_options_console_action.generic.name = "go to console";
+    s_options_console_action.generic.y = 130;
+    s_options_console_action.generic.name = "open console"; // [PS2_QUAKE]: was "go to console"
     s_options_console_action.generic.callback = ConsoleFunc;
 
     // [PS2_QUAKE] 2026-10-12
     // The debug page, for a console with no keyboard to type commands with.
     s_options_debug_action.generic.type = MTYPE_ACTION;
     s_options_debug_action.generic.x = 0;
-    s_options_debug_action.generic.y = 190;
+    s_options_debug_action.generic.y = 140;
     s_options_debug_action.generic.name = "debug";
     s_options_debug_action.generic.callback = DebugMenuFunc;
 
@@ -1524,14 +1541,14 @@ void Options_MenuInit(void)
     Menu_AddItem(&s_options_menu, (void *)&s_options_sfxvolume_slider);
     Menu_AddItem(&s_options_menu, (void *)&s_options_musicvolume_slider); // [PS2_QUAKE]
     Menu_AddItem(&s_options_menu, (void *)&s_options_cdvolume_box);
-    Menu_AddItem(&s_options_menu, (void *)&s_options_quality_list);
-    Menu_AddItem(&s_options_menu, (void *)&s_options_compatibility_list);
+    //Menu_AddItem(&s_options_menu, (void *)&s_options_quality_list); // [PS2_QUAKE]: no row (see above)
+    //Menu_AddItem(&s_options_menu, (void *)&s_options_compatibility_list); // [PS2_QUAKE]: no row
     Menu_AddItem(&s_options_menu, (void *)&s_options_sensitivity_slider);
     Menu_AddItem(&s_options_menu, (void *)&s_options_alwaysrun_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_invertmouse_box);
-    Menu_AddItem(&s_options_menu, (void *)&s_options_lookspring_box);
-    Menu_AddItem(&s_options_menu, (void *)&s_options_lookstrafe_box);
-    Menu_AddItem(&s_options_menu, (void *)&s_options_freelook_box);
+    //Menu_AddItem(&s_options_menu, (void *)&s_options_lookspring_box); // [PS2_QUAKE]: no row (see above)
+    //Menu_AddItem(&s_options_menu, (void *)&s_options_lookstrafe_box); // [PS2_QUAKE]: no row
+    //Menu_AddItem(&s_options_menu, (void *)&s_options_freelook_box); // [PS2_QUAKE]: no row
     Menu_AddItem(&s_options_menu, (void *)&s_options_crosshair_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_joystick_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_rumble_box);

@@ -38,6 +38,12 @@ paths:
   forces `maxclients` to 8 under deathmatch.
 - The client frame interleaves **2D → 3D → 2D** (`SCR_UpdateScreen`), with no hook at the
   boundaries. The renderer handles this itself (see `gs-renderer.md`).
+- **Cvars nothing reads on this port:** `freelook`, `lookspring`, `lookstrafe`, `m_yaw`,
+  `m_forward` and `m_side` were read only by win32's mouse and joystick code (in_win.c), and
+  `s_primary` only by snd_win.c. They are still registered and archived, so config.cfg keeps
+  them. The right stick reads `sensitivity` and `m_pitch`'s sign instead (input.cpp). The
+  Options page has no rows for them since 2026-10-23, nor for sound quality, whose callback
+  does nothing (`UpdateSoundQualityFunc`).
 
 ## Level loading and registration
 

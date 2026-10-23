@@ -126,6 +126,11 @@ static const cvar_t * s_pitchThreshold;
 static const cvar_t * s_forwardThreshold;
 static const cvar_t * s_sideThreshold;
 
+// cl_main.c's default for sensitivity, which the options menu's "camera rotation speed" sets
+// (1 to 11). The right stick's speeds, cl_yawspeed and cl_pitchspeed, are scaled by sensitivity
+// over it, so they hold at the default.
+constexpr float kDefaultSensitivity = 3.0f;
+
 // Gates the keyboard only; the gamepad keeps working either way. On by default in debug builds
 // only: the keyboard is a development tool here, and a build that never brings the driver up
 // loads none of its IOP modules and never polls it. Archived, so a value in config.cfg holds
@@ -341,11 +346,18 @@ void IN_Move(usercmd_t * cmd)
 
     // Right stick rotates the camera. Stick right = turn right (yaw decreases),
     // stick up = look up (pitch decreases); flip a sensitivity cvar to invert.
-    const float yaw = ApplyDeadZone(s_gamepad.RightStickX(), s_yawThreshold);
-    cl.viewangles[YAW] -= yaw * s_yawSensitivity->value * angleSpeed * cl_yawspeed->value;
+    // The options menu's mouse rows act on it, as there is no mouse: "camera rotation
+    // speed" is sensitivity, and "invert look Y axis" a negative m_pitch, which in_win.c's
+    // joystick code read the same way ("if mouse invert is on, invert the joystick pitch
+    // value").
+    const float lookSpeed = angleSpeed * (sensitivity->value / kDefaultSensitivity);
+    const float invertPitch = (m_pitch->value < 0.0f) ? -1.0f : 1.0f;
 
-    const float pitch = ApplyDeadZone(s_gamepad.RightStickY(), s_pitchThreshold);
-    cl.viewangles[PITCH] += pitch * s_pitchSensitivity->value * angleSpeed * cl_pitchspeed->value;
+    const float yaw = ApplyDeadZone(s_gamepad.RightStickX(), s_yawThreshold);
+    cl.viewangles[YAW] -= yaw * s_yawSensitivity->value * lookSpeed * cl_yawspeed->value;
+
+    const float pitch = ApplyDeadZone(s_gamepad.RightStickY(), s_pitchThreshold) * invertPitch;
+    cl.viewangles[PITCH] += pitch * s_pitchSensitivity->value * lookSpeed * cl_pitchspeed->value;
 
     // Left stick moves the player. CL_FinishMove clamps the pitch and packs the
     // final angles/moves after IN_Move returns.

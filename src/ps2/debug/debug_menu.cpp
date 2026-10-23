@@ -77,7 +77,7 @@ constexpr int kServerGame = 2; // ss_game
 // Puts the console up with the keys on it, for a report just printed there. Over the attract loop
 // it can't be: Key_Event turns every key into Escape while a demo plays. So the demo is stopped
 // first, its server and then the client, the order a dropped game takes them in (Com_Error). The
-// Options menu's "go to console" only stops the demo, and takes a second visit for the console.
+// Options menu's "open console" only stops the demo, and takes a second visit for the console.
 // A loading plaque still up goes first, as the console toggle has it: until it comes down nothing
 // is drawn, and nothing that runs off a frame (the tests) runs, short of its 150 s timeout.
 void ShowConsole()

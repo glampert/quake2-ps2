@@ -93,7 +93,7 @@ bigger picture.
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
 | `ps2_disable_sound` | `0` | `0` | Arch. | Skip audio bring-up at boot and run silent. |
-| `cd_nocd` | `0` | `0` | Arch. | Turn the streamed soundtrack off (the Options menu's "CD music" toggle). |
+| `cd_nocd` | `0` | `0` | Arch. | Turn the streamed soundtrack off (the Options menu's "background music" toggle). |
 | `cd_volume` | `0.7` | `0.7` | Arch. | Music volume, 0-1 (the Options menu's "music volume" slider). |
 | `cd_loopcount` | `4` | `4` | | Times a map's track plays before switching to `cd_looptrack`. |
 | `cd_looptrack` | `11` | `11` | | The ambient track looped for good once `cd_loopcount` runs out. |
@@ -102,7 +102,7 @@ bigger picture.
 
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
-| `in_joystick` | `1` | `1` | Arch. | Use the gamepad's analog sticks (the Options menu's joystick toggle). |
+| `in_joystick` | `1` | `1` | Arch. | Use the gamepad's analog sticks (the Options menu's "gamepad movement" toggle). |
 | `joy_yawsensitivity` | `1` | `1` | | Right stick horizontal (turn) speed; negative inverts the axis. |
 | `joy_pitchsensitivity` | `1` | `1` | | Right stick vertical (look) speed; negative inverts the axis. |
 | `joy_forwardsensitivity` | `1` | `1` | | Left stick vertical (move) speed; negative inverts the axis. |
@@ -147,3 +147,5 @@ Registered by id's code rather than the backend, but set up or read differently 
 | --- | --- | --- | --- | --- |
 | `developer` | `1` | `0` | | Engine debug prints (`Com_DPrintf`); the default follows the build here. |
 | `s_khz` | `22` | `22` | Arch. | Sound output rate: 11, 22 or 44 (kHz); anything else falls back to 22. |
+| `sensitivity` | `3` | `3` | Arch. | The right stick's turning and looking speed, as a multiple of the default 3: 6 turns twice as fast (the Options menu's "camera rotation speed", 1 to 11). There is no mouse. |
+| `m_pitch` | `0.022` | `0.022` | Arch. | Only its sign is read: negative flips the right stick's up and down (the Options menu's "invert look Y axis"), as win32's joystick code did with the mouse inverted. |

@@ -12,12 +12,13 @@
  *        on the way in: a 2:1 half-band filter for exactly double (a 44.1kHz CD rip),
  *        linear interpolation otherwise.
  *
- *        Behaviour follows id's win32/cd_win.c: a map's track loops cd_loopcount times, then
- *        hands over to the ambient cd_looptrack, which loops for good; cd_nocd (the menu's
- *        "CD music" toggle) silences it, and the "cd" command drives it by hand. Additions:
- *        cd_volume, the level the menu's "music volume" slider sets - a CD played through
- *        the drive's own analog output, so it never answered to s_volume - and turning the
- *        music back on restarts the map's track instead of waiting for the next map.
+ *        Behaviour follows id's win32/cd_win.c: a map's track loops cd_loopcount times,
+ *        then hands over to the ambient cd_looptrack, which loops for good; cd_nocd (the
+ *        menu's "background music" toggle) silences it, and the "cd" command drives it by
+ *        hand. Additions: cd_volume, the level the menu's "music volume" slider sets - a CD
+ *        played through the drive's own analog output, so it never answered to s_volume -
+ *        and turning the music back on restarts the map's track instead of waiting for the
+ *        next map.
  *
  *        Everything here runs on the main thread, once a frame, right after S_Update: the
  *        mixer and this top-up never race over s_rawsamples. Only MusicStream's file reads

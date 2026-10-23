@@ -756,6 +756,13 @@ than that, which turned the camera with the stick released. They are archived, s
 tuned to one pad persists. The travel past a dead zone is rescaled to the full range, so the
 response ramps up from zero at its edge instead of jumping to the threshold value.
 
+The Options menu's mouse rows act on the right stick, as there is no mouse. "camera rotation
+speed" is id's `sensitivity` (1 to 11), which scales the stick's turning and looking as a
+multiple of its default, 3. "invert look Y axis" makes `m_pitch` negative, which flips the
+stick's up and down, as win32's joystick code did with the mouse inverted. "gamepad movement"
+(`in_joystick`) turns both sticks off. The sticks always look, so the page has no free look,
+lookspring or lookstrafe rows: those only changed mouse look, and nothing reads them here.
+
 Buttons send **one of two keys depending on where input focus is**, so menus and the console
 stay navigable without stealing gameplay binds. The gameplay keys are ordinary rebindable
 `JOY`/`AUX` keys, given default binds at startup only if the user's config has not bound
@@ -871,7 +878,8 @@ The RAM the game can never allocate — EE kernel, ELF image, stack — is booke
 Built with `-fno-exceptions`, so a failed allocation is a fatal `Sys_Error`, not an exception throw.
 
 Networking is loopback only ([net/net.cpp](src/ps2/net/net.cpp)) — enough for a local
-single-player/listen-server game; remote sends are dropped.
+single-player/listen-server game; remote sends are dropped. So the main menu has no
+Multiplayer item; its pages are still in menu.c, behind the `menu_multiplayer` command.
 
 ### Save games
 
@@ -1103,7 +1111,7 @@ body armor, the power shield, health and every other item), and in the builds th
 builds). The two cheat rows need a game in progress (not the attract demos) and, as the console
 commands do, `cheats 1` in deathmatch; otherwise they say why under the menu. The two report rows
 open the console on what they printed, stopping the attract loop
-first as "go to console" does; L2/R2 scroll it, and Select goes back to the demos. Every level
+first as "open console" does; L2/R2 scroll it, and Select goes back to the demos. Every level
 the tests load autosaves slot 0 to the save device, the memory card by default. A console's
 perf capture reaches a file only in a `PS2_QUAKE_FRAME_LOG_FILE=1` build (see
 [performance.md](.claude/rules/performance.md)).
@@ -1124,7 +1132,7 @@ earlier run left on the boot drive, to check a save outlives a rebuild. Every st
 run ends with `SaveTest: PASS` or `FAIL`, then quits unless `ps2_test_quit` is 0. Debug builds
 only.
 
-**CD music:** `cd_nocd` (the Options menu's "CD music" toggle), `cd_volume` (0-1, the "music
+**CD music:** `cd_nocd` (the Options menu's "background music" toggle), `cd_volume` (0-1, the "music
 volume" slider), `cd_loopcount` / `cd_looptrack` (id's loop-to-ambient rule, default 4 and 11).
 The `cd` command drives it by hand: `cd play N`, `cd loop N`, `cd stop`, `cd pause`,
 `cd resume`, `cd on`, `cd off`, and `cd info` for the current track, its file and format,

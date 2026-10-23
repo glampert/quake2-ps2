@@ -93,7 +93,13 @@ calls `Key_Event(key, true, 0)` then `Key_Event(key, false, 0)` per press goes t
 menu code; printing `cls.key_dest`/`cls.state` around it shows where it left the client. Spin
 controls change with left/right only: Enter does nothing on them (qmenu's `Menu_SelectItem`).
 The debug page was tested this way (2026-10-12), fired from the `CDAudio_Play` hook. A
-`screenshot` after the presses shows the page itself.
+`screenshot` after the presses shows the page itself. A temporary `tkey <keynum>` command (one
+`Key_Event` press and release) lets the queued script drive the pages itself, with a `w10`
+between a press and its `screenshot`. keys.h: Enter 13, Escape 27, Up 128, Down 129, Left 130,
+Right 131. That checked the main menu's four items, Down's wrap and two Options rows, whose
+cvars the script then printed by name (2026-10-23). Killing PCSX2 after the last shot, rather
+than quitting, leaves config.cfg and the card unwritten. PCSX2 still rewrites its ini's window
+state on the way out, so restore the ini too.
 
 ## Built-in tests (debug builds; set the cvar via config.cfg or the Qcommon_Init hook)
 

@@ -22,7 +22,8 @@ paths:
 - `Sys_Error` is not `[[noreturn]]`, and its declaration in the game header stays as it is.
 - Seams the backend implements: `refexport_t` (the renderer), `Sys_*`, `NET_*` (loopback
   only), `IN_*` (plus the four `IN_Rumble*` hooks in cl_fx.c, cl_parse.c, cl_ents.c and
-  cl_scrn.c), `SNDDMA_*`, `CDAudio_*`, `Sys_Save*` (`q_common.h`).
+  cl_scrn.c), `SNDDMA_*`, `CDAudio_*`, `Sys_Save*` (`q_common.h`; where the engine calls them,
+  in sv_ccmds.c and menu.c, is listed in [save-games.md](save-games.md)).
 - A changed `.c` here needs only `make`. There is no separate engine build.
 
 ## Known engine quirks and bugs

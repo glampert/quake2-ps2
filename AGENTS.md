@@ -101,6 +101,6 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [engine-c.md](.claude/rules/engine-c.md) | id's C | editing rules, engine quirks and bugs, registration, save-format duty |
 | [memory-budget.md](.claude/rules/memory-budget.md) | heap, VRAM, assets, MapCycle | the 32 MB picture, map-transition peak, measured budgets |
 | [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | CD music format and pipeline decisions, costs |
-| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, g_save.c | save design, format, icon, config.cfg policy, how to test |
+| [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, g_save.c, sv_ccmds.c, menu.c | save design and devices, format, the save notice, failure messages, icon, config.cfg policy, how to test |
 | [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |
 | [ci.md](.claude/rules/ci.md) | `.github` | the two workflows, the pinned ps2sdk image and moving it, checking a Linux build without Docker, runner traps |

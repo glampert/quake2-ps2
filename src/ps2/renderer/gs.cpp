@@ -316,6 +316,9 @@ void Init(const Config & cfg)
     PS2_Assert(cfg.palette != nullptr && cfg.intensity >= 1.0f);
     PS2_Assert(cfg.width > 0 && cfg.height > 0);
 
+    // VRAM is laid out from here, over the boot splash's fixed spots: it draws nothing more.
+    splash::Retire();
+
     dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_GIF);
 

@@ -16,14 +16,22 @@
  *    slot archive        one file per save slot: header + entry table + blobs, CRC-checked,
  *        |               written A/B so a failed write never loses the previous save
  *        v
- *    device              memory card slot 1 (libmc), or host files under <gamedir>/save/
+ *    device              the one ps2_savedevice picks: the memory card in MEMORY CARD slot 1
+ *                        (libmc, "mc", the default), or <gamedir>/save/ on the drive the game
+ *                        booted from - the emulator's host: filesystem ("host"), a USB drive
+ *                        ("usb") or the hard disk ("hdd")
+ *
+ *  Every access to a device's saved data goes under the save notice (save_notice.h).
  *
  *  working_set.cpp  - the RAM store and the FILE streams over it
  *  slot_archive.cpp - the archive format, over any Device
- *  save_device.cpp  - the Device interface's host-file implementation and error reporting
+ *  save_device.cpp  - error reporting and the whole-file helpers the devices share
  *  memcard.cpp      - the memory card Device (libmc)
- *  mc_icon.cpp      - the icon.sys / icon.ico a PS2 browser shows for the save directory
- *  save_api.cpp     - the Sys_Save* hooks the engine calls, the ps2_savedevice cvar
+ *  drive.cpp        - the boot drive's Device (stdio, <gamedir>/save/)
+ *  mc_icon.cpp      - the icon.sys / icon.ico a PS2 browser shows for the card's directory
+ *  save_notice.cpp  - the notice on the screen while a device is busy
+ *  save_api.cpp     - the Sys_Save* hooks the engine calls, the ps2_savedevice cvar, and where
+ *                     config.cfg is kept
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -66,6 +74,21 @@ inline void CopyName(char (&dest)[N], const char * src)
 // Device
 // ------------------------------------------------------------------------------------------------
 
+// What a Device is, for what the player is told: the save notice, the menus, the console.
+enum class DeviceKind : u8
+{
+    MemoryCard,
+    HostFiles, // the emulator's host: filesystem
+    UsbDrive,
+    HardDisk,
+};
+
+// "memory card", "host files", "USB drive", "hard disk": the Game menu's save device row.
+const char * DeviceName(DeviceKind kind);
+
+// The ps2_savedevice value that picks a device of this kind: "mc", "host", "usb" or "hdd".
+const char * DeviceValue(DeviceKind kind);
+
 // A file in the game's save directory on a device.
 struct DirEntry
 {
@@ -84,11 +107,14 @@ enum class OpenMode
     Write,
 };
 
-// Somewhere save slots (and config.cfg) can be kept: the memory card, or host files.
-// Names are bare file names inside the device's save directory. One file is open at a time.
+// Somewhere save slots (and the card's config.cfg) can be kept. Names are bare file names inside
+// the device's save directory. One file is open at a time. The slot archive is written against
+// this interface, so a save is the same files on the memory card and on a drive.
 class Device
 {
 public:
+    virtual DeviceKind Kind() const = 0;
+
     // Checks the device can be used right now - the card is in, formatted, and so on - and
     // refreshes FreeBytes. On false, SetError has said why in words the player understands.
     virtual bool Probe() = 0;
@@ -100,6 +126,10 @@ public:
     // directory entry). Only meaningful after a successful Probe.
     virtual u32 FreeBytes() const = 0;
     virtual u32 FileCostBytes(u32 sizeBytes) const = 0;
+
+    // Moves on whenever a Probe finds the device may not hold what it did: another card in the
+    // slot, or none. What was learned about its files before is stale once it has.
+    virtual u32 Generation() const = 0;
 
     // Creates the save directory (and whatever else it needs) if it isn't there yet.
     virtual bool EnsureSaveDir() = 0;

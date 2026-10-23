@@ -396,7 +396,7 @@ typed into from a gamepad. Laid out like the video menu's notice
 
 enum
 {
-    POPUP_CHARS = 36,    // inner width of the box
+    POPUP_CHARS = 38,    // inner width of the box, which its border takes to all the menus' 320 columns
     POPUP_MAX_LINES = 12 // message lines
 };
 
@@ -1588,6 +1588,9 @@ static char * creditsBuffer;
 
 static const char * idcredits[] =
 {
+  "+PS2 PORT BY GUILHERME LAMPERT", // [PS2_QUAKE]
+  "github.com/glampert/quake2-ps2", // [PS2_QUAKE]
+  "",
   "+QUAKE II BY ID SOFTWARE",
   "",
   "+PROGRAMMING",
@@ -2070,6 +2073,9 @@ static menuaction_s s_save_game_action;
 static menuaction_s s_credits_action;
 static menuseparator_s s_blankline;
 static menulist_s s_save_device_box; // [PS2_QUAKE]
+static int m_game_save_device;       // [PS2_QUAKE]: s_save_device_box.curvalue as the menu opened
+
+void CL_WriteConfiguration(void); // [PS2_QUAKE]: cl_main.c
 
 static void StartGame(void)
 {
@@ -2118,12 +2124,13 @@ static void CreditsFunc(void * unused)
     M_Menu_Credits_f();
 }
 
-// [PS2_QUAKE]: Where saves go (ps2/save/save_api.cpp). The spin control's order.
-static const char * save_device_values[] = { "mc", "host" };
+// [PS2_QUAKE]: Where saves and config.cfg go (ps2/save/save_api.cpp): the memory card, or the
+// drive the game booted from, whose name Game_MenuInit fills in.
+static const char * save_device_names[] = { "memory card", "", 0 };
 
 static void SaveDeviceFunc(void * unused)
 {
-    Cvar_Set("ps2_savedevice", save_device_values[s_save_device_box.curvalue]);
+    Sys_SaveUseCard(s_save_device_box.curvalue == 0);
 }
 
 void Game_MenuInit(void)
@@ -2184,22 +2191,21 @@ void Game_MenuInit(void)
     s_credits_action.generic.callback = CreditsFunc;
 
     // [PS2_QUAKE] 2026-09-29
-    // Running from the emulator's host filesystem, saves can go to plain files instead of the
-    // memory card (ps2_savedevice). Only offered there; credits move down a row for it.
-    if (Sys_SaveHostFilesAvailable())
-    {
-        static const char * save_device_names[] = { "memory card", "host files", 0 };
+    // Where saves and config.cfg go (ps2_savedevice): the memory card, or the drive the game
+    // booted from - the USB drive, the hard disk, or the emulator's host files. Credits move
+    // down a row for it.
+    save_device_names[1] = Sys_SaveDriveName();
 
-        s_save_device_box.generic.type = MTYPE_SPINCONTROL;
-        s_save_device_box.generic.x = 0;
-        s_save_device_box.generic.y = 60;
-        s_save_device_box.generic.name = "saves";
-        s_save_device_box.generic.callback = SaveDeviceFunc;
-        s_save_device_box.itemnames = save_device_names;
-        s_save_device_box.curvalue = !Q_stricmp(Cvar_VariableString("ps2_savedevice"), "host") ? 1 : 0;
+    s_save_device_box.generic.type = MTYPE_SPINCONTROL;
+    s_save_device_box.generic.x = 0;
+    s_save_device_box.generic.y = 60;
+    s_save_device_box.generic.name = "save device";
+    s_save_device_box.generic.callback = SaveDeviceFunc;
+    s_save_device_box.itemnames = save_device_names;
+    s_save_device_box.curvalue = Sys_SaveTargetIsCard() ? 0 : 1;
+    m_game_save_device = s_save_device_box.curvalue;
 
-        s_credits_action.generic.y = 80;
-    }
+    s_credits_action.generic.y = 80;
 
     Menu_AddItem(&s_game_menu, (void *)&s_easy_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_medium_game_action);
@@ -2207,8 +2213,7 @@ void Game_MenuInit(void)
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_load_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_save_game_action);
-    if (Sys_SaveHostFilesAvailable())
-        Menu_AddItem(&s_game_menu, (void *)&s_save_device_box);
+    Menu_AddItem(&s_game_menu, (void *)&s_save_device_box); // [PS2_QUAKE]
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_credits_action);
 
@@ -2224,6 +2229,14 @@ void Game_MenuDraw(void)
 
 const char * Game_MenuKey(int key)
 {
+    // [PS2_QUAKE]: A save device changed here takes config.cfg with it on the way out, as the
+    // video menu writes its changes: the next boot reads the config from where saves go now, and
+    // a console is usually switched off rather than quit, when the engine writes it otherwise.
+    if (key == K_ESCAPE && s_save_device_box.curvalue != m_game_save_device)
+    {
+        m_game_save_device = s_save_device_box.curvalue;
+        CL_WriteConfiguration();
+    }
     return Default_MenuKey(&s_game_menu, key);
 }
 
@@ -2261,8 +2274,9 @@ static char m_savestatus[64];
 
 void Create_Savestrings(void)
 {
-    // [PS2_QUAKE]: The slots are archives on the memory card or in host files; only their
-    // headers are read here (ps2/save/slot_archive.cpp).
+    // [PS2_QUAKE]: The slots are archives on the save device, the memory card or the boot drive;
+    // only their headers are read here (ps2/save/slot_archive.cpp), under the save notice. A
+    // device that can't be used is said over the slots (M_DrawSaveStatus).
     saveslotinfo_t info[MAX_SAVEGAMES];
     int i;
 
@@ -2292,10 +2306,17 @@ void Create_Savestrings(void)
     }
 }
 
-// [PS2_QUAKE]: The device status line under a save slot list.
+// [PS2_QUAKE]: The device status line under a save slot list, or, when the listing found the
+// save device unusable, why in a box over the slots, with how to use the other device.
 static void M_DrawSaveStatus(const menuframework_s * menu)
 {
     const int y = menu->y + (MAX_SAVEGAMES + 1) * 10 + 8;
+
+    if (Sys_SaveMenuProblem())
+    {
+        Sys_SaveMenuDrawProblem();
+        return;
+    }
     Menu_DrawStringDark((viddef.width - (int)strlen(m_savestatus) * 8) / 2, y, m_savestatus);
 }
 
@@ -2303,6 +2324,14 @@ void LoadGameCallback(void * self)
 {
     menuaction_s * a = (menuaction_s *)self;
     const int slot = a->generic.localdata[0];
+
+    // [PS2_QUAKE]: with the save device found unusable, a pick looks at it again (a card put in
+    // since) rather than trying the slot
+    if (Sys_SaveMenuProblem())
+    {
+        Create_Savestrings();
+        return;
+    }
 
     // [PS2_QUAKE]: say why a slot that isn't empty won't load, rather than doing nothing
     if (m_savestate[slot] == SAVESLOT_CORRUPT)
@@ -2388,6 +2417,13 @@ static menuaction_s s_savegame_actions[MAX_SAVEGAMES];
 void SaveGameCallback(void * self)
 {
     menuaction_s * a = (menuaction_s *)self;
+
+    // [PS2_QUAKE]: as LoadGameCallback
+    if (Sys_SaveMenuProblem())
+    {
+        Create_Savestrings();
+        return;
+    }
 
     Cbuf_AddText(va("save save%i\n", a->generic.localdata[0]));
     M_ForceMenuOff();

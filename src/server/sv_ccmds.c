@@ -22,8 +22,6 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include <ctype.h> // [PS2_QUAKE]: isalnum, SV_SaveNameIsValid
 
-#include "ps2/audio/sound_hold.h" // [PS2_QUAKE]
-
 /*
 ===============================================================================
 
@@ -150,8 +148,8 @@ SAVEGAME FILES
 
 [PS2_QUAKE]: These files no longer live in <gamedir>/save/<savedir>/. "current" is
 the save working set, kept in RAM, and any other savedir is a save slot on the
-memory card or in host files; see Sys_SaveOpen in q_common.h and src/ps2/save/.
-The file names and what goes in them are still id's.
+save device: the memory card, or the drive the game booted from; see Sys_SaveOpen
+in q_common.h and src/ps2/save/. The file names and what goes in them are still id's.
 
 ===============================================================================
 */
@@ -478,7 +476,8 @@ static void SV_AutosaveFailed(void)
     if (!sv_autosave_warned)
     {
         sv_autosave_warned = true;
-        M_Popup("Autosave failed", va("%s\n\nIf you die, you will go back to your last save instead.", Sys_SaveLastError()));
+        M_Popup("Autosave failed", va("%s\n\nIf you die, you will go back to your last save instead.\n\n%s",
+                                      Sys_SaveLastError(), Sys_SaveSwitchAdvice()));
     }
 }
 
@@ -652,7 +651,7 @@ void SV_Loadgame_f(void)
     if (!SV_CopySaveGame(dir, "current"))
     {
         Com_Printf("Couldn't load %s: %s\n", dir, Sys_SaveLastError());
-        M_Popup("Load failed", Sys_SaveLastError());
+        M_Popup("Load failed", va("%s\n\n%s", Sys_SaveLastError(), Sys_SaveSwitchAdvice()));
         return;
     }
 
@@ -677,7 +676,6 @@ void SV_Savegame_f(void)
 {
     const char * dir;
     qboolean ok;
-    qboolean toCard; // [PS2_QUAKE]
 
     if (sv.state != ss_game)
     {
@@ -718,21 +716,17 @@ void SV_Savegame_f(void)
 
     Com_Printf("Saving game...\n");
 
-    // [PS2_QUAKE]: Writing to a memory card takes a moment and must not be interrupted.
-    // The frame is blocked meanwhile, so put the warning up before starting - and hold the
-    // sound silent, from the level file's compression on: audsrv would loop its last tenth
-    // of a second until the frame came back (ps2/audio/sound_hold.h).
-    toCard = Sys_SaveTargetIsCard();
-    if (toCard)
-    {
-        SCR_SetBusyNotice("Saving...\n\nDo not remove the memory card\nor switch off the console.");
-        PS2_SoundHoldBegin();
-    }
+    // [PS2_QUAKE]: The save notice first ("Data is being saved to the Memory Card in slot 1.
+    // Do not remove..."), shown at once: the game stands still from here, as the level is
+    // compressed into the working set and the slot goes to the save device, which must not be
+    // removed meanwhile. The music fades out under it and the sound output holds still
+    // (ps2/save/save_notice.h). A device that can't be used fails the save here.
+    ok = Sys_SaveNoticeBegin(true);
 
     // archive current level, including all client edicts.
     // when the level is reloaded, they will be shells awaiting
     // a connecting client
-    ok = SV_WriteLevelFile();
+    ok = ok && SV_WriteLevelFile();
 
     // save server state
     ok = ok && SV_WriteServerFile(false);
@@ -740,21 +734,19 @@ void SV_Savegame_f(void)
     // copy it off
     ok = ok && SV_CopySaveGame("current", dir);
 
-    if (toCard) // [PS2_QUAKE]
-        PS2_SoundHoldEnd();
-    SCR_SetBusyNotice(NULL);
+    Sys_SaveNoticeEnd(); // [PS2_QUAKE]
 
     // [PS2_QUAKE]: Say so when it didn't work, rather than printing "Done." regardless.
     if (!ok)
     {
         Com_Printf("Save failed: %s\n", Sys_SaveLastError());
-        M_Popup("Save failed", Sys_SaveLastError());
+        M_Popup("Save failed", va("%s\n\n%s", Sys_SaveLastError(), Sys_SaveSwitchAdvice()));
         return;
     }
 
     sv_autosave_warned = false;
     Com_Printf("Done.\n");
-    SCR_CenterPrint(Sys_SaveTargetIsCard() ? "Game saved to the memory card." : "Game saved.");
+    SCR_CenterPrint(va("Game saved to the %s.", Sys_SaveDeviceName())); // [PS2_QUAKE]
 }
 
 //===============================================================

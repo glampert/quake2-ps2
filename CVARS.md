@@ -120,7 +120,7 @@ bigger picture.
 
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
-| `ps2_savedevice` | `host` | `host` | Arch. | Where saves go when running from `host:`: `host` (`baseq2/save/`) or `mc` (memory card). |
+| `ps2_savedevice` | `mc` | `mc` | Arch. | Where save games and `config.cfg` go: `mc`, the memory card in MEMORY CARD slot 1, or the drive the game booted from, `usb` (a USB drive), `hdd` (the hard disk) or `host` (the emulator's `host:` filesystem), in `baseq2/save/` there. Every device holds the same compressed slot files, under the same notice. A value naming a drive the game didn't boot from means the card. `config.cfg` follows it (see the README's Save games section). `ps2_saveinfo` shows where saves are going and lists them. The Game menu's "save device" row steps between the card and the boot drive, and writes `config.cfg` on leaving the menu. |
 
 ## Bring-up scenes and tests
 
@@ -136,7 +136,7 @@ perf test).
 | `ps2_testcin` | `0` | — | | Play every stock cinematic in turn. |
 | `ps2_testmaps` | `0` | — | | Load all 39 stock maps in order, logging memory use per map; a map that takes over 240 s to load is skipped. The debug page's "start map cycle" sets it. |
 | `ps2_testmaps_dwell` | `8` | — | | Seconds `ps2_testmaps` stays in each map once loaded. |
-| `ps2_testsaves` | `0` | — | | Save game test: 1 = host files, 2 = memory card, 3 = load an earlier run's save only. |
+| `ps2_testsaves` | `0` | — | | Save game test: 1 = the boot drive (host files under PCSX2), 2 = the boot drive and the memory card, 3 = load an earlier run's save from the boot drive only. |
 | `ps2_test_quit` | `1` | — | | Quit the game when the perf test, the map cycle or the save test finishes; 0 keeps it up, with the test's cvar back at 0, for the next test. The debug page's "quit after a test" sets it. |
 
 ## Engine cvars with PS2-specific defaults

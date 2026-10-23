@@ -33,7 +33,8 @@ static int  s_fileCount = 0;
 static u32  s_bytesRead = 0;
 static char s_fileName[MAX_QPATH];
 
-void Draw()
+// False if the frame couldn't be drawn (see PS2_DrawLoadingScreen).
+bool Draw()
 {
     const int msec = Sys_Milliseconds();
     const u32 tenthsOfMb = s_bytesRead / ((1024u * 1024u) / 10u);
@@ -45,14 +46,26 @@ void Draw()
 
     // A frame that couldn't be drawn (the world loader holds the chain) doesn't count, so the
     // first file after the .bsp parse redraws at once.
-    if (PS2_DrawLoadingScreen(status) != 0)
+    if (PS2_DrawLoadingScreen(status) == 0)
     {
-        s_lastDrawMsec = Sys_Milliseconds();
-        s_drawCount += 1;
+        return false;
     }
+    s_lastDrawMsec = Sys_Milliseconds();
+    s_drawCount += 1;
+    return true;
 }
 
 } // namespace
+
+bool ps2::loading::Shown()
+{
+    return s_active;
+}
+
+bool ps2::loading::Redraw()
+{
+    return s_active && Draw();
+}
 
 extern "C" {
 

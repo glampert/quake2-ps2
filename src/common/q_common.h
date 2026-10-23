@@ -870,9 +870,15 @@ void Sys_CopyProtect(void);
 [PS2_QUAKE]: SAVE GAME STORAGE (src/ps2/save/)
 
 id's save/current/ directory is a working set kept in RAM, and each save
-slot is one archive file on the memory card - or, running from the
-emulator's host filesystem, optionally in <gamedir>/save/. The save file
-names and contents are still id's; only where they live changed.
+slot is one archive file on the save device ps2_savedevice picks: the
+memory card ("mc", the default), or <gamedir>/save/ on the drive the game
+booted from ("host", "usb" or "hdd"). The save file names and contents are
+still id's; only where they live changed.
+
+Every read and write of the save device goes under the save notice, the
+"Data is being saved to the Memory Card in slot 1. Do not remove the
+Memory Card or reset/switch off the console." PS2 games show, up for a
+second at least (src/ps2/save/save_notice.h).
 
 Everything that can fail records a line for the player, which
 Sys_SaveLastError returns.
@@ -889,14 +895,22 @@ qboolean Sys_SaveClose(FILE * f, qboolean keep);
 qboolean Sys_SaveExists(const char * name);
 void Sys_SaveClearCurrent(void);
 
-// Closes any save stream still open, discarding writes: an error drop
-// unwinds past the code that opened them.
+// Closes any save stream still open, discarding writes, and takes the save
+// notice down if it is up: an error drop unwinds past the code that opened
+// them.
 void Sys_SaveAbortStreams(void);
 
-// Copies the working set to a save slot, and back. Restoring reads and
-// checks the whole slot before it replaces the working set.
+// Copies the working set to a save slot, and back, under the save notice.
+// Restoring reads and checks the whole slot before it replaces the working set.
 qboolean Sys_SaveStoreSlot(const char * slot, const char * comment);
 qboolean Sys_SaveRestoreSlot(const char * slot);
+
+// The save notice around a save the server writes into the working set
+// first (SV_Savegame_f), so that it is up before the game stands still:
+// false, with Sys_SaveLastError saying why, if the save device can't be
+// used. Sys_SaveStoreSlot finds it up.
+qboolean Sys_SaveNoticeBegin(qboolean saving);
+void Sys_SaveNoticeEnd(void);
 
 typedef enum
 {
@@ -913,30 +927,43 @@ typedef struct
 } saveslotinfo_t;
 
 // The slots named <prefix>0 .. <prefix><count - 1>, for the load/save
-// menus. False, with every slot empty, if the save device can't be used.
+// menus, under the save notice. False, with every slot empty, if the save
+// device can't be used: until a listing works, Sys_SaveMenuProblem is true
+// then, and Sys_SaveMenuDrawProblem draws why over the menu, with how to use
+// the other device.
 qboolean Sys_SaveListSlots(const char * prefix, int count, saveslotinfo_t * info);
+qboolean Sys_SaveMenuProblem(void);
+void Sys_SaveMenuDrawProblem(void);
 
-qboolean Sys_SaveTargetIsCard(void);       // Saves go to the memory card (slow to write).
-qboolean Sys_SaveHostFilesAvailable(void); // Running from host:, so host files are an option.
-const char * Sys_SaveDeviceStatus(void);   // Where saves go, or why they can't, for the menus.
+qboolean Sys_SaveTargetIsCard(void);     // Saves go to the memory card, not the boot drive.
+const char * Sys_SaveDeviceName(void);   // Where saves go: "memory card", "USB drive", "hard disk", "host files".
+const char * Sys_SaveDriveName(void);    // The boot drive's name: the Game menu's other save device.
+void Sys_SaveUseCard(qboolean card);     // The Game menu's save device: the card, or the boot drive.
+const char * Sys_SaveDeviceStatus(void); // Where saves go, or why they can't, for the menus.
+const char * Sys_SaveSwitchAdvice(void); // How to use the other device instead, for a failure's message box.
 
 void Sys_SaveSetError(const char * message);
 const char * Sys_SaveLastError(void);
 
 // config.cfg, which CL_WriteConfiguration puts together and Cmd_Exec_f runs,
-// is kept where the platform keeps settings:
+// lives with the saves:
 //
-// Writing  - to <gamedir>/config.cfg only when running from the emulator's
-//            host:, never to a console's USB stick; and to the memory card's
-//            save folder whenever saves go there (always on a console).
-// Reading  - from the emulator, the host:/ file first (the one edited by hand
-//            while developing), the card's if there is none. On a console the
-//            card's first (the player's own settings), the USB stick's only if
-//            the card has none.
+// Writing  - to the save device: the memory card's save folder, or
+//            <gamedir>/config.cfg on the boot drive. Switching from the drive
+//            back to the card rewrites the drive's once more, so that it no
+//            longer names the drive. Running from the emulator's host:,
+//            <gamedir>/config.cfg is always written.
+// Reading  - on a console, the boot drive's <gamedir>/config.cfg when it says
+//            saves go to that drive, and the card isn't touched; otherwise the
+//            card's, the drive's only if the card has none. From the emulator,
+//            the host:/ file first (the one edited by hand while developing),
+//            the card's if there is none.
 //
-// Sys_SaveLoadConfig returns the file the way FS_LoadFile does: *outLength
-// bytes with no terminating 0, in a buffer FS_FreeFile frees - or NULL if
-// there is no config.cfg anywhere.
+// The save device's copy is written under the save notice, and the card's
+// read under it; an unchanged config isn't written again. Sys_SaveLoadConfig
+// returns the file the way FS_LoadFile does: *outLength bytes with no
+// terminating 0, in a buffer FS_FreeFile frees - or NULL if there is no
+// config.cfg anywhere.
 void Sys_SaveStoreConfig(const char * text, int length);
 char * Sys_SaveLoadConfig(int * outLength);
 
@@ -956,11 +983,8 @@ void Con_Print(char * text);
 void SCR_BeginLoadingPlaque(void);
 
 // [PS2_QUAKE]: Client-side feedback the server gives the player about saving and loading.
-// M_Popup shows a message box over everything, until any button is pressed; SCR_SetBusyNotice
-// puts a notice on screen at once (for a slow operation about to block the frame), or takes
-// it down again with NULL. See menu.c and cl_scrn.c.
+// M_Popup shows a message box over everything, until any button is pressed. See menu.c.
 void M_Popup(const char * title, const char * text);
-void SCR_SetBusyNotice(const char * text);
 void SCR_CenterPrint(const char * str);
 
 // [PS2_QUAKE] 2026-08-29

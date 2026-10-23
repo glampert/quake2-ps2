@@ -38,6 +38,18 @@ int PS2_DrawLoadingScreen(const char * status);
 
 #ifdef __cplusplus
 }
+
+namespace ps2::loading {
+
+// Whether the loading plaque is up: PS2_LoadingScreenBegin has run, and End hasn't yet.
+bool Shown();
+
+// Draws the loading screen again at once, as it stands: the save notice going up or coming down
+// on it (save/save_notice.h). False if the plaque isn't up, or the frame couldn't be drawn (see
+// PS2_DrawLoadingScreen).
+bool Redraw();
+
+} // namespace ps2::loading
 #endif /* __cplusplus */
 
 #endif /* PS2_RENDERER_LOADING_SCREEN_H */

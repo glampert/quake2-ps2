@@ -29,10 +29,10 @@
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/loading_screen.h"
 #include "ps2/debug/load_trace.h"
+#include "ps2/save/save_notice.h"
 #include "ps2/tests/draw_cube.h"
 #include "ps2/tests/cinematics.h"
 #include "ps2/tests/map_cycle.h"
-#include "ps2/tests/save_test.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/tests/test_quit.h"
 #include "ps2/builtin/builtin.h"
@@ -819,9 +819,10 @@ void PS2_DrawFadeScreen()
 }
 
 // The loading screen (loading_screen.h): the plaque over black, as SCR_UpdateScreen draws it,
-// with a status bar along the bottom laid out like the menu's (Menu_DrawStatusBar). The client
-// draws nothing while the plaque is up, so no later frame would put this one on screen: it is
-// shown before returning, whatever ps2_gs_latency says.
+// with a status bar along the bottom laid out like the menu's (Menu_DrawStatusBar), and the save
+// notice under the plaque while it is up. The client draws nothing while the plaque is up, so no
+// later frame would put this one on screen: it is shown before returning, whatever
+// ps2_gs_latency says.
 int PS2_DrawLoadingScreen(const char * status)
 {
     // The plaque pic, if it has to be loaded below, comes back here through the file hook. And
@@ -850,6 +851,13 @@ int PS2_DrawLoadingScreen(const char * status)
     for (int i = 0; i < numChars; ++i)
     {
         PS2_DrawChar(textX + (i * kGlyphSize), barY, static_cast<unsigned char>(status[i]));
+    }
+
+    // The save notice, under the plaque: a level change's autosave goes to the save device with
+    // the plaque up.
+    if (ps2::save::SaveNoticeShown())
+    {
+        ps2::save::DrawSaveNotice(/*onLoadingScreen=*/true);
     }
 
     ps2::rs::EndFrame(/*deferPresent=*/false);
@@ -920,12 +928,9 @@ void PS2_EndFrame()
     // Memory smoke test (cvar "ps2_testmaps 1"): loads every stock map in unit
     // order and logs what each one costs. Draws nothing - it only queues console
     // commands - but it lives here because this is the one place guaranteed to
-    // be reached once per frame.
+    // be reached once per frame. The save game test can't: it reads the save device,
+    // under the save notice, which draws a frame of its own (see main.cpp).
     ps2::test::RunMapCycle();
-
-    // Save game test (cvar "ps2_testsaves 1", or 2 to include the memory card): saves,
-    // loads and changes level through the console commands and checks what comes back.
-    ps2::test::RunSaveTest();
 #endif // PS2_QUAKE_DEBUG
 
 #if PS2_QUAKE_PROFILE
@@ -938,6 +943,15 @@ void PS2_EndFrame()
     ps2::test::RunPerfTest();
 #endif // PS2_QUAKE_PROFILE
 
+    // The save notice, over everything the engine drew. A frame with it is shown before this
+    // returns, whatever ps2_gs_latency says: the save device's access that follows draws nothing
+    // until it is done, so no later frame would put this one on screen (save/save_notice.h).
+    const bool saveNotice = ps2::save::SaveNoticeShown();
+    if (saveNotice)
+    {
+        ps2::save::DrawSaveNotice(/*onLoadingScreen=*/false);
+    }
+
     // The backend's own debug overlays, kept out of "Ui" so the engine's 2D pass
     // and our instrumentation can be told apart - the whole point of measuring
     // them is to know how much of a capture is the thing doing the measuring.
@@ -945,7 +959,7 @@ void PS2_EndFrame()
     // zero in a release-style configuration.
     DrawDebugOverlays();
 
-    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f);
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f && !saveNotice);
 
 #if PS2_QUAKE_LOAD_TRACE
     if (s_firstViewInThisFrame)

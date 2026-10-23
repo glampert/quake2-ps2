@@ -90,7 +90,9 @@ PS2_CXX_SRC =                         \
 	ps2/save/slot_archive.cpp         \
 	ps2/save/save_device.cpp          \
 	ps2/save/memcard.cpp              \
+	ps2/save/drive.cpp                \
 	ps2/save/mc_icon.cpp              \
+	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/vram.cpp             \
@@ -197,7 +199,9 @@ SIZE_OPT_CXX_SRC =                    \
 	ps2/save/slot_archive.cpp         \
 	ps2/save/save_device.cpp          \
 	ps2/save/memcard.cpp              \
+	ps2/save/drive.cpp                \
 	ps2/save/mc_icon.cpp              \
+	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/tests/draw_cube.cpp           \
 	ps2/tests/cinematics.cpp          \

@@ -43,15 +43,10 @@ static const cvar_t * s_disableSound = nullptr;
 static int  s_soundHolds  = 0;
 static bool s_loadingHold = false;
 
-bool OutputHeld()
-{
-    return (s_soundHolds > 0) || s_loadingHold;
-}
-
 // Brings the device in line with the holds, after one of them changed.
 void ApplySoundHold()
 {
-    if (OutputHeld())
+    if (ps2::audio::OutputHeld())
     {
         s_device.Hold();
     }
@@ -88,6 +83,11 @@ int PickSampleRate()
 
 } // namespace
 
+bool ps2::audio::OutputHeld()
+{
+    return (s_soundHolds > 0) || s_loadingHold;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------------------------------------------
@@ -123,7 +123,7 @@ qboolean SNDDMA_Init()
     dma.buffer           = s_mixRing.Buffer();
 
     // A restart under a hold (snd_restart while the plaque is up) opens a playing stream.
-    if (OutputHeld())
+    if (ps2::audio::OutputHeld())
     {
         s_device.Hold();
     }
@@ -162,7 +162,7 @@ void SNDDMA_Submit()
     // Held, nothing goes over: the submit cursor, which is the play position the mixer
     // reads back, stands still, so the mixer stops a mixahead ahead of it and the music
     // stops filling its ring. Both carry on from there after the release.
-    if (OutputHeld())
+    if (ps2::audio::OutputHeld())
     {
         return;
     }
@@ -189,7 +189,7 @@ void PS2_SoundHoldEnd()
 
 void PS2_SoundSilence()
 {
-    if (!OutputHeld())
+    if (!ps2::audio::OutputHeld())
     {
         s_device.Silence();
     }

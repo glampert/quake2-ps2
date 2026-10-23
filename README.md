@@ -44,9 +44,10 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
   been converted - with id's per-map tracks and looping rules.
 - **Input.** DualShock gamepad (analog sticks + full button mapping + rumble) and an optional
   USB keyboard through `ps2kbd`, usable simultaneously.
-- **Save games** on the memory card (MEMORY CARD slot 1, with a PS2 browser icon), or as
-  host files under the emulator. A save made by one build loads in the next unless the saved
-  structures changed, and every failure is explained in an on-screen message box.
+- **Save games** on the memory card (MEMORY CARD slot 1, with a PS2 browser icon), or on the
+  USB drive, hard disk or emulator host filesystem the game booted from, under the notice PS2
+  games show while a save is written or read. A save made by one build loads in the next unless
+  the saved structures changed, and every failure is explained in an on-screen message box.
 - **Memory.** A `dlmalloc`-backed program-wide heap with per-subsystem tag accounting, and a
   GS VRAM texture heap with LRU eviction and defragmentation.
 - **Compressed game data.** An optional zip pack, `pak0.pkz` (`make pkz`), that holds the same
@@ -549,7 +550,8 @@ src/
     input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
-    save/                         Sys_Save* seam: save working set, slot archives, memory card
+    save/                         Sys_Save* seam: save working set, slot archives, memory card,
+                                  boot drive, the save notice
     fs/                           compressed game packs (pakN.pkz) for the engine's file system
     builtin/                      images baked into the ELF (font, palette, HUD tiles, id logo)
     debug/                        simple on-screen printing for fatal errors, stack trace, HW exception handling
@@ -709,8 +711,9 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   it came back: the soundtrack's stutter on saves, config writes and level changes. A hold
   plays out what is queued, rewrites the ring with silence and stops audsrv. While it lasts
   nothing is submitted, so the mixer and the music wait exactly where they were, and pick up
-  from that sample after the release. Memory card work (saving, loading, listing the slots,
-  config.cfg) is held, and so is the loading plaque from the moment it goes up, so a level's
+  from that sample after the release. The save notice holds it for as long as it is up, while a
+  save device is read or written (saving, loading, listing the slots, config.cfg), once it has
+  faded the music out; and so does the loading plaque from the moment it goes up, so a level's
   music starts as the plaque comes down. A level change brings the plaque up before it
   writes the level it leaves.
 
@@ -885,27 +888,52 @@ The engine and game still write id's save files through stdio, but not into
   throughout, and written to the slot's *other* file (`<slot>_a.q2s` / `<slot>_b.q2s`) before
   the previous copy is deleted, so a failed or interrupted save never loses the one before it.
   A load reads and checks all of it before touching the game in progress.
-- **The device** is the memory card in MEMORY CARD slot 1, through libmc and the ROM's
-  MCMAN/MCSERV ([memcard.cpp](src/ps2/save/memcard.cpp)), in a `Q2PS2` directory with the
-  `icon.sys` and 3D icon the PS2 browser shows ([mc_icon.cpp](src/ps2/save/mc_icon.cpp)).
-  Running from `host:`, the archived `ps2_savedevice` cvar (the game menu's "saves" option)
-  can put the archives in `baseq2/save/` instead: `host` (the default there) or `mc`.
+- **The device** is the memory card in MEMORY CARD slot 1 by default, through libmc and the
+  ROM's MCMAN/MCSERV ([memcard.cpp](src/ps2/save/memcard.cpp)), in a `Q2PS2` directory with the
+  `icon.sys` and 3D icon the PS2 browser shows ([mc_icon.cpp](src/ps2/save/mc_icon.cpp)). The
+  Game menu's "save device" row (the archived `ps2_savedevice` cvar) can keep the archives on
+  the drive the game booted from instead, in `baseq2/save/` there
+  ([drive.cpp](src/ps2/save/drive.cpp)): the USB drive (`usb`), the hard disk (`hdd`), or under
+  PCSX2 the host filesystem (`host`). Every device holds the same archives, and loading reads
+  the selected device only.
 
-`config.cfg` - the key bindings and archived cvars - is kept where each platform keeps settings,
-by the two hooks in [save_api.cpp](src/ps2/save/save_api.cpp) the engine writes and executes it
-through (`Sys_SaveStoreConfig` from `CL_WriteConfiguration`, `Sys_SaveLoadConfig` from `exec`):
+Whenever the game reads or writes a save device - a save, the autosave of a level change, a
+load, the load and save menus listing their slots, the settings - it shows the notice PS2 games
+show ([save_notice.h](src/ps2/save/save_notice.h)): "Data is being saved to the Memory Card in
+slot 1. Do not remove the Memory Card or reset/switch off the console." ("loaded from" for a
+read), naming the device in use, in the menus' text box. The game stands still while the device
+is busy, a second or more for the card on a console, so the notice goes up before the device is
+touched and stays up for a second at least: over the dimmed game, under the plaque during a
+level change, and at boot, before the renderer has started, under the id logo of the splash.
+The music fades out under it rather than stopping mid-note, and fades back in from where it
+stopped once the device is done.
 
-| | Game data on `host:` | Game data on HDD (`pfs0:`) or USB (`massN:`) |
+When the save device can't be used (no memory card in the slot, say), the load and save menus
+say so over their slots, with how to switch to the other device, and Cross looks at the device
+again instead of picking a slot. A save or a load that fails says why in a message box, with
+the same advice.
+
+`config.cfg` - the key bindings and archived cvars - lives with the saves, by the two hooks in
+[save_api.cpp](src/ps2/save/save_api.cpp) the engine writes and executes it through
+(`Sys_SaveStoreConfig` from `CL_WriteConfiguration`, `Sys_SaveLoadConfig` from `exec`):
+
+| | Game data on `host:` (PCSX2) | Game data on HDD (`pfs0:`) or USB (`massN:`) |
 |---|---|---|
-| **Saving** | `baseq2/config.cfg` on the host, as always; plus the card's `Q2PS2/config.cfg` when saves go to the card (`ps2_savedevice mc`) | the card's `Q2PS2/config.cfg` only. Never the game-data drive |
-| **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the card's first - the player's own settings; the HDD/USB `baseq2/config.cfg` only if the card has none |
+| **Saving** | `baseq2/config.cfg` on the host always, plus the card's `Q2PS2/config.cfg` when saves go to the card | the save device's: the card's `Q2PS2/config.cfg`, or `baseq2/config.cfg` on the drive |
+| **Loading** | the host's `baseq2/config.cfg` first - the file to edit by hand while developing; the card's if there is none | the drive's `baseq2/config.cfg` if it says saves go to the drive; otherwise the card's first, then the drive's |
 
-The config is written on quit and on leaving the video menu after a change; the card copy is
-only rewritten when it differs. The archived cvars are written sorted by name (id wrote them in
-registration order, which reversed on every quit), so the same settings always give the same file. A card that is missing or full just skips it, with a line on
-the console - on a console without a memory card the settings then last until it is switched
-off. The `config.cfg` the game data's folder holds on an HDD or USB drive is never written by the game,
-so one placed there by hand serves as the default for cards that have none.
+So a player who keeps everything on the USB drive or the hard disk never has the card touched
+at boot, and one who keeps it on the card gets the drive's `baseq2/config.cfg` as the default
+while the card has none. Switching the save device from the drive back to the card rewrites the
+drive's `baseq2/config.cfg` once more, so that it no longer names the drive and the next boot
+reads the card. The config is written on quit, on leaving the video menu after a change and on
+leaving the Game menu after a change of save device; one that hasn't changed isn't written
+again. The archived cvars are written sorted by name (id wrote them in registration order,
+which reversed on every quit), so the same settings always give the same file. A card that is
+missing or full just skips it, with a line on the console - on a console without a memory card
+the settings then last until it is switched off, unless saves go to the drive. The card's copy
+is read at boot under the notice, drawn on the splash, and once a run: a later
+`exec config.cfg` is answered from memory.
 
 The game's pointers to functions and animations are saved as a hash of the pointee's name,
 looked up in tables generated from the game's objects at build time
@@ -1052,7 +1080,8 @@ keep its own transfers out and leave a blank screen.
 then this puts it in `quake2.log` on a console), lists the currently loaded IOP modules and the
 largest block of IOP memory still free;
 `in_keyboardmap <usage> <key>` remaps a USB scan code; `ps2_saveinfo` lists the save working
-set (raw and deflated sizes) and the files on the save device.
+set (raw and deflated sizes), the two save devices there are and the files on the one saves go
+to, under the save notice.
 
 **Screenshots:** `screenshot` ([screenshot.cpp](src/ps2/renderer/screenshot.cpp)), as ref_gl
 registers it, reads the last finished frame back out of GS VRAM, turning the GS bus around for
@@ -1075,7 +1104,7 @@ builds). The two cheat rows need a game in progress (not the attract demos) and,
 commands do, `cheats 1` in deathmatch; otherwise they say why under the menu. The two report rows
 open the console on what they printed, stopping the attract loop
 first as "go to console" does; L2/R2 scroll it, and Select goes back to the demos. Every level
-the tests load autosaves slot 0 to the save device, the memory card on a console. A console's
+the tests load autosaves slot 0 to the save device, the memory card by default. A console's
 perf capture reaches a file only in a `PS2_QUAKE_FRAME_LOG_FILE=1` build (see
 [performance.md](.claude/rules/performance.md)).
 
@@ -1088,9 +1117,10 @@ alone goes off at the end, whatever it was, and a second run in the session appe
 its `FLOG#end`. The save test likewise puts `ps2_savedevice` back as it found it.
 
 **Save game test:** `ps2_testsaves 1` plays through saving, level changes, returning to a level
-and loading with the real console commands, checking the player's health comes back as saved;
-`2` repeats the save and load on the memory card; `3` only loads the slot 7 save an earlier run
-left behind, to check a save outlives a rebuild. Every step logs a `SaveTest:` line, and the
+and loading with the real console commands on the drive the game booted from (host files under
+PCSX2, the USB drive or the hard disk on a console), checking the player's health comes back as
+saved; `2` repeats the save and load on the memory card; `3` only loads the slot 7 save an
+earlier run left on the boot drive, to check a save outlives a rebuild. Every step logs a `SaveTest:` line, and the
 run ends with `SaveTest: PASS` or `FAIL`, then quits unless `ps2_test_quit` is 0. Debug builds
 only.
 

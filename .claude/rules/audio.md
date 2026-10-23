@@ -53,14 +53,40 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   `audsrv_set_format` again to reset the cursors with half the ring free. While held,
   `SNDDMA_Submit` sends nothing. The submit cursor is the mixer's play position, so the mixer
   stops a mixahead ahead and the music ring stops filling, and both resume on the same sample.
-  Holds: the memory card calls in `save_api.cpp`, `SV_Savegame_f` from the level-file
-  compression on (card saves), and the plaque's lifetime (`PS2_LoadingScreenBegin/End`,
-  timeout included). `SCR_BeginLoadingPlaque` also silences the output at once, for loads that
-  skip the plaque (the console down, a new game between servers). It runs several times per load,
-  so the device tracks whether only silence went in since its last flush and then stops
-  without one. Verified in PCSX2 (`ps2_testsaves 2`, with temporary prints): every flush took
-  54-106 ms, audio came back after every release, and each load paid one flush. On a
-  console with USB data the user found it much better (2026-10-11).
+  Holds: the save notice, for as long as it is up (`save/save_notice.cpp`: every read and write
+  of a save device, a save's from before the level-file compression on), and the plaque's
+  lifetime (`PS2_LoadingScreenBegin/End`, timeout included). `SCR_BeginLoadingPlaque` also
+  silences the output at once, for loads that skip the plaque (the console down, a new game
+  between servers). It runs several times per load, so the device tracks whether only silence
+  went in since its last flush and then stops without one. Verified in PCSX2 (`ps2_testsaves 2`,
+  with temporary prints): every flush took 54-106 ms, audio came back after every release, and
+  each load paid one flush. On a console with USB data the user found it much better
+  (2026-10-11).
+- **Fading the music out ahead of the save notice's hold (`cd_audio.h`, brought over from the
+  Quake port, 2026-10-23):** the hold above stops the music dead where audsrv's queue ends, and
+  starts it again just as abruptly. `HoldMusic` fades out what is already queued in
+  `s_rawsamples` in place, ahead of the mixer (300-350 ms of it: the pump keeps the ring up to
+  7680 frames ahead of `paintedtime`), so nothing decoded is dropped and `ReleaseMusic` picks up where
+  the fade ended. The fade is 500 ms, or as long as what is queued if that is longer: past the
+  queued frames the pump decodes on, the ramp laid over what it stores, and stores nothing past
+  the fade's end. `HoldMusic` then paints the mix itself (`S_Update_`, every 5 ms) until
+  `soundtime`, the submit cursor, is past the fade's end, so all of it has gone to audsrv; the
+  hold that follows plays audsrv's queue out before it stops it. A held output (the plaque's)
+  takes nothing from the mixer, so then there is no fade. `ReleaseMusic` arms a 1 s fade-in,
+  laid on the first frames stored after it; closing the track drops it, so a load's new track
+  starts at full volume. Sound effects aren't faded: they play on through the fade, then the hold
+  cuts them.
+- **What the mixer has painted ahead (`s_mixahead`, 0.2 s here, 0.1 s in the Quake port) plays at
+  full volume before the fade begins**, and the fade starts at `paintedtime`. So `HoldMusic`'s
+  wait is the lead plus the fade: 564-688 ms for a 500 ms fade over the save test's notices
+  (PCSX2, debug, base1's track, 2026-10-23), with 6000-7400 of the fade's 11025 frames queued
+  already. The lead also covers the main thread until the fade begins; `BeginSaveNotice` tops
+  the mix up (`audio::MixAhead`) before the probe (whose first card access of a session starts
+  MCMAN and MCSERV) and before the notice's frame.
+- **The fade's gain** is Q14, applied as `((v >> 8) * g) >> 6`: a ring sample is 16 bits times
+  up to 256 (`kUnityGain`), so the product stays under 2^29. The Quake port's host harness
+  checked the same code (UBSan with `-fsanitize=integer`, 180 cases across the ring's wrap):
+  within the gain's 1/16384, monotonic, ending 1/8192 from silence.
 - **WAV fallback (the user's request, for whoever skips `make music`):** per search directory,
   `trackNN.adp`, then `trackNN.wav`, then `Track%02d.wav` (as `make music` accepts; FAT and
   macOS hosts ignore case anyway). The format comes from the header (`"Q2MU"` or RIFF/WAVE),

@@ -11,6 +11,8 @@
 
 #include "ps2/system/video_mode.h"
 
+#include <tamtypes.h>
+
 namespace ps2::splash {
 
 // Brings the GS up just enough for the logo, draws it and leaves it on screen. It sets the GS up
@@ -25,5 +27,21 @@ void Show();
 // framebuffer. One laid out any other way would show the splash's texels read the wrong way, so
 // it starts black instead.
 bool IsShownIn(int vramAddress, int width, int height, int psm, video::Standard standard);
+
+// Whether ShowImage can draw: the splash is up, and gs::Init hasn't taken over.
+bool CanShowImage();
+
+// Draws an image under the logo, centred, one texel to a pixel as the engine's 2D draws: the save
+// notice while the boot reads config.cfg off the memory card, which Qcommon_Init does before the
+// renderer exists (save/save_notice.h). `texels` are `width` x `height` RGBA, those with alpha 0
+// left out. False, drawing nothing, if it can't (CanShowImage) or the image doesn't fit.
+bool ShowImage(const u32 * texels, int width, int height);
+
+// Takes the image down again: the splash as Show drew it. Nothing happens once gs::Init has
+// taken over.
+void HideImage();
+
+// gs::Init calls it as it lays out VRAM, which the splash's drawing would trample from then on.
+void Retire();
 
 } // namespace ps2::splash

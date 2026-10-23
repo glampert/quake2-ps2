@@ -1,7 +1,8 @@
 /* ================================================================================================
  * File: sound_hold.h
- * Brief: Holds the sound output silent across a stretch the main loop can't run in - a memory
- *        card save or load, a level load - instead of letting it stutter.
+ * Brief: Holds the sound output silent across a stretch the main loop can't run in - a save
+ *        game or config.cfg going to its device or coming off it, a level load - instead of
+ *        letting it stutter.
  *        NOTE: Shared header between C and C++.
  *
  *        audsrv's IOP thread plays its ring buffer (about 106 ms of audio) whether or not
@@ -16,7 +17,9 @@
  *        stops it (AudsrvDevice::Hold, about 106 ms). While it lasts, SNDDMA_Submit sends
  *        nothing, so the mixer's play position stands still and everything it paints - the
  *        music included - waits where it was. The first frame after the release carries on
- *        from that very sample, after the half ring of silence the release starts with.
+ *        from that very sample, after the half ring of silence the release starts with. The
+ *        save notice (save/save_notice.h) holds the output for as long as it is up, once the
+ *        music has faded out (audio/cd_audio.h).
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -48,34 +51,9 @@ void PS2_SoundSetLoadingHold(int held);
 
 namespace ps2::audio {
 
-// PS2_SoundHoldBegin/End for one scope. 'hold' false makes it do nothing, for a caller that
-// only needs it on some paths (the memory card, not the emulator's host files).
-class SoundHoldScope final
-{
-public:
-    explicit SoundHoldScope(const bool hold = true)
-        : m_held(hold)
-    {
-        if (m_held)
-        {
-            PS2_SoundHoldBegin();
-        }
-    }
-
-    ~SoundHoldScope()
-    {
-        if (m_held)
-        {
-            PS2_SoundHoldEnd();
-        }
-    }
-
-    SoundHoldScope(const SoundHoldScope &) = delete;
-    SoundHoldScope & operator=(const SoundHoldScope &) = delete;
-
-private:
-    const bool m_held;
-};
+// Whether the output is held now, by a PS2_SoundHoldBegin or by the loading plaque: nothing the
+// mixer paints goes to audsrv until the release.
+bool OutputHeld();
 
 } // namespace ps2::audio
 #endif /* __cplusplus */

@@ -14,6 +14,7 @@
 #include "ps2/common.h"
 #include "ps2/tests/save_test.h"
 #include "ps2/tests/test_quit.h"
+#include "ps2/save/drive.h"
 #include "ps2/save/working_set.h"
 
 // Client state, as in input/rumble.cpp; the legacy headers redeclare a few q_common.h functions.
@@ -36,9 +37,18 @@ enum class Wait
     InGame, // The client is in the game on `map`, the loading plaque gone.
 };
 
+// Where a step sends saves before its command, through ps2_savedevice.
+enum class Target
+{
+    Unchanged,
+    Drive, // The drive the game booted from: "host", "usb" or "hdd" (save/drive.h).
+    Card,
+};
+
 struct Step
 {
     const char * what;
+    Target       target;
     const char * command;
     Wait         wait;
     const char * map;          // Wait::InGame
@@ -49,26 +59,26 @@ struct Step
 };
 
 constexpr Step kSteps[] = {
-    { "start base1 afresh",
-      "killserver ; deathmatch 0 ; coop 0 ; maxclients 1 ; skill 1 ; cheats 1 ; ps2_savedevice host ; map base1",
+    { "start base1 afresh", Target::Drive,
+      "killserver ; deathmatch 0 ; coop 0 ; maxclients 1 ; skill 1 ; cheats 1 ; map base1",
       Wait::InGame, "base1", 0, 0, "game.ssv", false },
-    { "set health 37",         "give health 37", Wait::Frames, nullptr, 37, -1, nullptr,     false },
-    { "save to slot 7",        "save save7",     Wait::Frames, nullptr, 37,  7, "base1.sav", false },
-    { "set health 80",         "give health 80", Wait::Frames, nullptr, 80, -1, nullptr,     false },
-    { "change level",          "gamemap base2",  Wait::InGame, "base2", 80,  0, "base1.sav", false },
-    { "return to base1",       "gamemap base1",  Wait::InGame, "base1", 80,  0, "base2.sav", false },
-    { "load slot 7",           "load save7",     Wait::InGame, "base1", 37, -1, "base1.sav", false },
-    { "load the autosave",     "load save0",     Wait::InGame, "base1", 80, -1, "base2.sav", false },
-    { "save to memory card",   "ps2_savedevice mc ; save save8", Wait::Frames, nullptr, 80, 8, nullptr, true },
-    { "set health 55",         "give health 55", Wait::Frames, nullptr, 55, -1, nullptr,     true },
-    { "load from memory card", "load save8",     Wait::InGame, "base1", 80, -1, nullptr,     true },
-    { "back to host files",    "ps2_savedevice host", Wait::Frames, nullptr, 0, 7, nullptr,  true },
+    { "set health 37",          Target::Unchanged, "give health 37", Wait::Frames, nullptr, 37, -1, nullptr,     false },
+    { "save to slot 7",         Target::Unchanged, "save save7",     Wait::Frames, nullptr, 37,  7, "base1.sav", false },
+    { "set health 80",          Target::Unchanged, "give health 80", Wait::Frames, nullptr, 80, -1, nullptr,     false },
+    { "change level",           Target::Unchanged, "gamemap base2",  Wait::InGame, "base2", 80,  0, "base1.sav", false },
+    { "return to base1",        Target::Unchanged, "gamemap base1",  Wait::InGame, "base1", 80,  0, "base2.sav", false },
+    { "load slot 7",            Target::Unchanged, "load save7",     Wait::InGame, "base1", 37, -1, "base1.sav", false },
+    { "load the autosave",      Target::Unchanged, "load save0",     Wait::InGame, "base1", 80, -1, "base2.sav", false },
+    { "save to memory card",    Target::Card,      "save save8",     Wait::Frames, nullptr, 80,  8, nullptr,     true  },
+    { "set health 55",          Target::Unchanged, "give health 55", Wait::Frames, nullptr, 55, -1, nullptr,     true  },
+    { "load from memory card",  Target::Unchanged, "load save8",     Wait::InGame, "base1", 80, -1, nullptr,     true  },
+    { "back to the boot drive", Target::Drive,     "",               Wait::Frames, nullptr,  0,  7, nullptr,     true  },
 };
 
 // "ps2_testsaves 3": only loads the slot 7 save a full run left behind - made by an earlier
 // build, to check that a rebuild which moves code and data around can still read it.
 constexpr Step kLoadOnlySteps[] = {
-    { "load slot 7 from an earlier build", "ps2_savedevice host ; load save7", Wait::InGame, "base1", 37, -1, "base1.sav", false },
+    { "load slot 7 from an earlier build", Target::Drive, "load save7", Wait::InGame, "base1", 37, -1, "base1.sav", false },
 };
 
 constexpr int kFramesPerStep = 60;        // ~1 s: long enough for a forwarded command's result.
@@ -183,8 +193,15 @@ void RunSaveTest()
                 s_steps    = kLoadOnlySteps;
                 s_numSteps = ps2::ArrayLength(kLoadOnlySteps);
             }
-            Com_Printf("SaveTest: starting%s\n", loadOnly ? " (loading an earlier build's save)" :
-                                                 withCard ? " (host files and memory card)" : " (host files)");
+            const char * const drive = ps2::save::DeviceName(ps2::save::GetDriveDevice().Kind());
+            if (loadOnly)
+            {
+                Com_Printf("SaveTest: starting (loading an earlier build's save from the %s)\n", drive);
+            }
+            else
+            {
+                Com_Printf("SaveTest: starting (the %s%s)\n", drive, withCard ? " and the memory card" : "");
+            }
         }
         if (now >= s_startAtMs)
         {
@@ -203,8 +220,22 @@ void RunSaveTest()
 
     if (!s_stepIssued)
     {
-        Com_Printf("SaveTest: -- %s: %s\n", step.what, step.command);
-        Cbuf_AddText(va("%s\n", step.command));
+        // The step's device first: the boot drive's value or the card's.
+        const char * const device = (step.target == Target::Drive) ? ps2::save::DeviceValue(ps2::save::GetDriveDevice().Kind())
+                                  : (step.target == Target::Card)  ? ps2::save::DeviceValue(ps2::save::DeviceKind::MemoryCard)
+                                                                   : nullptr;
+        char command[256];
+        if (device != nullptr)
+        {
+            std::snprintf(command, sizeof(command), "ps2_savedevice %s ; %s", device, step.command);
+        }
+        else
+        {
+            std::snprintf(command, sizeof(command), "%s", step.command);
+        }
+
+        Com_Printf("SaveTest: -- %s: %s\n", step.what, command);
+        Cbuf_AddText(va("%s\n", command));
         s_stepIssued = true;
         s_issuedAtMs = now;
         s_frames     = 0;

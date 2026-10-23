@@ -47,7 +47,8 @@
   framebuffer reads back at 5 bits a channel. Each shot is 860 KB at 640x448.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
-- Runs read and rewrite `baseq2/config.cfg` (gitignored; the quit writes archived cvars back).
+- Runs read and rewrite `baseq2/config.cfg` (tracked: the default the release packages ship; the
+  quit writes archived cvars back, byte for byte the same when nothing changed).
   **Back it up before a scripted or perf run and restore it after.** The user's config has
   `ps2_savedevice "mc"`. Start every run of a comparison from the same config.
 - **Every level a run loads autosaves slot 0 to the save device**, and with that config it is
@@ -97,7 +98,8 @@ The debug page was tested this way (2026-10-12), fired from the `CDAudio_Play` h
 ## Built-in tests (debug builds; set the cvar via config.cfg or the Qcommon_Init hook)
 
 - `ps2_testmaps 1`: MapCycle over all 39 maps. Prints per-map memory lines plus a "load peak"
-  line per transition. ~15 min. See [memory-budget.md](memory-budget.md).
+  line per transition. ~15 min, each level's autosave holding the save notice up a second. See
+  [memory-budget.md](memory-budget.md).
 - On a console without a keyboard, the Options menu's debug page (debug_menu.cpp) starts
   `ps2_perftest` and `ps2_testmaps`, toggles `ps2_logfile` and `ps2_test_quit`, runs the IOP
   and save reports, and takes a screenshot without the menu in it.
@@ -107,9 +109,12 @@ The debug page was tested this way (2026-10-12), fired from the `CDAudio_Play` h
   card copy: restore both after a run. At 0, one session ran a map cycle, the save test, the perf
   test and a second map cycle back to back (2026-10-12, map list cut to two), each started when
   the one before ended.
-- `ps2_testsaves 1|2|3`: save/level-change/load on host files (1) or the memory card (2), and
-  load-across-a-rebuild (3). Ends in `SaveTest: PASS`/`FAIL`. Run 1 after touching
-  `g_save.c` or saved game structs.
+- `ps2_testsaves 1|2|3`: save/level-change/load on the boot drive (1: host files under PCSX2),
+  then the memory card too (2), and load-across-a-rebuild from the boot drive (3). Ends in
+  `SaveTest: PASS`/`FAIL`. Run 1 after touching `g_save.c` or saved game structs, and 2 after
+  touching the save devices or the notice. It runs from the main loop, between frames: its slot
+  checks read the device under the save notice. `set ps2_testsaves "2"` at the end of a copy of
+  the config starts it; the quit drops the line again.
 - `ps2_perftest 1`: unattended frame-log capture of the demo loop. See
   [performance.md](performance.md).
 - `ps2_testcube 1` (VU1 path smoke test), `ps2_testcin 1` (cinematics).
@@ -161,9 +166,10 @@ The debug page was tested this way (2026-10-12), fired from the `CDAudio_Play` h
   the shared data, requiring no folder fallback. Close PCSX2 before replacing an image.
 - **Scripted runs from the emulated stick, no launcher** (2026-10-19): launch a host ELF
   from a folder with no `baseq2/` (the `host:` probe misses; HDD off), with `[USB2] Type = Msd`
-  on the image and **`Slot1_Enable = false`**. A USB boot reads config.cfg from the card first,
-  so with a card in, the stick's config and any test cvar in it are ignored (and autosaves go to
-  the card). Put the cvars in the image's `baseq2/config.cfg`:
+  on the image. A USB boot reads the stick's config.cfg when it says `ps2_savedevice "usb"`, and
+  leaves the card alone then; with `"mc"` (the shipped default) it reads the card's first, so with
+  a card in, the stick's test cvars are ignored and autosaves go to the card, unless
+  **`Slot1_Enable = false`**. Put the cvars in the image's `baseq2/config.cfg`:
   `hdiutil attach -imagekey diskimage-class=CRawDiskImage -nobrowse -mountpoint <dir> <img>`,
   edit, `hdiutil detach <dir>`. Give each run an APFS clone of a pristine image (`cp -c`), so
   every run starts from the same bytes. Debug with the I/O log (`ps2_logfile "0"`), the first

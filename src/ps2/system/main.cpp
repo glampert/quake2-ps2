@@ -12,6 +12,7 @@
 #include "ps2/renderer/splash_screen.h"
 #include "ps2/debug/exception_handler.h"
 #include "ps2/debug/log_file.h"
+#include "ps2/tests/save_test.h"
 
 int main(int argc, char ** argv)
 {
@@ -75,6 +76,14 @@ int main(int argc, char ** argv)
         // of stdout and must not land in the timings it is reporting. The frame
         // it stretches is dropped rather than logged (see FrameLogFlush).
         ps2::debug::FrameLogFlush();
+
+#if PS2_QUAKE_DEBUG
+        // Save game test (cvar "ps2_testsaves 1", or 2 to include the memory card): saves,
+        // loads and changes level through the console commands and checks what comes back.
+        // Between frames rather than with the other tests at the end of one (PS2_EndFrame):
+        // its checks read the save device, under the save notice, which draws a frame itself.
+        ps2::test::RunSaveTest();
+#endif // PS2_QUAKE_DEBUG
 
         oldtime = newtime;
     }

@@ -127,8 +127,12 @@ The README's "Rendering" section is the architecture overview. The renderer file
 
 ## CLUTs and palettized textures
 
-- Most textures are PSMT8, sampling Quake's palette. A second CLUT is an alpha ramp for
-  coverage-only images (particles, lightmap atlases).
+- Most textures are PSMT8, sampling Quake's palette. Four CLUTs, at fixed VRAM outside the
+  heap (4 KB of one page): the global palette, the lit palette (`ps2_intensity`; walls, skins,
+  sprites), the alpha ramp (`Alpha8`, the particles' coverage) and the light ramp (`Light8`,
+  the lightmap atlases). The palettes and the light ramp carry the brightness curve
+  (`gamma.h`, `vid_gamma`/`vid_contrast`); the alpha ramp never changes, since coverage isn't
+  light.
 - **CSM1 reorder:** in every 32-entry group the two middle 8-entry blocks swap:
   `(i & ~0x18) | ((i & 0x08) << 1) | ((i & 0x10) >> 1)`, which is its own inverse. If you
   forget it, colours come out scrambled but stable.
@@ -136,8 +140,14 @@ The README's "Rendering" section is the architecture overview. The renderer file
   CBP is in blocks (word address >> 6).
 - **CLD:** `gs::MakeTex0` binds indexed textures with `CLUT_COMPARE_CBP0` (CLD=4), and
   `gs::Init`'s `SeedClutBuffer` writes TEX2 with CLD=2 so CBP0 starts known. Invariants: every
-  indexed TEX0 uses CLD=4 (one CLD=1 load leaves CBP0 stale), and CLUT contents never change
-  after Init (the compare is on the address only). CLD is ignored for non-indexed formats.
+  indexed TEX0 uses CLD=4 (one CLD=1 load leaves CBP0 stale), and CLUT contents change only
+  through `gs::UpdateCluts`, between frames after `rs::FinishFrameInFlight`, which seeds the
+  buffer again: the compare is on the address only, so a bind of the CLUT whose contents
+  changed would keep the old copy. CLD is ignored for non-indexed formats.
+- **A brightness change is one frame of wait:** `gamma::ApplyPendingChange` runs in `PS2_BeginFrame`,
+  just before `rs::BeginFrame`, finishes the frame `ps2_gs_latency` left drawing, and uploads the four
+  CLUTs (4 KB). A model's shade light takes the curve from a 257-entry table (`LightCurve`),
+  not `powf`, since it runs per model per frame.
 - **TBW must be even for PSMT8/PSMT4** (128-px stride). Narrow 8-bit textures round their
   stride up for TEX0 and the upload (`TextureStridePixels()`).
 - Page sizes: PSMT8 128x64, PSMCT32 64x32, PSMCT16/16S 64x64. libdraw's

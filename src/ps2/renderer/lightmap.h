@@ -16,7 +16,7 @@
  *  draw chain. The lightmap pass then walks one chain per atlas (AtlasTexture /
  *  AtlasChain) and clears them with ClearChains.
  *
- *  A luxel is split in two: the atlases the hardware samples are Alpha8 and carry only its
+ *  A luxel is split in two: the atlases the hardware samples are Light8 and carry only its
  *  *intensity*, while the chroma rides in an EE-RAM mirror the diffuse pass folds into its vertex
  *  colour. The GS blend unit is why - see lightmap.cpp.
  *

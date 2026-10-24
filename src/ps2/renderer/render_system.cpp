@@ -782,7 +782,7 @@ static gs::TextureSampling s_textureSampling = { gs::MipFilter::Bilinear, 0 };
 //
 // DynamicLights over Modulate is the lit lightmap pass: the modulate scales the framebuffer by the
 // luxel intensity and the D term adds the computed light colour on top. Cs is exactly that colour,
-// because the atlas texel is an alpha-ramp CLUT entry whose RGB sits at the modulate identity
+// because the atlas texel is a light-ramp CLUT entry whose RGB sits at the modulate identity
 // (Ct * Cv >> 7 == Cv) with As still the luxel intensity.
 inline gs::BlendMode BlendModeFor(DrawFlags flags)
 {

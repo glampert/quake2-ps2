@@ -54,8 +54,9 @@ constexpr u64 ContextReg(const int reg, const DrawContext ctx)
 
 struct Config
 {
-    const u32 *     palette;          // 256 RGBA entries; the palette every indexed image samples
-    float           intensity;        // lit-CLUT brightening, >= 1 (below that would darken)
+    const u32 *     palette;          // 256 RGBA entries: the global palette CLUT (gamma::Palette)
+    const u32 *     litPalette;       // the same brightened by intensity: the lit CLUT (gamma::LitPalette)
+    const u8 *      lightRamp;        // 256 alphas, one per luxel value: the light ramp CLUT (gamma::LightRamp)
     int             width, height;    // framebuffer dimensions, in pixels; height fits the standard
     bool            framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
     video::Standard standard;         // NTSC or PAL (ps2_video_mode, see system/video_mode.h)
@@ -63,8 +64,15 @@ struct Config
 
 // Brings up the GS: allocates the framebuffers and z-buffer, sets the video mode for the config's
 // standard, programs both drawing contexts and builds and uploads the CLUTs. Call once. The
-// config is latched - it fixes the VRAM layout, so none of it can change afterwards.
+// config is latched - it fixes the VRAM layout, so none of it can change afterwards, but for the
+// CLUTs' contents through UpdateCluts.
 void Init(const Config & cfg);
+
+// Rebuilds the global and lit palette CLUTs and the light ramp from these tables, as Init built
+// them, and uploads them again: the brightness and contrast curve (gamma.h). Only between frames,
+// after rs::FinishFrameInFlight: the GS reads the CLUTs as it draws, and the one in its CLUT
+// buffer is reloaded by this, which a bind's address compare alone would not do.
+void UpdateCluts(const u32 * palette, const u32 * litPalette, const u8 * lightRamp);
 
 // ------------------------------------------------------------------------------------------------
 // State the emitters and the builders below read. In the header only so they can be inline;
@@ -77,9 +85,10 @@ struct State
     int width, height;               // as configured
     framebuffer_t framebuffer[2];    // one per drawing context: the pair that alternates
     zbuffer_t zbuffer;               // where the z-buffer is, its format, and the real z-test
-    vram::Address globalPaletteClut; // the three fixed CLUTs, outside the texture heap
+    vram::Address globalPaletteClut; // the four fixed CLUTs, outside the texture heap
     vram::Address litPaletteClut;
     vram::Address alphaRampClut;
+    vram::Address lightRampClut;
 
     // Texture bound for 2D draws in the current context, for dropping redundant TEX0 writes.
     // The atlas when a scrapped image was bound; see ResolveBind2D.
@@ -215,7 +224,8 @@ u64 MakeMipTbp1(const tex::Texture & texture);
 // GS VRAM word address of the 256-entry CLUT an indexed format samples through. Palette8 takes
 // the global palette, or the intensity-brightened copy of it when 'lit' - an image something is
 // going to multiply back down, a wall under its lightmap or a skin under its shade colour.
-// Alpha8 takes the alpha ramp. Invalid for the direct-colour formats, which sample no CLUT.
+// Alpha8 takes the alpha ramp, and Light8 the light ramp. Invalid for the direct-colour formats,
+// which sample no CLUT.
 Q_ALWAYS_INLINE vram::Address ClutAddress(const tex::PixelFormat format, const bool lit)
 {
     switch (format)
@@ -224,6 +234,8 @@ Q_ALWAYS_INLINE vram::Address ClutAddress(const tex::PixelFormat format, const b
         return lit ? detail::g_state.litPaletteClut : detail::g_state.globalPaletteClut;
     case tex::PixelFormat::Alpha8 :
         return detail::g_state.alphaRampClut;
+    case tex::PixelFormat::Light8 :
+        return detail::g_state.lightRampClut;
     default :
         return vram::Address::Invalid;
     }

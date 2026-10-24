@@ -12,6 +12,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/gs.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/system/video_mode.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/vu1.h"
@@ -35,7 +36,6 @@
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/tests/test_quit.h"
-#include "ps2/builtin/builtin.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -581,8 +581,9 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     }
 
     // The cvars the GS and the texture cache are configured with. Both are latched here: the
-    // framebuffer format fixes the whole VRAM layout, and the intensity is baked into a CLUT the
-    // GS may only have rewritten while it is idle, so a change to either takes effect next run.
+    // framebuffer format fixes the whole VRAM layout, and the intensity is baked into the lit CLUT
+    // and into the texels of a true-colour image as it loads, so a change to either takes effect
+    // next run. vid_gamma and vid_contrast are live (gamma.h).
     const cvar_t * const fb16Bit   = Cvar_Get("ps2_fb_16bit",  "1", CVAR_ARCHIVE);
     const cvar_t * const intensity = Cvar_Get("ps2_intensity", "2", CVAR_ARCHIVE);
 
@@ -591,14 +592,16 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     const float intensityScale = (intensity->value < 1.0f) ? 1.0f : intensity->value;
 
     ps2::mod::Init();
+    ps2::gamma::Init(intensityScale);
     ps2::tex::Init(intensityScale);
     ps2::lm::Init();
     ps2::view::Init();
 
     const auto scratch = ps2::mod::WorldScratchBlock();
     const ps2::gs::Config gsConfig = {
-        .palette          = global_palette,
-        .intensity        = intensityScale,
+        .palette          = ps2::gamma::Palette(),
+        .litPalette       = ps2::gamma::LitPalette(),
+        .lightRamp        = ps2::gamma::LightRamp(),
         .width            = static_cast<int>(fbWidth->value),
         .height           = fbHeightLines,
         .framebuffer16Bit = (fb16Bit->value != 0.0f),
@@ -805,7 +808,7 @@ void PS2_DrawFill(int x, int y, int w, int h, int c)
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
-    const u32 p = global_palette[c & 0xFF];
+    const u32 p = ps2::gamma::Palette()[c & 0xFF]; // as the palette shows it (gamma.h)
     const u8  r = static_cast<u8>(p & 0xFFu);
     const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
     const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
@@ -904,6 +907,10 @@ void PS2_BeginFrame(float cameraSeparation)
     // rollover above and rs::BeginFrame below, which is where the draw-stat and
     // submitted-byte counters it reads get cleared.
     ps2::debug::FrameLogCapture();
+
+    // A brightness or contrast change from the menu or the console, between frames as the CLUTs'
+    // upload has to be.
+    ps2::gamma::ApplyPendingChange();
 
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at

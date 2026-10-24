@@ -8,8 +8,8 @@
  *  glBlendFunc(GL_ZERO, GL_SRC_COLOR). The GS blend unit computes (A - B) * C + D
  *  where C is a scalar alpha, never a second colour, so that multiply is not
  *  expressible here. What the GS can do is Cd * As, so each luxel is split in two:
- *  its *intensity* goes into an Alpha8 atlas the hardware samples per pixel through
- *  the alpha-ramp CLUT, and the chroma left over goes into a mirror beside it in EE
+ *  its *intensity* goes into a Light8 atlas the hardware samples per pixel through
+ *  the light-ramp CLUT, and the chroma left over goes into a mirror beside it in EE
  *  RAM (5:6:5, never uploaded) that the diffuse pass samples per vertex and folds
  *  into its vertex colour. The two multiply back to the luxel, so the split costs
  *  resolution only in the chroma - which is the term that barely varies.
@@ -247,7 +247,7 @@ void LightmapManager::NextAtlas()
     atlas.dirtyPixels  = true; // CPU-written; the first upload has to flush the dcache
     atlas.type         = tex::ImageType::Wall; // world data; only has to not read as a free slot
     atlas.flags        = tex::TexFlags::None;
-    atlas.format       = tex::PixelFormat::Alpha8;
+    atlas.format       = tex::PixelFormat::Light8; // the light ramp: the brightness curve (gamma.h)
     atlas.components   = tex::TexComponents::RGBA; // the texture function must keep the alpha
     atlas.function     = tex::TexFunction::Modulate;
     atlas.magFilter    = tex::TexFilter::Linear; // luxels are 16 units across; nearest would tile badly
@@ -424,7 +424,7 @@ void LightmapManager::AddDynamicLights(const mod::ModelSurface & surf,
 
 // Clamps the accumulated luxels and writes them into the surface's block of its
 // atlas, split into the two terms the hardware needs them in: the intensity into
-// the Alpha8 texture the GS samples, the chroma into the EE-side mirror beside it.
+// the Light8 texture the GS samples, the chroma into the EE-side mirror beside it.
 void LightmapManager::StoreLightmap(const mod::ModelSurface & surf)
 {
     const int smax = LuxelsWide(surf);
@@ -469,7 +469,7 @@ void LightmapManager::StoreLightmap(const mod::ModelSurface & surf)
                 max = 255;
             }
 
-            // Floor the intensity at 1: the alpha ramp maps index 0 to alpha 0,
+            // Floor the intensity at 1: the light ramp maps index 0 to alpha 0,
             // and the batch's alpha test drops those fragments outright - which
             // would leave the diffuse pass *unmodulated* where the surface is
             // darkest, the exact inverse of the shadow we want.

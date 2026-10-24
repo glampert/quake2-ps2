@@ -26,6 +26,8 @@ bigger picture.
 | `ps2_fb_dither` | `0` | `0` | Arch., Menu | GS dithering, to hide the 16-bit framebuffer's colour banding. |
 | `ps2_gs_latency` | `1` | `1` | Arch., Menu | Let the GS draw a frame while the next is built: faster, one frame more input lag. |
 | `ps2_intensity` | `2` | `2` | Arch., Menu | Brightness scale of walls and models (`ref_gl`'s `intensity`, floored at 1); read at startup. |
+| `vid_gamma` | `1` | `1` | Arch., Menu | The picture's brightness (id's cvar): everything drawn through the palette shows as `pow(colour * contrast, gamma)`, lower is brighter. The video menu's "brightness" slider steps it from 1.3 down to 0.5 in tenths, as id's did; the console takes 0.25 to 4. Applies at the next frame. |
+| `vid_contrast` | `1` | `1` | Arch., Menu | The picture's contrast, the same curve's multiplier (the Quake port's, from QuakeSpasm). The "contrast" slider steps it from 1 to 2 in tenths; the console takes 0.25 to 4. Applies at the next frame. |
 | `ps2_polyblend` | `1` | `1` | | Fullscreen damage/powerup/underwater tint (`ref_gl`'s `gl_polyblend`). |
 
 ## Renderer: textures and sky

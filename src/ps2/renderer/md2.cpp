@@ -28,6 +28,7 @@
  * ================================================================================================ */
 
 #include "ps2/renderer/md2.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/view.h"
 #include "ps2/renderer/texture.h"
 #include "ps2/renderer/model.h"
@@ -268,9 +269,14 @@ constexpr int kShellFlags = RF_SHELL_RED | RF_SHELL_GREEN | RF_SHELL_BLUE |
 // otherwise; then the minlight floor, the bonus-item pulse and the IR goggles
 // override on top. Also yields the lightmap trace's ground hit ('outLightSpot',
 // where the projected shadow anchors). Based on ref_gl.
+//
+// The world's light takes the brightness curve, as the walls' luxels do in the
+// light ramp (gamma.h); the shell colours, fullbright and the goggles' red are
+// colours, not light, and stay as they are.
 math::Vec3 ShadeEntity(const refdef_t & viewDef, const entity_t & entity, vec3_t outLightSpot)
 {
     vec3_t color = { 1.0f, 1.0f, 1.0f };
+    bool worldLight = false;
 
     if (entity.flags & kShellFlags)
     {
@@ -330,6 +336,7 @@ math::Vec3 ShadeEntity(const refdef_t & viewDef, const entity_t & entity, vec3_t
     else
     {
         view::CalcPointLightColor(viewDef, entity.origin, color, outLightSpot);
+        worldLight = true;
     }
 
     if (entity.flags & RF_MINLIGHT)
@@ -360,6 +367,14 @@ math::Vec3 ShadeEntity(const refdef_t & viewDef, const entity_t & entity, vec3_t
             {
                 color[i] = min;
             }
+        }
+    }
+
+    if (worldLight)
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            color[i] = gamma::LightCurve(color[i]);
         }
     }
 

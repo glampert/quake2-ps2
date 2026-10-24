@@ -45,6 +45,16 @@
   it (with a 16-bit framebuffer; a 32-bit one comes back black, cleared by `gs::Init`).
   `ps2_debug_overlays 0` and `ps2_show_fps 0` keep the panels out of a shot. A 16-bit
   framebuffer reads back at 5 bits a channel. Each shot is 860 KB at 640x448.
+- **A scripted shot usually repeats across builds:** the same queued script from the
+  `CDAudio_Play` hook mostly shoots the same demo frame, so two builds' shots can compare pixel
+  for pixel. The brightness sliders were checked that way (2026-10-24): the defaults' shot
+  matched HEAD's in all 286,720 pixels, two runs back to back. A later run of the same build
+  landed a few frames off (the weapon bob and a soldier moved, the walls identical), so host
+  timing can move the demo too; compare a static region then, or prove a table change in a host
+  harness. Anything that waits a frame out (`rs::FinishFrameInFlight`, a brightness change)
+  shifts the demo for the shots after it. Shots are uncompressed 24-bit TGAs (18-byte
+  header, BGR rows), so a mean pixel value is a few lines of Python: the demo's first shot read
+  20.1 at the defaults, 64.0 at `vid_gamma 0.5`, 88.9 with `vid_contrast 2` too, 8.2 at 1.3.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
 - Runs read and rewrite `baseq2/config.cfg` (tracked: the default the release packages ship; the

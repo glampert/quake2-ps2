@@ -95,6 +95,7 @@ PS2_CXX_SRC =                         \
 	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/renderer/gs.cpp               \
+	ps2/renderer/gamma.cpp            \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \
 	ps2/renderer/image_load.cpp       \

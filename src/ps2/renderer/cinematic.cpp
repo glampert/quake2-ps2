@@ -3,7 +3,8 @@
  * Brief: Cinematic frame rendering. See cinematic.h.
  *
  *  Palette expansion and RGBA5551 packing happen on the EE, so the GS samples a plain
- *  16-bit texture - no CLUT involvement. The frame texture goes through the regular
+ *  16-bit texture - no CLUT involvement, so the palette takes the brightness curve
+ *  (gamma.h) here. The frame texture goes through the regular
  *  dynamic-texture pipeline (MarkPixelsDirty + bind re-uploads it) and its VRAM returns
  *  to the heap when playback ends.
  *
@@ -12,6 +13,7 @@
 
 #include "ps2/common.h"
 #include "ps2/renderer/cinematic.h"
+#include "ps2/renderer/gamma.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/renderer/texture.h"
@@ -35,9 +37,12 @@ constexpr int kFrameDim = 256;
 constexpr size_t kFrameBufferBytes = kFrameDim * kFrameDim * sizeof(u16);
 static u16 * s_frameBuffer = nullptr;
 
-// The palette frames are expanded with. Only 1 KB, and SetPalette can arrive
-// before the first frame does, so this one stays static.
+// The palette frames are expanded with: SetPalette's, kept as it came, and
+// through the brightness curve, rebuilt when the curve changes. Only 1 KB each,
+// and SetPalette can arrive before the first frame does, so these stay static.
+alignas(16) static u32 s_sourcePalette[256];
 alignas(16) static u32 s_palette[256];
+static u32 s_paletteGeneration = 0; // gamma::Generation() when s_palette was made
 
 // The frame texture, drawn through the regular 2D texture path. Linear
 // filtering smooths the stretch to screen size (the GS does the upscale).
@@ -82,6 +87,16 @@ void EnsureFrameBuffer()
     s_frameTexture.pixels = s_frameBuffer;
 }
 
+// Makes s_palette from s_sourcePalette, as the curve stands.
+void CurvePalette()
+{
+    for (int i = 0; i < 256; ++i)
+    {
+        s_palette[i] = gamma::CurveColor(s_sourcePalette[i]);
+    }
+    s_paletteGeneration = gamma::Generation();
+}
+
 // Drops the frame buffer at end of playback. Safe to call when nothing is
 // allocated, which is the common case - the engine resets the palette on every
 // SCR_StopCinematic, including ones that never drew a frame.
@@ -103,7 +118,8 @@ void SetPalette(const u8 * palette)
 {
     if (palette == nullptr)
     {
-        std::memcpy(s_palette, global_palette, sizeof(s_palette));
+        std::memcpy(s_sourcePalette, global_palette, sizeof(s_sourcePalette));
+        CurvePalette();
 
         // The engine resets the palette when playback stops (SCR_StopCinematic),
         // so the frame texture's VRAM can go back to the texture heap. Harmless
@@ -117,7 +133,7 @@ void SetPalette(const u8 * palette)
 
     // 768-byte RGB triplets -> RGBA u32 entries, alpha forced opaque (only the
     // alpha MSB survives the RGBA5551 packing below).
-    u8 * dest = reinterpret_cast<u8 *>(s_palette);
+    u8 * dest = reinterpret_cast<u8 *>(s_sourcePalette);
     for (int i = 0; i < 256; ++i)
     {
         dest[(i * 4) + 0] = palette[(i * 3) + 0];
@@ -125,6 +141,7 @@ void SetPalette(const u8 * palette)
         dest[(i * 4) + 2] = palette[(i * 3) + 2];
         dest[(i * 4) + 3] = 0xFF;
     }
+    CurvePalette();
 }
 
 void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
@@ -133,6 +150,12 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
     PS2_Assert(cols > 0 && rows > 0);
 
     EnsureFrameBuffer();
+
+    // The brightness or contrast changed since the palette was made (the console, mid-movie).
+    if (s_paletteGeneration != gamma::Generation())
+    {
+        CurvePalette();
+    }
 
     // Rows map 1:1 when the source fits vertically; taller sources downsample
     // by row skipping. Columns always resample to the fixed 256-px width.

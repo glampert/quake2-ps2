@@ -612,10 +612,24 @@ rather than fatal: drain the GS, unpin, retry, defragment, retry. The heap is al
 defragmented on level change.
 
 **Textures and CLUTs** ([texture.h](src/ps2/renderer/texture.h)). Most world and model
-textures stay 8-bit (`PSMT8`) and sample Quake's shared 256-entry palette uploaded once as a
-CLUT, which keeps them a quarter the size of RGBA. A second CLUT is an alpha ramp used by
-images that carry only a coverage signal — particles and lightmap atlases — where the index
-*is* the alpha and the colour comes from the primitive.
+textures stay 8-bit (`PSMT8`) and sample Quake's shared 256-entry palette through a CLUT,
+which keeps them a quarter the size of RGBA. Walls, skins and sprites, which a light
+multiplies back down, sample a second copy brightened by `ps2_intensity`, as `ref_gl`'s
+`intensity` did. A third CLUT is an alpha ramp used by images that carry only a coverage
+signal — the particles — where the index *is* the alpha and the colour comes from the
+primitive, and a fourth is the same for the lightmap atlases' light.
+
+**Brightness and contrast** ([gamma.h](src/ps2/renderer/gamma.h)). The video menu's
+"brightness" and "contrast" sliders, `vid_gamma` and `vid_contrast`, make the picture
+`pow(colour * contrast, gamma)`. The GS has no stage that could apply that to the finished
+frame, so it goes into the palette, as `ref_soft`'s gamma did: into the two palette CLUTs,
+and into the colours the EE takes from the palette itself (particles, beams, fills, the
+cinematics' palette). The light takes the curve apart from the texture, since
+`pow(t * l, g)` is `pow(t, g) * pow(l, g)`: a wall's luxel in the lightmaps' light ramp CLUT,
+a model's shade light per model. The contrast is in the palette alone. A change rebuilds the
+tables and uploads the CLUTs again at the next frame, after finishing the one left drawing.
+At 1 and 1 the tables are what they were without them: a scripted screenshot of the demo is
+pixel-identical to one from before the sliders.
 
 **2D scrap atlases** ([scrap_atlas.h](src/ps2/renderer/scrap_atlas.h)). A texture occupies
 every GS page its pixels touch, so a 24x24 HUD icon would otherwise cost a full 8 KB page.

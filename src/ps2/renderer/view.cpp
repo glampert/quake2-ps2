@@ -29,7 +29,7 @@
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/gs.h"
-#include "ps2/builtin/builtin.h" // global_palette (beam and particle colours)
+#include "ps2/renderer/gamma.h" // the palette as it shows (beam and particle colours)
 
 #include <cmath>
 #include <cstring>
@@ -2197,7 +2197,7 @@ void DrawBeamEntity(const entity_t & entity)
     const SurfaceDrawState state = {
         .stream = &trisStream,
         .mvp    = &s_viewProjMatrix, // Built in world space.
-        .rgba   = (global_palette[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
+        .rgba   = (gamma::Palette()[entity.skinnum & 0xFF] & 0x00FFFFFF) | (static_cast<u32>(alpha * 128.0f) << 24),
         .flags  = rs::DrawFlags::Blended | rs::DrawFlags::Untextured,
         .vertexAlpha = false
     };
@@ -2381,6 +2381,9 @@ void RenderParticles(const refdef_t & viewDef)
     vu1::ParticleVertex * __restrict out = particles;
     const particle_t * __restrict in = viewDef.particles;
 
+    // Each in its palette colour as the palette shows it, through the brightness curve (gamma.h).
+    const u32 * __restrict palette = gamma::Palette();
+
     for (int i = 0; i < numParticles; ++i, ++in, ++out)
     {
         const float alpha = (in->alpha < 0.0f) ? 0.0f : ((in->alpha > 1.0f) ? 1.0f : in->alpha);
@@ -2388,7 +2391,7 @@ void RenderParticles(const refdef_t & viewDef)
         // Converted through int: alpha * 128 is at most 128, and a float to u32 conversion costs
         // a compare and a branch per particle for the half of the range it cannot reach.
         const u32 alphaByte = static_cast<u32>(static_cast<int>(alpha * 128.0f));
-        const u32 color     = (global_palette[in->color & 0xFF] & 0x00FFFFFF) | (alphaByte << 24);
+        const u32 color     = (palette[in->color & 0xFF] & 0x00FFFFFF) | (alphaByte << 24);
 
         // The billboard is one qword, so it goes out as one: colour, then the position's bits.
         StoreQword(out, color,

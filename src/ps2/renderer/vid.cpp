@@ -4,7 +4,8 @@
  *        'viddef' screen state, and wires the refexport_t table directly to the
  *        PS2_* renderer functions (the PS2 refresh is statically linked, so there
  *        is no GetRefAPI/DLL handshake). Also home to the video options menu,
- *        VID_Menu*, which puts the renderer's user-facing ps2_* cvars on screen.
+ *        VID_Menu*, which puts the renderer's user-facing ps2_* cvars on screen, and
+ *        vid_gamma and vid_contrast, the brightness and contrast (gamma.h).
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -15,6 +16,8 @@ extern "C" {
     #include "client/qmenu.h" // The menu framework (qmenu.c) every stock menu is built on.
 }
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -137,15 +140,26 @@ struct Choice
     const char * label = nullptr;
 };
 
+// A slider's range: the cvar's value at its left end, what each step to the right adds to it
+// (negative when the value falls as the slider rises), and how many steps it has.
+struct SliderRange
+{
+    float first;
+    float step;
+    int   numSteps;
+};
+
+// A setting is a spin control over its choices, or a slider over its range.
 struct Setting
 {
-    const char *   cvarName;
-    const char *   label;
-    const char *   statusBar;
-    const Applies  applies;
-    const bool     groupStart; // Leaves a blank row above it, between groups.
-    const Choice * choices;
-    const int      numChoices;
+    const char *        cvarName;
+    const char *        label;
+    const char *        statusBar;
+    const Applies       applies;
+    const bool          groupStart; // Leaves a blank row above it, between groups.
+    const Choice *      choices;
+    const int           numChoices;
+    const SliderRange * slider = nullptr;
 };
 
 constexpr Choice kOffOn[]        = { { "0", "off" }, { "1", "on" } };
@@ -160,6 +174,11 @@ constexpr Choice kSkyMips[]      = { { "0", "full" }, { "1", "half" } };
 constexpr Choice kDLightModes[]  = { { "0", "flares" }, { "1", "lightmaps" }, { "2", "vertex lighting" } };
 constexpr Choice kDLightScales[] = { { "0.05" }, { "0.1" }, { "0.15" }, { "0.2" }, { "0.25" }, { "0.3" } };
 
+// vid_gamma from 1.3 down to 0.5, so the slider brightens to the right, in the steps id's
+// vid_menu.c brightness slider had; vid_contrast from 1 to 2, as QuakeSpasm's and the Quake port's.
+constexpr SliderRange kBrightnessRange = { 1.3f, -0.1f, 8 };
+constexpr SliderRange kContrastRange   = { 1.0f, 0.1f, 10 };
+
 // Menu order. Status bar text stays within 64 columns, the narrowest (512 pixel) screen.
 constexpr Setting kSettings[] = {
     { "ps2_debug_overlays",    "debug overlays",    "show developer debug info (draw/mem/profile stats)",    Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
@@ -170,8 +189,10 @@ constexpr Setting kSettings[] = {
     { "ps2_fb_16bit",          "color depth",       "16-bit leaves more VRAM for textures; needs a restart", Applies::Restart, false, kFbFormats,    ps2::ArrayLength(kFbFormats)    },
     { "ps2_fb_dither",         "dithering",         "smooths the color banding of 16-bit color",             Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_gs_latency",        "gs latency",        "draw a frame ahead: faster, one frame more input lag",  Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
-    { "ps2_intensity",         "intensity",         "brightness of walls and models; needs a restart",       Applies::Restart, true,  kIntensities,  ps2::ArrayLength(kIntensities)  },
-    { "ps2_mipmaps",           "mipmaps",           "mip levels for walls; applies on the next map load",    Applies::NextMap, false, kOffOn,        ps2::ArrayLength(kOffOn)        },
+    { "vid_gamma",             "brightness",        "raises the darks and midtones of the whole picture",    Applies::Now,     true,  nullptr,       0,                                &kBrightnessRange },
+    { "vid_contrast",          "contrast",          "scales every color up; the brightest go white first",   Applies::Now,     false, nullptr,       0,                                &kContrastRange   },
+    { "ps2_intensity",         "intensity",         "lit walls and models brightened; needs a restart",      Applies::Restart, false, kIntensities,  ps2::ArrayLength(kIntensities)  },
+    { "ps2_mipmaps",           "mipmaps",           "mip levels for walls; applies on the next map load",    Applies::NextMap, true,  kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_mip_filter",        "texture filter",    "filtering of walls and model skins",                    Applies::Now,     false, kMipFilters,   ps2::ArrayLength(kMipFilters)   },
     { "ps2_mip_bias",          "mip bias",          "wall mip level bias; positive is blurrier",             Applies::Now,     false, kMipBiases,    ps2::ArrayLength(kMipBiases)    },
     { "ps2_skymip",            "sky quality",       "a half resolution sky saves VRAM; needs a restart",     Applies::Restart, false, kSkyMips,      ps2::ArrayLength(kSkyMips)      },
@@ -206,7 +227,8 @@ constexpr const char * kMenuInSound = "misc/menu1.wav";
 
 struct SettingItem
 {
-    menulist_s spin;
+    menulist_s   spin;
+    menuslider_s slider; // In place of the spin control for a setting with a SliderRange.
 
     // The choices' labels, then the custom value if there is one, then the null the spin control
     // stops at. A value that matches no choice - set at the console, say - becomes one more entry
@@ -287,6 +309,29 @@ void OnSettingChanged(void * self)
                              : s_items[index].customValue;
 
     Cvar_Set(setting.cvarName, value);
+}
+
+// Where a value sits on a slider: the nearest step, so a value typed at the console shows near it.
+// The cvar is left as it is until the slider moves.
+float SliderPosition(const SliderRange & range, const float value)
+{
+    const float steps = std::floor(((value - range.first) / range.step) + 0.5f);
+    return std::clamp(steps, 0.0f, static_cast<float>(range.numSteps));
+}
+
+// Slider callback: as the spin controls', the cvar is set at once, so the picture changes behind
+// the menu as the slider moves.
+void OnSliderChanged(void * self)
+{
+    const menuslider_s & slider = *static_cast<const menuslider_s *>(self);
+    const Setting & setting = kSettings[slider.generic.localdata[0]];
+
+    // Rounded to the hundredth and spelled out with %g, so the step's float error doesn't show
+    // and the default reads "1", as config.cfg had it, rather than Cvar_SetValue's "1.000000".
+    const float value = setting.slider->first + (slider.curvalue * setting.slider->step);
+    char text[16];
+    std::snprintf(text, sizeof(text), "%g", static_cast<double>(std::round(value * 100.0f) / 100.0f));
+    Cvar_Set(setting.cvarName, text);
 }
 
 void AddNoticeLine(const char * text, const NoticeLine::Style style)
@@ -422,6 +467,29 @@ void VID_MenuInit()
         const char * const value = Cvar_VariableString(setting.cvarName);
         std::snprintf(item.openValue, sizeof(item.openValue), "%s", value);
 
+        if (setting.groupStart)
+        {
+            y += 10;
+        }
+
+        if (setting.slider != nullptr)
+        {
+            item.slider = {};
+            item.slider.generic.type         = MTYPE_SLIDER;
+            item.slider.generic.y            = y;
+            item.slider.generic.name         = setting.label;
+            item.slider.generic.statusbar    = setting.statusBar;
+            item.slider.generic.callback     = vid_menu::OnSliderChanged;
+            item.slider.generic.localdata[0] = i;
+            item.slider.minvalue             = 0.0f;
+            item.slider.maxvalue             = static_cast<float>(setting.slider->numSteps);
+            item.slider.curvalue             = vid_menu::SliderPosition(*setting.slider, Cvar_VariableValue(setting.cvarName));
+
+            Menu_AddItem(&vid_menu::s_menu, &item.slider);
+            y += 10;
+            continue;
+        }
+
         int current = -1;
         for (int c = 0; c < setting.numChoices; ++c)
         {
@@ -442,11 +510,6 @@ void VID_MenuInit()
             item.names[numNames++] = item.customValue;
         }
         item.names[numNames] = nullptr;
-
-        if (setting.groupStart)
-        {
-            y += 10;
-        }
 
         item.spin = {};
         item.spin.generic.type         = MTYPE_SPINCONTROL;

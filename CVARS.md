@@ -27,6 +27,8 @@ bigger picture.
 | `ps2_gs_latency` | `1` | `1` | Arch., Menu | Let the GS draw a frame while the next is built: faster, one frame more input lag. |
 | `ps2_intensity` | `2` | `2` | Arch., Menu | Brightness scale of walls and models (`ref_gl`'s `intensity`, floored at 1); read at startup. |
 | `vid_gamma` | `1` | `1` | Arch., Menu | The picture's brightness (id's cvar): everything drawn through the palette shows as `pow(colour * contrast, gamma)`, lower is brighter. The video menu's "brightness" slider steps it from 1.3 down to 0.5 in tenths, as id's did; the console takes 0.25 to 4. Applies at the next frame. |
+| `ps2_screen_x` | `0` | `0` | Arch., Menu | Where the picture sits on the TV: pixels to the right (negative: left) of the standard's usual place, -32 to 32, for a set that cuts an edge off. The GS DISPLAY register's origin moves, nothing is redrawn, and the picture clips where it meets the blanking. Applies at the next frame, and the GS comes up with it; the error screen follows it too. The video menu's "screen x" row, which marks the picture's edge while it or "screen y" is under the cursor. PCSX2 ignores it unless its `pcrtc_offsets` setting is on. |
+| `ps2_screen_y` | `0` | `0` | Arch., Menu | As `ps2_screen_x`, rows down (negative: up), -16 to 16: the room above the picture is a few lines on NTSC before it clips. The video menu's "screen y" row. |
 | `vid_contrast` | `1` | `1` | Arch., Menu | The picture's contrast, the same curve's multiplier (the Quake port's, from QuakeSpasm). The "contrast" slider steps it from 1 to 2 in tenths; the console takes 0.25 to 4. Applies at the next frame. |
 | `ps2_polyblend` | `1` | `1` | | Fullscreen damage/powerup/underwater tint (`ref_gl`'s `gl_polyblend`). |
 

@@ -386,7 +386,9 @@ or the drive has no FAT partition.
 video options) to force one after a restart. A PAL console can drive NTSC if the TV accepts
 60 Hz; over composite a PAL-only set may lose the colour, while RGB SCART and component are
 fine. `ps2_fb_height` 0, the default, gives each standard its full height: 448 lines for NTSC,
-512 for PAL.
+512 for PAL. A set that cuts an edge off can have the picture moved with the video options'
+"screen x" and "screen y" rows (`ps2_screen_x`, `ps2_screen_y`: pixels and rows either way), which
+draw a white line along the picture's edge while either is under the cursor.
 
 #### From the HDD (fastest)
 
@@ -579,7 +581,10 @@ picks the standard: `auto` takes the console's own (from its BIOS ROM name), and
 `pal` force one, so a PAL console can run at 60 Hz on a TV that takes it
 ([video_mode.h](src/ps2/system/video_mode.h), which the fatal-error screen shares).
 `ps2_fb_height` 0 follows the standard's full height; 512 lines leave 240 KB less VRAM for
-textures than 448. The framebuffer format is chosen by `ps2_fb_16bit` (default on): 16-bit
+textures than 448. `ps2_screen_x` and `ps2_screen_y` move the picture on the TV through the GS
+DISPLAY register's origin ([video_mode.h](src/ps2/system/video_mode.h)): the GS comes up with
+them, a change goes out with the next present, in the same blanking interval as the frame's
+DISPFB, and the fatal-error screen puts its text in the same place. The framebuffer format is chosen by `ps2_fb_16bit` (default on): 16-bit
 buffers cost 560 KB each instead of 1120 KB, which is where most of the texture heap's
 headroom comes from, and halve the GS's colour write and blend-read bandwidth — at the cost
 of 5:5:5 colour, which `ps2_fb_dither` can smooth over. Depth is 16-bit either way (the GS

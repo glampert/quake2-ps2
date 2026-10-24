@@ -77,6 +77,15 @@ The README's "Rendering" section is the architecture overview. The renderer file
   out-of-memory syncs, though fewer textures stayed resident (73 against 79 on average). The
   present clock's field rate follows the chosen standard, not the console's. Forcing NTSC on a
   PAL console works on hardware (2026-10-11): the perf test paced at 59.94 Hz.
+- **The picture's place on the TV is DISPLAY's DX/DY**, `graph_set_screen`'s x/y adjustments over
+  libgraph's origin for the standard (NTSC 652/50, PAL 680/72): 4 VCK per pixel at 640 wide (DW
+  2560, MAGH 3) and 2 raster lines per framebuffer row in FIELD mode. `ps2_screen_x/y` (ref.cpp,
+  clamped to ±32/±16 and handed to `video::SetScreenOffset` each frame) keep them, `gs::Init` sets
+  them and `PresentFramebuffer` rewrites them after its vsync wait when they changed, and the error
+  screen's `DisplayX/Y` carry them. Nothing is redrawn: the TV shows BGCOLOR where the picture moved
+  from, and clips it at the blanking (a few lines of room above on NTSC). The boot splash draws at
+  the standard's own origin, before any config. PCSX2 ignores DX/DY unless `pcrtc_offsets = true`,
+  and `screenshot` reads VRAM, so it never shows the shift either way.
 - **Alpha 0x80 = 1.0.** 0xFF is about 2× overbright under `(Cs-Cd)*As/128+Cd`. Scale
   engine-facing 0..255 alpha with `a >> 1`. In MODULATE, vertex colour 0x80 is identity.
 - The ALPHA register computes `(A - B) * C + D` where **C is a scalar alpha** (As/Ad/FIX), not

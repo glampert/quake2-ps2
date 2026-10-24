@@ -56,8 +56,23 @@ s16 GsCrtMode(Standard standard);
 int GraphMode(Standard standard);
 
 // Where an interlaced FIELD mode picture starts on the raster, as the GS DISPLAY register's
-// DX/DY: libgraph's own offsets for the standard, DY already doubled for FIELD mode.
+// DX/DY: libgraph's own offsets for the standard, DY already doubled for FIELD mode, with the
+// screen offset below added.
 int DisplayX(Standard standard);
 int DisplayY(Standard standard);
+
+// Where the picture sits on the TV, from ps2_screen_x and ps2_screen_y (ref.cpp): 'x' pixels to
+// the right and 'y' framebuffer rows down of the standard's usual place, for a set that cuts an
+// edge off. gs::Init brings the GS up with it and gs::PresentFramebuffer applies a change at the
+// next vsync; the debug screen reads it through DisplayX/DisplayY.
+void SetScreenOffset(int x, int y);
+int  ScreenOffsetX();
+int  ScreenOffsetY();
+
+// The offset in DISPLAY's units, the adjustment graph_set_screen takes: a pixel is 4 VCK across
+// (libgraph's 2560 VCK line over the 640-pixel framebuffer, MAGH 3), and a framebuffer row is 2
+// raster lines down in FIELD mode, where each field shows every other row.
+int ScreenAdjustX();
+int ScreenAdjustY();
 
 } // namespace ps2::video

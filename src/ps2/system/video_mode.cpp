@@ -38,6 +38,13 @@ const StandardInfo & Info(const Standard standard)
 static bool     s_hasSelection = false;
 static Standard s_selected     = Standard::Ntsc;
 
+// ps2_screen_x/y, in pixels and rows (see the header for DISPLAY's units of them).
+constexpr int kVckPerPixel       = 2560 / 640;
+constexpr int kRasterLinesPerRow = 2;
+
+static int s_screenOffsetX = 0;
+static int s_screenOffsetY = 0;
+
 } // namespace
 
 Standard ConsoleStandard()
@@ -109,14 +116,40 @@ int GraphMode(const Standard standard)
 
 int DisplayX(const Standard standard)
 {
-    return Info(standard).displayX;
+    return Info(standard).displayX + ScreenAdjustX();
 }
 
 int DisplayY(const Standard standard)
 {
     // In FIELD mode each field's lines land on alternate raster lines, so the origin doubles -
     // less the first line, as graph_set_screen computes it.
-    return (Info(standard).fieldOriginY - 1) * 2;
+    return ((Info(standard).fieldOriginY - 1) * 2) + ScreenAdjustY();
+}
+
+void SetScreenOffset(const int x, const int y)
+{
+    s_screenOffsetX = x;
+    s_screenOffsetY = y;
+}
+
+int ScreenOffsetX()
+{
+    return s_screenOffsetX;
+}
+
+int ScreenOffsetY()
+{
+    return s_screenOffsetY;
+}
+
+int ScreenAdjustX()
+{
+    return s_screenOffsetX * kVckPerPixel;
+}
+
+int ScreenAdjustY()
+{
+    return s_screenOffsetY * kRasterLinesPerRow;
 }
 
 } // namespace ps2::video

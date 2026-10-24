@@ -267,8 +267,9 @@ void SetVideoMode(const ps2::video::Standard standard)
 
     // MAGH 4x, MAGV 2x, DW 2560, DH 448: the 4x/2x magnification is what blows our comparatively
     // tiny 640x224 buffer up to fill the screen - all of NTSC's 448 lines, PAL's top 448 of 512.
-    // DX/DY are libgraph's origin for the standard, so the text sits where the game's own picture
-    // does. On NTSC that is 4 pixels right of the SDK debug screen's DX of 636.
+    // DX/DY are libgraph's origin for the standard, moved as ps2_screen_x/y moved the game's, so
+    // the text sits where the game's own picture does. On NTSC the origin is 4 pixels right of the
+    // SDK debug screen's DX of 636.
     const u32 dx = static_cast<u32>(ps2::video::DisplayX(standard));
     const u32 dy = static_cast<u32>(ps2::video::DisplayY(standard));
     *R_EE_GS_DISPLAY2 = MakeDisplay(dx, dy, 3, 1, 2559, 447);

@@ -11,6 +11,7 @@
  * ================================================================================================ */
 
 #include "ps2/common.h"
+#include "ps2/renderer/render_system.h" // FillRect, for the screen's edge
 
 extern "C" {
     #include "client/qmenu.h" // The menu framework (qmenu.c) every stock menu is built on.
@@ -149,7 +150,18 @@ struct SliderRange
     int   numSteps;
 };
 
-// A setting is a spin control over its choices, or a slider over its range.
+// A signed whole number's range, for a spin control that steps through the numbers and shows them
+// signed ("+8", "-4", "0"): the screen position rows. The labels are made at VID_Init (see
+// InitNumberNames), null-terminated as a spin control's itemnames are.
+struct NumberRange
+{
+    int           min;
+    int           max;
+    const char ** names;
+};
+
+// A setting is a spin control over its choices, a slider over its range, or a spin control over a
+// range of numbers.
 struct Setting
 {
     const char *        cvarName;
@@ -160,6 +172,7 @@ struct Setting
     const Choice *      choices;
     const int           numChoices;
     const SliderRange * slider = nullptr;
+    const NumberRange * number = nullptr;
 };
 
 constexpr Choice kOffOn[]        = { { "0", "off" }, { "1", "on" } };
@@ -179,6 +192,17 @@ constexpr Choice kDLightScales[] = { { "0.05" }, { "0.1" }, { "0.15" }, { "0.2" 
 constexpr SliderRange kBrightnessRange = { 1.3f, -0.1f, 8 };
 constexpr SliderRange kContrastRange   = { 1.0f, 0.1f, 10 };
 
+// Where the picture sits on the TV (ps2_screen_x/y, ref.cpp): pixels and rows either way of the
+// standard's usual place. The ranges are ref.cpp's clamps.
+constexpr int kMaxScreenX = 32;
+constexpr int kMaxScreenY = 16;
+
+static const char * s_screenXNames[(2 * kMaxScreenX) + 2];
+static const char * s_screenYNames[(2 * kMaxScreenY) + 2];
+
+const NumberRange kScreenXRange = { -kMaxScreenX, kMaxScreenX, s_screenXNames };
+const NumberRange kScreenYRange = { -kMaxScreenY, kMaxScreenY, s_screenYNames };
+
 // Menu order. Status bar text stays within 64 columns, the narrowest (512 pixel) screen.
 constexpr Setting kSettings[] = {
     { "ps2_debug_overlays",    "debug overlays",    "show developer debug info (draw/mem/profile stats)",    Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
@@ -187,6 +211,8 @@ constexpr Setting kSettings[] = {
     { "ps2_fb_width",          "screen width",      "framebuffer width in pixels; needs a restart",          Applies::Restart, false, kFbWidths,     ps2::ArrayLength(kFbWidths)     },
     { "ps2_fb_height",         "screen height",     "auto: the mode's full 448/512 lines; needs a restart",  Applies::Restart, false, kFbHeights,    ps2::ArrayLength(kFbHeights)    },
     { "ps2_fb_16bit",          "color depth",       "16-bit leaves more VRAM for textures; needs a restart", Applies::Restart, false, kFbFormats,    ps2::ArrayLength(kFbFormats)    },
+    { "ps2_screen_x",          "screen x",          "moves the picture left or right on the TV",             Applies::Now,     false, nullptr,       0,                                nullptr, &kScreenXRange },
+    { "ps2_screen_y",          "screen y",          "moves the picture up or down on the TV",                Applies::Now,     false, nullptr,       0,                                nullptr, &kScreenYRange },
     { "ps2_fb_dither",         "dithering",         "smooths the color banding of 16-bit color",             Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_gs_latency",        "gs latency",        "draw a frame ahead: faster, one frame more input lag",  Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "vid_gamma",             "brightness",        "raises the darks and midtones of the whole picture",    Applies::Now,     true,  nullptr,       0,                                &kBrightnessRange },
@@ -304,11 +330,56 @@ void OnSettingChanged(void * self)
     const int index = spin.generic.localdata[0];
     const Setting & setting = kSettings[index];
 
+    if (setting.number != nullptr)
+    {
+        Cvar_SetValue(setting.cvarName, static_cast<float>(setting.number->min + spin.curvalue));
+        return;
+    }
+
     const char * const value = (spin.curvalue < setting.numChoices)
                              ? setting.choices[spin.curvalue].value
                              : s_items[index].customValue;
 
     Cvar_Set(setting.cvarName, value);
+}
+
+// The picture's edge, a white line along each side of the screen, while a screen position row is
+// under the cursor: what the rows move, against the set's own edge.
+void DrawScreenEdge()
+{
+    constexpr int kLine = 2;
+    ps2::rs::FillRect(0, 0, viddef.width, kLine, 255, 255, 255, 255);
+    ps2::rs::FillRect(0, viddef.height - kLine, viddef.width, kLine, 255, 255, 255, 255);
+    ps2::rs::FillRect(0, 0, kLine, viddef.height, 255, 255, 255, 255);
+    ps2::rs::FillRect(viddef.width - kLine, 0, kLine, viddef.height, 255, 255, 255, 255);
+}
+
+// The number rows' labels: "-32" to "+32", once, with every row's list pointing into them.
+void InitNumberNames()
+{
+    static char text[(2 * kMaxScreenX) + 1][4];
+    static bool made = false;
+    if (made)
+    {
+        return;
+    }
+    made = true;
+
+    for (int i = -kMaxScreenX; i <= kMaxScreenX; ++i)
+    {
+        char * const t = text[i + kMaxScreenX];
+        std::snprintf(t, sizeof(text[0]), (i == 0) ? "%d" : "%+d", i);
+    }
+    for (int i = -kMaxScreenX; i <= kMaxScreenX; ++i)
+    {
+        s_screenXNames[i + kMaxScreenX] = text[i + kMaxScreenX];
+    }
+    for (int i = -kMaxScreenY; i <= kMaxScreenY; ++i)
+    {
+        s_screenYNames[i + kMaxScreenY] = text[i + kMaxScreenX];
+    }
+    s_screenXNames[(2 * kMaxScreenX) + 1] = nullptr;
+    s_screenYNames[(2 * kMaxScreenY) + 1] = nullptr;
 }
 
 // Where a value sits on a slider: the nearest step, so a value typed at the console shows near it.
@@ -453,6 +524,8 @@ extern "C" {
 
 void VID_MenuInit()
 {
+    vid_menu::InitNumberNames();
+
     vid_menu::s_menu.x = viddef.width / 2;
     vid_menu::s_menu.y = (viddef.height / 2) - 58;
     vid_menu::s_menu.nitems = 0;
@@ -486,6 +559,27 @@ void VID_MenuInit()
             item.slider.curvalue             = vid_menu::SliderPosition(*setting.slider, Cvar_VariableValue(setting.cvarName));
 
             Menu_AddItem(&vid_menu::s_menu, &item.slider);
+            y += 10;
+            continue;
+        }
+
+        if (setting.number != nullptr)
+        {
+            // A value past the range shows at its end, and stays until the row moves it.
+            const vid_menu::NumberRange & range = *setting.number;
+            const int number = static_cast<int>(Cvar_VariableValue(setting.cvarName));
+
+            item.spin = {};
+            item.spin.generic.type         = MTYPE_SPINCONTROL;
+            item.spin.generic.y            = y;
+            item.spin.generic.name         = setting.label;
+            item.spin.generic.statusbar    = setting.statusBar;
+            item.spin.generic.callback     = vid_menu::OnSettingChanged;
+            item.spin.generic.localdata[0] = i;
+            item.spin.itemnames            = range.names;
+            item.spin.curvalue             = std::clamp(number, range.min, range.max) - range.min;
+
+            Menu_AddItem(&vid_menu::s_menu, &item.spin);
             y += 10;
             continue;
         }
@@ -541,6 +635,12 @@ void VID_MenuDraw()
 
     Menu_AdjustCursor(&vid_menu::s_menu, 1);
     Menu_Draw(&vid_menu::s_menu);
+
+    // The items are the settings in order, so the cursor is a setting's index.
+    if (vid_menu::kSettings[vid_menu::s_menu.cursor].number != nullptr)
+    {
+        vid_menu::DrawScreenEdge();
+    }
 }
 
 const char * VID_MenuKey(int key)

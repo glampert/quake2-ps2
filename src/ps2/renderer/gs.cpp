@@ -233,6 +233,26 @@ void UploadCluts(const tex::Clut * const (&cluts)[4])
     GifPacket::WaitGifChannel();
 }
 
+// ------------------------------------------------------------------------------------------------
+// The picture's place on the TV
+// ------------------------------------------------------------------------------------------------
+
+// What DISPLAY's origin was last written with: ps2_screen_x and ps2_screen_y's adjustments
+// (video_mode.h), rewritten with the frame's DISPFB when they change.
+static int s_screenAdjustX = 0;
+static int s_screenAdjustY = 0;
+
+void SetDisplayPosition()
+{
+    s_screenAdjustX = video::ScreenAdjustX();
+    s_screenAdjustY = video::ScreenAdjustY();
+    graph_set_screen(s_screenAdjustX, s_screenAdjustY, detail::g_state.width, detail::g_state.height);
+
+    const video::Standard standard = video::Selected();
+    Com_DPrintf("GS: picture %+d pixels, %+d rows: DISPLAY DX %d, DY %d.\n",
+                video::ScreenOffsetX(), video::ScreenOffsetY(), video::DisplayX(standard), video::DisplayY(standard));
+}
+
 // Loads the global palette into the GS's CLUT buffer and sets CBP0 to it, so the
 // CLUT_COMPARE_CBP0 in every indexed bind (see MakeTex0) starts from a known state.
 // Nothing documents what CBP0 holds after a GS reset, and whatever ran before us
@@ -379,10 +399,11 @@ void Init(const Config & cfg)
 
     // Display framebuffer 0 first, in the config's standard. These are graph_initialize's calls -
     // interlaced FIELD mode with the flicker filter, a black background, frame 0 on both read
-    // circuits - with the mode passed in, where graph_initialize can only take the console's own.
-    // The output comes on below, once frame 0 holds a picture.
+    // circuits - with the mode passed in, where graph_initialize can only take the console's own,
+    // and the picture where ps2_screen_x/y put it. The output comes on below, once frame 0 holds a
+    // picture.
     graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(cfg.standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
-    graph_set_screen(0, 0, cfg.width, cfg.height);
+    SetDisplayPosition();
     graph_set_bgcolor(0, 0, 0);
     graph_set_framebuffer_filtered(static_cast<int>(frames[0].address), cfg.width, framePsm, 0, 0);
 
@@ -564,6 +585,12 @@ void PresentFramebuffer(const DrawContext ctx)
         graph_wait_vsync();
     }
     StampPresent();
+
+    // The picture's place too, in the same blanking interval, when the video menu moved it.
+    if (s_screenAdjustX != video::ScreenAdjustX() || s_screenAdjustY != video::ScreenAdjustY())
+    {
+        SetDisplayPosition();
+    }
 
     const framebuffer_t & fb = detail::g_state.framebuffer[Index(ctx)];
     graph_set_framebuffer_filtered(static_cast<int>(fb.address),

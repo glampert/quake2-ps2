@@ -45,6 +45,10 @@
   it (with a 16-bit framebuffer; a 32-bit one comes back black, cleared by `gs::Init`).
   `ps2_debug_overlays 0` and `ps2_show_fps 0` keep the panels out of a shot. A 16-bit
   framebuffer reads back at 5 bits a channel. Each shot is 860 KB at 640x448.
+- `pcrtc_offsets = true` under `[EmuCore/GS]` (on in the user's ini) makes PCSX2 move the picture
+  as the GS DISPLAY registers say (`ps2_screen_x`/`ps2_screen_y`); off, it never moves. `screenshot`
+  reads VRAM, so it never shows the shift either way: `developer 1` logs each change (`GS: picture
+  +8 pixels, -4 rows: DISPLAY DX 684, DY 42.`), and the rest wants eyes, on a TV above all.
 - **A scripted shot usually repeats across builds:** the same queued script from the
   `CDAudio_Play` hook mostly shoots the same demo frame, so two builds' shots can compare pixel
   for pixel. The brightness sliders were checked that way (2026-10-24): the defaults' shot

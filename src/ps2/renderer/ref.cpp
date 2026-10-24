@@ -68,6 +68,24 @@ static const cvar_t * s_showProfileStats  = nullptr;
 static const cvar_t * s_gsLatency    = nullptr;
 static const cvar_t * s_enableDither = nullptr;
 
+// Where the picture sits on the TV: pixels to the right and rows down of the standard's usual
+// place, for a set that cuts an edge off (system/video_mode.h). Live, from the video menu's
+// "screen x" and "screen y" rows, and read before gs::Init, so the GS comes up with it.
+static const cvar_t * s_screenX = nullptr;
+static const cvar_t * s_screenY = nullptr;
+
+constexpr int kMaxScreenX = 32; // pixels either way
+constexpr int kMaxScreenY = 16; // rows either way
+
+static void SyncScreenOffset()
+{
+    const auto clamp = [](const float value, const int limit) {
+        const int v = static_cast<int>(value);
+        return (v < -limit) ? -limit : ((v > limit) ? limit : v);
+    };
+    ps2::video::SetScreenOffset(clamp(s_screenX->value, kMaxScreenX), clamp(s_screenY->value, kMaxScreenY));
+}
+
 // ps2_mipmaps: whether walls load with the mip levels their WAL files carry. Read when a map
 // loads, not live, since it decides what loads: 0 is exactly the renderer before mipmapping, in
 // memory and VRAM as well as on screen.
@@ -544,6 +562,9 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
     s_gsLatency         = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
     s_enableDither      = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+    s_screenX           = Cvar_Get("ps2_screen_x",   "0", CVAR_ARCHIVE);
+    s_screenY           = Cvar_Get("ps2_screen_y",   "0", CVAR_ARCHIVE);
+    SyncScreenOffset();
     s_wallMipmaps       = Cvar_Get("ps2_mipmaps",    "1", CVAR_ARCHIVE);
     s_rebaseWallSt      = Cvar_Get("ps2_st_rebase",  "1", CVAR_ARCHIVE);
     s_showDebugOverlays = Cvar_Get("ps2_debug_overlays", PS2_QUAKE_DEBUG ? "1" : "0", CVAR_ARCHIVE);
@@ -909,8 +930,9 @@ void PS2_BeginFrame(float cameraSeparation)
     ps2::debug::FrameLogCapture();
 
     // A brightness or contrast change from the menu or the console, between frames as the CLUTs'
-    // upload has to be.
+    // upload has to be. The picture's place goes to the GS with the next present.
     ps2::gamma::ApplyPendingChange();
+    SyncScreenOffset();
 
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at

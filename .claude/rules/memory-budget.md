@@ -61,6 +61,14 @@ paths:
   peak 30.24 MB), and every map's live total matches within the 0.01 MB the line shows. The
   end-of-pass layout differed (top chunk 819 KB against 161 KB, arena 24.54 against
   24.30 MB): a ~5 KB larger ELF moves where dlmalloc lands things.
+- **The save devices, the menu work, the brightness curves and the screen offset** (12f2f9a to
+  8d3d452 plus the menu config write, 2026-10-24, debug, pkz, `mapcycle-menu-gamma`): every
+  map's live total and load peak rose 0.03-0.04 MB, the worst moment 30.29 to **30.33 MB**
+  (city3), the lowest free point 0.92 to 0.86 MB (strike). All 39 maps load. The debug ELF grew
+  20.7 KB of text (11.3 of it the save devices and notice) and 8.3 KB of bss, of which the
+  brightness tables (`gamma.cpp`: two palettes, the light ramp and the light curve) are 3.3 KB
+  and the video menu's slider and number rows about 2 KB. VRAM is unchanged: the fourth CLUT
+  fits the CLUTs' page, so the texture heap stays 2408 KB.
 - **Fixed segregated heaps for textures/models were rejected.** A partition must cover
   max(tex+mdl) + max(everything else), and those peak at different moments, so it costs about
   1.2 MB more than fragmentation does. Fragmentation (arena minus live peak) measured
@@ -75,4 +83,4 @@ Reference summaries live in `build/baselines/` (local, untracked): `mapcycle-fbl
 free-before-load), `mapcycle-fbl1`, `mapcycle-mip0`/`mip1`, `mapcycle-vwep`,
 `mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, 512 KB chain halves), `mapcycle-cdwav` (WAV only),
 `mapcycle-chain768` (ADPCM, 768 KB halves), `mapcycle-sdk-986ff32` and `mapcycle-sdk-329e2bb`
-(pkz, current code on the old and new SDK).
+(pkz, the 2026-10-19 code on the old and new SDK), `mapcycle-menu-gamma` (the 2026-10-24 code).

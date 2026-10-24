@@ -53,11 +53,10 @@ void PS2_BeginFrame(float cameraSeparation);
 void PS2_EndFrame();
 void PS2_AppActivate(qboolean activate);
 
-// Menu and client functions no engine header declares (menu.c keeps its own prototypes):
+// Menu functions no engine header declares (menu.c keeps its own prototypes):
 void M_PopMenu();
 const char * Default_MenuKey(menuframework_s * menu, int key);
 void M_DrawTextBox(int x, int y, int width, int lines);
-void CL_WriteConfiguration();
 
 // Engine-visible globals (referenced unmangled from the C client).
 refexport_t re = {};
@@ -428,19 +427,17 @@ void AddNoticeSection(const char * heading, const Applies applies, const bool (&
     }
 }
 
-// Leaves the menu: saves config.cfg if anything changed, then either pops the menu or, when a
-// change has yet to take effect, swaps it for a notice saying which, which the next key dismisses.
+// Leaves the menu: either pops it or, when a change has yet to take effect, swaps it for a notice
+// saying which, which the next key dismisses. config.cfg is menu.c's to write, on leaving any page
+// that changed a setting (M_WriteChangedConfig).
 const char * CloseMenu()
 {
-    bool changed = false;
     bool pending[kNumSettings] = {};
 
     for (int i = 0; i < kNumSettings; ++i)
     {
         const char * const value = Cvar_VariableString(kSettings[i].cvarName);
         const bool changedHere = (std::strcmp(value, s_items[i].openValue) != 0);
-
-        changed = changed || changedHere;
 
         switch (kSettings[i].applies)
         {
@@ -453,13 +450,6 @@ const char * CloseMenu()
             pending[i] = (std::strcmp(value, s_startupValues[i]) != 0);
             break;
         }
-    }
-
-    // Written here rather than left to CL_Shutdown, which a console switched off never reaches.
-    // Not when nothing changed, though: on hardware it is a USB write for nothing.
-    if (changed)
-    {
-        CL_WriteConfiguration();
     }
 
     s_numNoticeLines = 0;

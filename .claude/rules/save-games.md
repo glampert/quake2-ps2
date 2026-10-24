@@ -39,9 +39,11 @@ facts behind them:
   `Sys_SaveRestoreSlot`, `Sys_SaveListSlots` put a notice up of their own unless one is.
   `Sys_SaveAbortStreams` (from `SV_Shutdown`, which every error drop runs) also takes down a
   notice an unwind left up. The Game menu's row reads `Sys_SaveDriveName` and
-  `Sys_SaveTargetIsCard`, sets `Sys_SaveUseCard`, and writes config.cfg on leaving the menu with
-  the device changed (`Game_MenuKey`): a console is usually switched off, not quit, and the next
-  boot reads the config from where saves go. The load and save menus ask `Sys_SaveMenuProblem`
+  `Sys_SaveTargetIsCard` and sets `Sys_SaveUseCard`; config.cfg follows on leaving the page, as
+  after any menu change (`M_WriteChangedConfig` in menu.c, from `M_PopMenu` and `M_ForceMenuOff`:
+  the config's text against a copy taken as the menu opened, so a console switched off rather
+  than quit keeps a changed setting or bind, and a visit that changed nothing writes nothing).
+  The load and save menus ask `Sys_SaveMenuProblem`
   and draw `Sys_SaveMenuDrawProblem`; the failure popups add `Sys_SaveSwitchAdvice`.
 - miniz is the `src/tools/miniz` submodule (pinned 3.1.2), compiled `-O3` in both configs.
   `save/miniz_cfg/miniz_export.h` stands in for the CMake-generated header and carries

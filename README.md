@@ -953,9 +953,10 @@ So a player who keeps everything on the USB drive or the hard disk never has the
 at boot, and one who keeps it on the card gets the drive's `baseq2/config.cfg` as the default
 while the card has none. Switching the save device from the drive back to the card rewrites the
 drive's `baseq2/config.cfg` once more, so that it no longer names the drive and the next boot
-reads the card. The config is written on quit, on leaving the video menu after a change and on
-leaving the Game menu after a change of save device; one that hasn't changed isn't written
-again. The archived cvars are written sorted by name (id wrote them in registration order,
+reads the card. The config is written on quit and on leaving any menu page after a change to a
+setting or a bind (the menu compares the config's text with a copy taken as it opened, so a visit
+that changed nothing writes nothing: a console is usually switched off rather than quit); one
+that hasn't changed isn't written again. The archived cvars are written sorted by name (id wrote them in registration order,
 which reversed on every quit), so the same settings always give the same file. A card that is
 missing or full just skips it, with a line on the console - on a console without a memory card
 the settings then last until it is switched off, unless saves go to the drive. The card's copy

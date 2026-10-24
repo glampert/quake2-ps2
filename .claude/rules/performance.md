@@ -12,7 +12,12 @@ paths:
   dropped frames**. Reference `build/baselines/vwep.flog`: EE work mean 5.4 ms, p99 9.3 ms,
   max 11.6 ms (debug). The SDK update of 2026-10-19 changed no stage by more than 0.1%
   (SndMix -0.9%, which wanders anyway): `sdk-986ff32.flog` against `sdk-329e2bb.flog`, the
-  current reference, same code.
+  current reference, same code. The save devices, the menu work and the brightness curves
+  (through 8d3d452, 2026-10-24) moved no rendering stage by more than 0.3% (`menu-gamma.flog`
+  against it; EntShade +1.0%, the per-model light curve, 0.9 µs). Its Input column read 26.8 µs
+  against 19.9 because that run polled the emulated USB keyboard and the reference's never
+  brought the driver up: check `USB keyboard input initialised.` in both emulogs before reading
+  anything into Input.
 - What it took: soft-float doubles in the engine C (`-fsingle-precision-constant` +
   `math_c.h`, 59 → 1 drops); cheaper effects (`Com_FxRand`, an incremental rail spiral,
   inline `V_AddParticle`); preloading mid-level assets (player weapon fire sounds, all view

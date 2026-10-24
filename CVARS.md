@@ -124,7 +124,7 @@ bigger picture.
 
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
-| `ps2_savedevice` | `mc` | `mc` | Arch. | Where save games and `config.cfg` go: `mc`, the memory card in MEMORY CARD slot 1, or the drive the game booted from, `usb` (a USB drive), `hdd` (the hard disk) or `host` (the emulator's `host:` filesystem), in `baseq2/save/` there. Every device holds the same compressed slot files, under the same notice. A value naming a drive the game didn't boot from means the card. `config.cfg` follows it (see the README's Save games section). `ps2_saveinfo` shows where saves are going and lists them. The Game menu's "save device" row steps between the card and the boot drive, and writes `config.cfg` on leaving the menu. |
+| `ps2_savedevice` | `mc` | `mc` | Arch. | Where save games and `config.cfg` go: `mc`, the memory card in MEMORY CARD slot 1, or the drive the game booted from, `usb` (a USB drive), `hdd` (the hard disk) or `host` (the emulator's `host:` filesystem), in `baseq2/save/` there. Every device holds the same compressed slot files, under the same notice. A value naming a drive the game didn't boot from means the card. `config.cfg` follows it (see the README's Save games section). `ps2_saveinfo` shows where saves are going and lists them. The Game menu's "save device" row steps between the card and the boot drive; `config.cfg` follows on leaving the page, as after any menu change. |
 
 ## Bring-up scenes and tests
 

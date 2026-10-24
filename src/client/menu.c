@@ -72,6 +72,12 @@ static menulayer_t m_layers[MAX_MENU_DEPTH];
 static int m_menudepth;
 static int m_main_cursor;
 
+// [PS2_QUAKE]: config.cfg as it stood when the menu opened, or was last written from it, to tell
+// on leaving a page whether the visit changed a bind or an archived cvar (see M_WriteChangedConfig).
+static char * m_config_at_open;
+static size_t m_config_at_open_len;
+char * CL_ConfigurationText(size_t * length); // cl_main.c
+
 // play after drawing a frame, so caching won't disrupt the sound.
 static qboolean m_entersound;
 
@@ -86,6 +92,34 @@ static void M_Banner(char * name)
     re.DrawPic(viddef.width / 2 - w / 2, viddef.height / 2 - 110, name);
 }
 
+// [PS2_QUAKE]: Writes config.cfg if it differs from the copy taken as the menu opened, and keeps
+// the new text as the copy. Called on leaving every page and on closing the menu: a console is
+// usually switched off rather than quit, when the engine writes it otherwise, so a changed setting
+// or bind would be lost. The backend writes nothing for a text the save device holds already, and
+// an unchanged one never gets that far, so a visit that changed nothing costs a few KB of text.
+static void M_WriteChangedConfig(void)
+{
+    size_t length = 0;
+    char * text;
+
+    if (!m_config_at_open)
+        return;
+
+    text = CL_ConfigurationText(&length);
+    if (!text)
+        return;
+
+    if (length != m_config_at_open_len || memcmp(text, m_config_at_open, length) != 0)
+    {
+        Sys_SaveStoreConfig(text, (int)length);
+        free(m_config_at_open);
+        m_config_at_open = text;
+        m_config_at_open_len = length;
+        return;
+    }
+    free(text);
+}
+
 void M_PushMenu(void (*draw)(void), const char * (*key)(int k))
 {
     int i;
@@ -93,6 +127,12 @@ void M_PushMenu(void (*draw)(void), const char * (*key)(int k))
     if (Cvar_VariableValue("maxclients") == 1 && Com_ServerState())
     {
         Cvar_Set("paused", "1");
+    }
+
+    // [PS2_QUAKE]: the config as the menu opens, for M_WriteChangedConfig.
+    if (m_menudepth == 0 && !m_config_at_open)
+    {
+        m_config_at_open = CL_ConfigurationText(&m_config_at_open_len);
     }
 
     // if this menu is already present, drop back to that level
@@ -127,6 +167,10 @@ void M_PushMenu(void (*draw)(void), const char * (*key)(int k))
 
 void M_ForceMenuOff(void)
 {
+    M_WriteChangedConfig(); // [PS2_QUAKE]
+    free(m_config_at_open);
+    m_config_at_open = NULL;
+
     m_drawfunc = 0;
     m_keyfunc = 0;
     cls.key_dest = key_game;
@@ -141,6 +185,7 @@ void M_PopMenu(void)
     if (m_menudepth < 1)
         Com_Error(ERR_FATAL, "M_PopMenu: depth < 1");
 
+    M_WriteChangedConfig(); // [PS2_QUAKE]: on leaving each page, not only the last
     m_menudepth--;
 
     m_drawfunc = m_layers[m_menudepth].draw;
@@ -2090,7 +2135,6 @@ static menuaction_s s_save_game_action;
 static menuaction_s s_credits_action;
 static menuseparator_s s_blankline;
 static menulist_s s_save_device_box; // [PS2_QUAKE]
-static int m_game_save_device;       // [PS2_QUAKE]: s_save_device_box.curvalue as the menu opened
 
 void CL_WriteConfiguration(void); // [PS2_QUAKE]: cl_main.c
 
@@ -2220,7 +2264,6 @@ void Game_MenuInit(void)
     s_save_device_box.generic.callback = SaveDeviceFunc;
     s_save_device_box.itemnames = save_device_names;
     s_save_device_box.curvalue = Sys_SaveTargetIsCard() ? 0 : 1;
-    m_game_save_device = s_save_device_box.curvalue;
 
     s_credits_action.generic.y = 80;
 
@@ -2246,14 +2289,8 @@ void Game_MenuDraw(void)
 
 const char * Game_MenuKey(int key)
 {
-    // [PS2_QUAKE]: A save device changed here takes config.cfg with it on the way out, as the
-    // video menu writes its changes: the next boot reads the config from where saves go now, and
-    // a console is usually switched off rather than quit, when the engine writes it otherwise.
-    if (key == K_ESCAPE && s_save_device_box.curvalue != m_game_save_device)
-    {
-        m_game_save_device = s_save_device_box.curvalue;
-        CL_WriteConfiguration();
-    }
+    // [PS2_QUAKE]: a save device changed here goes to config.cfg on the way out, as every menu
+    // change does (M_WriteChangedConfig): the next boot reads the config from where saves go now.
     return Default_MenuKey(&s_game_menu, key);
 }
 

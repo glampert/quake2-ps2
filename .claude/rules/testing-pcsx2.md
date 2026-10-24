@@ -253,6 +253,16 @@ state on the way out, so restore the ini too.
   after a failed operation; an open failure never syncs. Real PFS persistence still needs
   an emulator run with the new ELF, checking `quake2.log` beside `baseq2/` after shutdown.
 
+## Building an older commit beside the tree
+
+For a size or codegen comparison against an older commit without touching the checkout (a test
+may be running from `build/debug`): `git archive <commit> | tar -x -C <scratch>/<commit>`, then
+`cp -R src/tools/{vclpp,vu-checker,miniz}/. <scratch>/<commit>/src/tools/<same>/` (an archive
+holds no submodule contents), and `make -j4` there. The Makefile's paths are relative, so it
+builds its own `build/tools/vclpp` and ELF. Two such builds took about four minutes each
+alongside a running map cycle (2026-10-24). `mips64r5900el-ps2-elf-size` on the unstripped ELFs
+then gives text/data/bss per commit.
+
 ## Quiet map for renderer work
 
 ```

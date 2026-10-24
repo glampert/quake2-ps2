@@ -413,9 +413,9 @@ void StoreCardConfig(const char * text, const u32 sizeBytes)
     Com_Printf("config.cfg saved to %s.\n", card.Describe(kConfigFile));
 }
 
-// The card's copy. Not worth bothering the player over - this runs on quitting, and on leaving the
-// video or the Game menu after a change - so a card that isn't there or has no room just means
-// the console says so. A config the card holds already isn't written, nor even looked for: the
+// The card's copy. Not worth bothering the player over - this runs on quitting, and on leaving a
+// menu page after a change - so a card that isn't there or has no room just means the console
+// says so. A config the card holds already isn't written, nor even looked for: the
 // card is only touched, under the save notice, for one it doesn't have.
 void WriteCardConfig(const char * text, const u32 sizeBytes)
 {

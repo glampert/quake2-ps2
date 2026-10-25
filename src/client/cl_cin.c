@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "client.h"
 #include "ps2/debug/load_trace.h" // [PS2_QUAKE]
+#include "ps2/debug/engine_profile.h" // [PS2_QUAKE]
 
 typedef struct
 {
@@ -597,7 +598,9 @@ void SCR_RunCinematic(void)
     }
 
     cin.pic = cin.pic_pending;
+    PS2_ProfileBegin(PS2_PROF_CINEMATIC); // [PS2_QUAKE]: the frame's reads and decode, as the frame log's Cinematic column
     cin.pic_pending = SCR_ReadNextFrame();
+    PS2_ProfileEnd(PS2_PROF_CINEMATIC); // [PS2_QUAKE]
 
     if (!cin.pic_pending)
     {

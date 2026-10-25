@@ -88,6 +88,16 @@ bool ps2::audio::OutputHeld()
     return (s_soundHolds > 0) || s_loadingHold;
 }
 
+int ps2::audio::SubmitFreeBytes()
+{
+    return ps2::audio::OutputHeld() ? -1 : s_mixRing.LastFreeBytes();
+}
+
+int ps2::audio::DeviceRingBytes()
+{
+    return s_device.RingBytes();
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------------------------------------------

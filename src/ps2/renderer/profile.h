@@ -58,6 +58,13 @@ PS2_PROFILE_DECLARE_EVENT(Music);
 // PS2_BeginFrame rolls the profiler over, so the frame log has it one row early.
 PS2_PROFILE_DECLARE_EVENT(Input);
 
+// SCR_RunCinematic's SCR_ReadNextFrame (client/cl_cin.c): a cinematic frame's reads, which FsIo
+// nests inside, and its Huffman decode. The stream's stdio buffer refills from the drive land here,
+// so against FsIo it says how much of a cinematic frame is the drive and how much the decode. It
+// runs after SCR_UpdateScreen's rollover, so unlike Server and ClParse it sits in the row of the
+// Frame it stretched.
+PS2_PROFILE_DECLARE_EVENT(Cinematic);
+
 } // namespace ps2::prof_evt
 
 // ------------------------------------------------------------------------------------------------

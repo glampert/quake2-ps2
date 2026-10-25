@@ -35,7 +35,8 @@ void MixRing::Drain(AudsrvDevice & device, const int paintedFrames)
 
     // FreeBytes() is already frame aligned and holds back the guard frame, so this
     // is exactly what audsrv will accept without dropping anything.
-    const int freeFrames = device.FreeBytes() / AudsrvDevice::kFrameBytes;
+    m_lastFreeBytes      = device.FreeBytes();
+    const int freeFrames = m_lastFreeBytes / AudsrvDevice::kFrameBytes;
     if (freeFrames < pending)
     {
         pending = freeFrames;

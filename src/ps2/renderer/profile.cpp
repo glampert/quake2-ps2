@@ -14,6 +14,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/view.h"
+#include "ps2/audio/sound_hold.h" // SubmitFreeBytes, DeviceRingBytes
 
 #include <cstdio>
 
@@ -61,6 +62,7 @@ PS2_PROFILE_DEFINE_EVENT(SndMix,     "SndMix",      kScreenOverlay, 30);
 PS2_PROFILE_DEFINE_EVENT(FsIo,       "FsIo",        kScreenOverlay, 31);
 PS2_PROFILE_DEFINE_EVENT(Music,      "Music",       kScreenOverlay, 32);
 PS2_PROFILE_DEFINE_EVENT(Input,      "Input",       kScreenOverlay, 33);
+PS2_PROFILE_DEFINE_EVENT(Cinematic,  "Cinematic",   kScreenOverlay, 34);
 
 } // namespace ps2::prof_evt
 
@@ -77,6 +79,7 @@ static ps2::debug::ProfileEvent * const s_engineEvents[PS2_PROF_SITE_COUNT] = {
     &ps2::prof_evt::ClScene, // PS2_PROF_CL_SCENE
     &ps2::prof_evt::SndMix,  // PS2_PROF_SND_MIX
     &ps2::prof_evt::FsIo,    // PS2_PROF_FS_IO
+    &ps2::prof_evt::Cinematic, // PS2_PROF_CINEMATIC
 };
 
 static ps2::debug::CpuCycles s_engineStart[PS2_PROF_SITE_COUNT];
@@ -115,7 +118,7 @@ namespace {
 constexpr int kBatchFrames = 64;
 
 // Columns taken from the profile registry, in header order.
-constexpr int kNumEvents = 34;
+constexpr int kNumEvents = 35;
 
 // One frame's sample. Timings are held as raw cycles and converted at dump time,
 // so capture stays a load and a store per field.
@@ -146,6 +149,14 @@ struct FrameSample
     // stopped waiting for the GS). chainKicks is the number this refactor exists
     // to bring down.
     int chainKB, chainKicks, chainDrains;
+
+    // Free bytes in audsrv's IOP ring (~106 ms, DeviceRingBytes) as the frame's SNDDMA_Submit found
+    // it, before it topped the ring up; -1 while the output is held. In steady state it is what the
+    // IOP played since the previous submit, so a frame that blocked shows how close the ring came to
+    // running dry, which is when audsrv starts replaying its last tenth of a second (sound_hold.h).
+    // Once it has run dry the reading is no longer monotonic (the read cursor laps the write cursor),
+    // so a Frame longer than the ring is the certain sign; this column shows the near misses.
+    int sndFree;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -290,14 +301,16 @@ void WriteBatch()
         Emit("FLOG#hdr,frame,"
                     "Frame,VSync,GsWait,DmaSend,DmaFlush,View,World,Vis,MarkLeaves,BspWalk,LmChain,"
                     "TexChains,LmChains,Entities,EntCull,EntShade,EntColorLUT,EntGeom,EntShadow,EntBrush,"
-                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,Input,"
+                    "Particles,AlphaSurfs,TurbSurfs,Sky,Ui,Overlay,Sound,Server,ClParse,ClScene,SndMix,FsIo,Music,Input,Cinematic,"
                     "nodes,surfs,surfsAlpha,surfsTurb,skyFaces,tris,trisClipped,trisCulled,"
                     "clipNear,clipNoNear,clipMixed,clipFar,clipMaxV,"
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
-                    "chainKB,chainKicks,chainDrains\n");
+                    "chainKB,chainKicks,chainDrains,sndFree\n");
         Emit("FLOG#note,timings are microseconds\n");
+        Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held\n",
+             ps2::audio::DeviceRingBytes());
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -321,7 +334,7 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled,
                           s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
@@ -329,7 +342,7 @@ void WriteBatch()
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
-                          s.chainKB, s.chainKicks, s.chainDrains);
+                          s.chainKB, s.chainKicks, s.chainDrains, s.sndFree);
         }
 
         Emit("%s", line);
@@ -385,7 +398,7 @@ void FrameLogCapture()
         &prof_evt::Particles,   &prof_evt::AlphaSurfs, &prof_evt::TurbSurfs, &prof_evt::Sky,
         &prof_evt::Ui,          &prof_evt::Overlay,    &prof_evt::Sound,     &prof_evt::Server,
         &prof_evt::ClParse,     &prof_evt::ClScene,    &prof_evt::SndMix,    &prof_evt::FsIo,
-        &prof_evt::Music,       &prof_evt::Input,
+        &prof_evt::Music,       &prof_evt::Input,      &prof_evt::Cinematic,
     };
     for (int i = 0; i < kNumEvents; ++i)
     {
@@ -434,6 +447,10 @@ void FrameLogCapture()
     s.chainKB     = static_cast<int>(cmdbuf::BytesLastFrame() / 1024u);
     s.chainKicks  = cmdbuf::KicksLastFrame();
     s.chainDrains = cmdbuf::EmergencyDrainsLastFrame();
+
+    // The finished frame's SNDDMA_Submit (S_Update runs after SCR_UpdateScreen's rollover, so its
+    // reading belongs to the row being captured here).
+    s.sndFree = ps2::audio::SubmitFreeBytes();
 }
 
 void FrameLogFlush()

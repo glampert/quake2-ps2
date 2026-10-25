@@ -42,6 +42,9 @@ public:
     // is full, which is the normal steady state - it is what paces submission.
     int FreeBytes() const;
 
+    // audsrv's IOP ring in bytes at the rate Init picked (about 106 ms); 0 before Init.
+    int RingBytes() const { return m_ringBytes; }
+
     // Appends to the IOP ring. sizeBytes must be a multiple of kFrameBytes and no
     // larger than the FreeBytes() reading it was derived from. Returns the number of
     // bytes actually accepted, which can be smaller; anything beyond that is dropped

@@ -55,6 +55,11 @@ namespace ps2::audio {
 // mixer paints goes to audsrv until the release.
 bool OutputHeld();
 
+// For the frame log: the free bytes of audsrv's ring the last SNDDMA_Submit found before it
+// topped it up (-1 while held), and the ring's size. See FrameSample::sndFree in renderer/profile.cpp.
+int SubmitFreeBytes();
+int DeviceRingBytes();
+
 } // namespace ps2::audio
 #endif /* __cplusplus */
 

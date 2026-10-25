@@ -1137,7 +1137,8 @@ later, so the shot has no menu on it), `god mode` (an on/off switch sending `god
 game's own flag through `PS2_GodModeOn` in g_cmds.c), `give all` (`give all`: every weapon, ammo,
 body armor, the power shield, health and every other item), and in the builds that have them
 `quit after a test` (`ps2_test_quit`),
-`start perf test` (`ps2_perftest`, profiling builds) and `start map cycle` (`ps2_testmaps`, debug
+`start perf test` (`ps2_perftest`, profiling builds: demo1, demo2, then the `eou1_` and `ntro`
+cinematics) and `start map cycle` (`ps2_testmaps`, debug
 builds). The two cheat rows need a game in progress (not the attract demos) and, as the console
 commands do, `cheats 1` in deathmatch; otherwise they say why under the menu. The two report rows
 open the console on what they printed, stopping the attract loop

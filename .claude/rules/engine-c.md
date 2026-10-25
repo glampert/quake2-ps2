@@ -74,7 +74,8 @@ paths:
   past it expecting the next file's bytes.
 - The I/O log (`PS2_QUAKE_IO_LOG`, `ps2/debug/io_log.h`, ships 0) times every file call of a
   load: hooks around `FS_FOpenFile`, `FS_Read`, `FS_LoadFile` and `FS_FCloseFile`. Raw
-  `fread` on a stream (the demo and cinematic readers) isn't seen.
+  `fread` on a stream (the demo and cinematic readers) isn't seen. The frame log's `Cinematic`
+  column (`PS2_PROF_CINEMATIC` in `SCR_RunCinematic`) times a cinematic frame's reads and decode.
 - The load trace (`PS2_LOAD_TRACE`, `ps2/debug/load_trace.h`) covers the path from
   `SCR_FinishCinematic` to the first `R_EndFrame` after registration. `PS2_QUAKE_LOAD_TRACE`
   ships as 0. To debug a load, pass `-DPS2_QUAKE_LOAD_TRACE=1` in `CONFIG_DEFS` (clear

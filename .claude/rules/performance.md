@@ -272,12 +272,25 @@ the guard band to 0.25 through a test cvar (since removed), so the PCSX2 compari
   also appended to `baseq2/frame_log.txt` with one open/write/close. A profiling release for a
   console capture:
   `rm -rf build/release/src && make release CONFIG_DEFS='-DPS2_QUAKE_DEBUG=0 -DPS2_QUAKE_ASSERTS=0 -DPS2_QUAKE_PROFILE=1 -DPS2_QUAKE_FRAME_LOG_FILE=1 -DNDEBUG'`,
-  then the same `rm -rf` and a plain `make release` afterwards. Keep `ps2_logfile` off for a
+  then the same `rm -rf` and a plain `make release` afterwards. Adding `-DPS2_QUAKE_IO_LOG=1`
+  gives the same run an `io_log.txt` of every plaque-covered load (per-file read speeds, which
+  calibrate the USB command-cost model above); its one write per load lands in the first frame
+  after the plaque, so expect a spike in each demo's first row. Keep `ps2_logfile` off for a
   capture, since every console print through it is a ~23 ms USB write. The perf test allows
   240 s for a USB map load. Start it from the Options menu's debug page ("start perf test"),
   or with `ps2_perftest "1"` in the config.
 
-## Capture recipe (`ps2_perftest`, ~2.5 min, debug build)
+## Capture recipe (`ps2_perftest`, ~6.5 min in PCSX2, debug build)
+
+The run plays demo1 and demo2, then two cinematics through `gamemap`: `eou1_.cin` (20 s) and
+`ntro.cin` (210 s), since 2026-10-25. The demos come first, so their rows keep the frame numbers
+of older captures. Each cinematic gets a `FLOG#map` marker when its server comes up. A
+cinematic's frame-read work is the `Cinematic` column (`PS2_PROF_CINEMATIC` around
+`SCR_ReadNextFrame`: the frame's reads, FsIo nested inside, and its Huffman decode), and
+`sndFree` is the free bytes of audsrv's ring at the frame's submit (-1 held; the header's
+`FLOG#note` gives the ring's size, 9400 at 22 kHz). A `Frame` longer than the ring is a
+certain audio underrun (audsrv loops its last 106 ms, `sound_hold.h`); `sndFree` shows how
+close the others came, and loses meaning once the ring has run dry.
 
 1. Back up `baseq2/config.cfg` and set `ps2_perftest "1"` in it. `make run`.
 2. Wait for `PerfRun: complete` / `FLOG#end` in emulog, then copy `emulog.txt` into

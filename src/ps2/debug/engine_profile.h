@@ -32,6 +32,7 @@ enum
     PS2_PROF_CL_SCENE, /* CL_AddEntities - entity, particle, temp entity and dlight lists */
     PS2_PROF_SND_MIX,  /* S_Update - spatialize and mix; the "Sound" probe nests inside it */
     PS2_PROF_FS_IO,    /* FS_FOpenFile/FS_Read/FS_FCloseFile - nests inside whichever phase loads */
+    PS2_PROF_CINEMATIC, /* SCR_ReadNextFrame - a cinematic frame's reads (FsIo nests inside) and Huffman decode */
 
     PS2_PROF_SITE_COUNT
 };

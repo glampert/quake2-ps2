@@ -15,6 +15,12 @@
  *  SV_DemoCompleted -> SV_Nextserver issues "killserver" instead of chaining. The server
  *  going away is therefore the demo finishing, and that is what the state machine watches.
  *
+ *  The run ends with two cinematics, issued through "gamemap" as the level chains issue them
+ *  ("eou1_.cin+base2"). A cinematic is the one stream the game reads from the drive while it
+ *  draws frames, so its stdio refills are what a capture of it is for. Without a '+' in the
+ *  name, SCR_FinishCinematic's "nextserver" finds nothing to chain to and kills the server:
+ *  the same end signal as a demo's.
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
@@ -26,6 +32,7 @@
 #endif // PS2_QUAKE_PROFILE
 
 #include <cstdio>
+#include <cstring>
 
 namespace ps2::test {
 namespace {
@@ -37,11 +44,19 @@ namespace {
 static const cvar_t * s_enabled = nullptr;
 
 #if PS2_QUAKE_PROFILE
-// The demos the stock attract loop cycles through, in its order. The idlog.cin
-// cinematic those aliases interleave is deliberately left out: a cinematic is a
-// full screen blit down a path the world renderer never touches, so it would
-// only pad the log with frames that measure nothing we are trying to compare.
-constexpr const char * kDemos[] = { "demo1.dm2", "demo2.dm2" };
+// What the run plays, in order: the demos the stock attract loop cycles through, in its order,
+// then two cinematics. The demos come first so their rows keep the frame numbers of older
+// captures. eou1_.cin is a typical between-levels cinematic (20 s, about 290 KB/s); ntro.cin
+// is the heaviest the game has (210 s, 384 KB/s averaged, 700 KB/s peaks), the one a USB stick
+// can least keep up with. idlog.cin, which the attract aliases interleave, stays out: its 6 s
+// say nothing the other two don't.
+constexpr const char * kSequence[] = { "demo1.dm2", "demo2.dm2", "eou1_.cin", "ntro.cin" };
+
+bool IsCinematic(const char * const name)
+{
+    const char * const dot = std::strrchr(name, '.');
+    return dot != nullptr && std::strcmp(dot, ".cin") == 0;
+}
 
 // Com_ServerState() hands back a server_state_t (server/server.h) as a plain int.
 // Only "no map loaded" is needed here, and only that it is the first enumerator -
@@ -94,7 +109,7 @@ enum class State
 {
     Idle,    // Cvars not applied yet; set them and drop whatever is running.
     Killing, // Waiting for the startup server to go away.
-    Loading, // demomap issued, waiting for the demo's server to come up.
+    Loading, // demomap or gamemap issued, waiting for its server to come up.
     Playing  // Demo running - the part being measured.
 };
 
@@ -132,10 +147,12 @@ void RestoreRunCvars()
 
 void StartDemo()
 {
-    Com_Printf("PerfRun: [%d/%d] playing %s\n",
-               s_nextDemo + 1, ArrayLength(kDemos), kDemos[s_nextDemo]);
+    const char * const name = kSequence[s_nextDemo];
+    Com_Printf("PerfRun: [%d/%d] playing %s\n", s_nextDemo + 1, ArrayLength(kSequence), name);
 
-    Cbuf_AddText(va("demomap %s\n", kDemos[s_nextDemo]));
+    // A cinematic goes through gamemap, as the level chains issue it: SV_Map spawns a cinematic
+    // server, the client plays the file, and with no '+' to chain to the end kills the server.
+    Cbuf_AddText(va("%s %s\n", IsCinematic(name) ? "gamemap" : "demomap", name));
 
     s_issuedAtMs = Sys_Milliseconds();
     s_state      = State::Loading;
@@ -145,14 +162,14 @@ void StartDemo()
 void NextDemoOrFinish()
 {
     ++s_nextDemo;
-    if (s_nextDemo < ArrayLength(kDemos))
+    if (s_nextDemo < ArrayLength(kSequence))
     {
         StartDemo();
         return;
     }
 
-    Com_Printf("PerfRun: complete - %d of %d demos played, %d timed out.\n",
-               ArrayLength(kDemos) - s_failed, ArrayLength(kDemos), s_failed);
+    Com_Printf("PerfRun: complete - %d of %d played, %d timed out.\n",
+               ArrayLength(kSequence) - s_failed, ArrayLength(kSequence), s_failed);
 
     // The frame log writes in batches, so the tail of the run is still buffered.
     // This also marks the end, which is what tells a completed capture apart from
@@ -203,8 +220,8 @@ void RunPerfTest()
         ApplyRunCvars();
         Cvar_Set("ps2_frame_log", "1");
 
-        Com_Printf("PerfRun: starting - %d demos, developer 0, overlays off, frame log on.\n",
-                   ArrayLength(kDemos));
+        Com_Printf("PerfRun: starting - %d demos and cinematics, developer 0, overlays off, frame log on.\n",
+                   ArrayLength(kSequence));
 
         // Whatever the startup left running - the d1 attract loop, or a map forced
         // in Qcommon_Init - is still up. Drop it, so the first demo's server coming
@@ -232,12 +249,19 @@ void RunPerfTest()
         {
             s_startedAtMs = Sys_Milliseconds();
             s_state       = State::Playing;
+
+            // A map marks itself in the frame log when it registers (PS2_BeginRegistration); a
+            // cinematic registers nothing, so mark it here, where its server has just come up.
+            if (IsCinematic(kSequence[s_nextDemo]))
+            {
+                ps2::debug::FrameLogMarkMap(kSequence[s_nextDemo]);
+            }
             break;
         }
         if ((Sys_Milliseconds() - s_issuedAtMs) > kLoadTimeoutMs)
         {
             Com_Printf("PerfRun: '%s' never came up after %d seconds - moving on.\n",
-                       kDemos[s_nextDemo], kLoadTimeoutMs / 1000);
+                       kSequence[s_nextDemo], kLoadTimeoutMs / 1000);
             ++s_failed;
             NextDemoOrFinish();
         }
@@ -255,7 +279,7 @@ void RunPerfTest()
         if ((Sys_Milliseconds() - s_startedAtMs) > kPlayTimeoutMs)
         {
             Com_Printf("PerfRun: '%s' still running after %d minutes - moving on.\n",
-                       kDemos[s_nextDemo], kPlayTimeoutMs / (60 * 1000));
+                       kSequence[s_nextDemo], kPlayTimeoutMs / (60 * 1000));
             ++s_failed;
             NextDemoOrFinish();
         }

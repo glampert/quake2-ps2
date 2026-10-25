@@ -52,10 +52,15 @@ public:
     // `paintedtime`. Whatever doesn't fit stays put and goes out on a later frame.
     void Drain(AudsrvDevice & device, int paintedFrames);
 
+    // The device's FreeBytes() as the last Drain found it, before it enqueued anything: what the
+    // IOP had played out since the drain before. For the frame log (renderer/profile.cpp).
+    int LastFreeBytes() const { return m_lastFreeBytes; }
+
 private:
     // Total frames handed to the device since Reset(). Free-running; the mask in
     // PositionInSamples() is what folds it back into the ring.
     int m_submittedFrames = 0;
+    int m_lastFreeBytes   = 0;
 
     alignas(64) u8 m_buffer[kSizeBytes] = {};
 };

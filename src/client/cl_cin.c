@@ -721,8 +721,13 @@ void SCR_PlayCinematic(const char * arg)
     Huff1TableInit();
 
     // switch up to 22 khz sound if necessary
+    // [PS2_QUAKE]: up only, as the comment says. id's test was !=, which with this port's 22 kHz
+    // default switched the mixer *down* for the eight 11 kHz unit-end cinematics: a snd_restart
+    // frees every loaded sound and reloads the temp-entity ones (2.8 s from a USB stick), then
+    // SCR_StopCinematic restarts again to switch back (another 1.7 s). S_RawSamples resamples a
+    // lower rate into the mixer itself, so nothing is lost by staying at 22 kHz.
     old_khz = Cvar_VariableValue("s_khz");
-    if (old_khz != cin.s_rate / 1000)
+    if (old_khz < cin.s_rate / 1000)
     {
         cin.restart_sound = true;
         Cvar_SetValue("s_khz", cin.s_rate / 1000);
@@ -782,8 +787,13 @@ qboolean CinematicTest_PlayDirect(const char * filename)
     Huff1TableInit();
 
     // switch up to 22 khz sound if necessary
+    // [PS2_QUAKE]: up only, as the comment says. id's test was !=, which with this port's 22 kHz
+    // default switched the mixer *down* for the eight 11 kHz unit-end cinematics: a snd_restart
+    // frees every loaded sound and reloads the temp-entity ones (2.8 s from a USB stick), then
+    // SCR_StopCinematic restarts again to switch back (another 1.7 s). S_RawSamples resamples a
+    // lower rate into the mixer itself, so nothing is lost by staying at 22 kHz.
     old_khz = Cvar_VariableValue("s_khz");
-    if (old_khz != cin.s_rate / 1000)
+    if (old_khz < cin.s_rate / 1000)
     {
         cin.restart_sound = true;
         Cvar_SetValue("s_khz", cin.s_rate / 1000);

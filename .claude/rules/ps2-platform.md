@@ -122,6 +122,17 @@ paths:
 
   So the reset was never the cost; the HDD is. A smaller game partition, early in the chain,
   mounts faster.
+- **The launcher's USB drivers froze a profiling release** (2026-10-26, wLaunchELF 4.43a, `mass:`
+  launch, no keyboard attached): the game reused the launcher's usbd and usbhdfsd, loaded base2 from
+  the stick in 31.7 s (reads fine, the I/O log written at the load's end), then froze within the
+  first 64 frames of the demo, before the frame log's first append to `frame_log.txt`. The same ELF
+  with `-DPS2_QUAKE_ALWAYS_RESET_IOP=1` (the game's BDM stack) ran the full 12-minute capture from
+  the same stick. Not narrowed further: candidates are the first write-append through usbhdfsd 1.6
+  (open `O_WRONLY`, `lseek` to the end, write) and the music reader's reads through it. A release
+  has no exception handler, so a hang and a crash look the same; `quake2_dbg_diag_2026-10-26.elf`
+  in `build/baselines/` would report a crash to quake2.log. Until it is understood, a run that
+  writes to the stick (captures, logs) wants the reset build, and the 80 ms reuse boot is suspect
+  for anything that writes.
 - **What launchers leave on the IOP** (their sources, read 2026-10-12). wLaunchELF before
   2026-05-26, the 2019 release included, resets the IOP only for an ELF on `hdd0:`. For
   `mass:`/`mc:` it leaves iomanX, fileXio (with a 128 KB buffer), the ROM's SIO2MAN and PADMAN

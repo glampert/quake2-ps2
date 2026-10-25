@@ -33,6 +33,12 @@ paths:
   It is unfixed and was reported to the user. Avoid long quoted tokens in scripts.
 - `Sys_FindFirst` is a stub on this port (always nullptr), so `FS_ExecAutoexec` never runs
   `autoexec.cfg`, and anything else that enumerates files gets nothing.
+- **`SCR_PlayCinematic` switched the mixer to the cinematic's rate** (`s_khz` != `cin.s_rate/1000`
+  → `CL_Snd_Restart_f`), then back in `SCR_StopCinematic`. With this port's 22 kHz default that fired
+  for the eight 11 kHz unit-end cinematics (`eou1_`-`eou8_`; `ntro`, `end` and `idlog` are 22 kHz),
+  and each restart is `S_Shutdown` (every loaded sound freed) plus `CL_RegisterSounds` (the temp-entity
+  sounds reloaded: 2.8 s from a USB stick, 1.7 s more at the end). Since 2026-10-26 the test is `<`,
+  up only, as id's own comment says; `S_RawSamples` resamples a lower rate into the mixer anyway.
 - `wait` runs twice per frame (`Cbuf_Execute` in `Qcommon_Frame` and `CL_SendCommand`).
 - Quake II has no `nomonsters`. `deathmatch` and `cheats` are `CVAR_LATCH`, and `sv_init.c`
   forces `maxclients` to 8 under deathmatch.

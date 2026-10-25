@@ -96,15 +96,36 @@ paths:
     base2 load complete (31.7 s, 12.26 MB read at 504 KB/s overall; files over 200 KB at 620-680
     KB/s, files under 8 KB at a median 140 KB/s, 13 ms each), then nothing: `frame_log.txt` holds
     only the `FLOG#map` marker, so the freeze fell between the load's end and the first 64-frame
-    batch, 1.3 s into demo1. Not diagnosed. What differs from the HDD run: a `mass:` launch from
-    wLaunchELF reuses the launcher's usbd and usbhdfsd (an `hdd0:` launch resets the IOP, so the
-    game's own drivers run there), the frame log's first *append* (open `O_WRONLY`, `lseek` to the
-    end, write) went through that driver, and the stick's config had `in_keyboard 1`, so the
-    keyboard driver and its polls ran on the launcher's usbd. A release build has no exception
-    handler, so a crash and a hang both end as a frozen screen. Two ELFs for the next attempt are in
-    `build/baselines/`: `quake2_dbg_diag_2026-10-26.elf` (debug: exception report into quake2.log,
-    frame and I/O logs on) and `quake2_profile_reset_2026-10-26.elf` (the profiling release with
-    `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so the game's own BDM stack serves the stick).
+    batch, 1.3 s into demo1. **The same ELF built with `PS2_QUAKE_ALWAYS_RESET_IOP=1` ran the whole
+    capture from the stick**, so the launcher's reused USB drivers are the cause (see
+    [ps2-platform.md](ps2-platform.md)). No USB keyboard was attached. A release build has no
+    exception handler, so a crash and a hang both end as a frozen screen; the debug
+    `quake2_dbg_diag_2026-10-26.elf` in `build/baselines/` (exception report, frame and I/O logs)
+    is there to narrow it to usbd or usbhdfsd if that is ever worth a run.
+- **The USB baseline of 2026-10-26** (same console, the reset build above, wLaunchELF `mass:`
+  launch, the 32 KB-cluster stick; `console-usb-2026-10-26.flog` and `frame_log_usb_reset_2026-10-26.txt`
+  in `build/baselines/`). The user opened the Options menu during demo1's first seconds (rows
+  373-453 load the menu pics, 1546 is the config write on leaving it), so its frame numbers don't
+  match the HDD capture's; compare by `FLOG#map` segment.
+  - Demos: 0.21% of steady frames dropped, like the HDD. The demo stream's 64 KB refill is
+    125 ms (Server, row 2974). **The pickups: slugs model and skin 91 ms, `a_slugs.pcx` plus
+    `rg_hum.wav` 147 ms** (ClParse, I/O nearly all of it), 2.1x and 2.4x the HDD, 5-7 PAL fields,
+    the second past the audsrv ring.
+  - **Cinematics: a 64 KB stdio refill is 93 ms** (p50 of 971 undisturbed refills; the model's
+    2 cluster commands plus 64 KB at ~900 KB/s said 83), and every refill frame runs 120-130 ms,
+    past the 106 ms ring: 86 of eou1_'s 88 refills and 1236 of ntro's 1240. That is the stutter,
+    about 6 times a second on ntro. Decode is the HDD's 10-13 ms.
+  - **The stick stalls its reads for ~0.5 s after a write.** For 4-28 rows after each frame-log
+    dump (a ~20 KB append) the refills take 420-600 ms instead of 93, then drop back at once:
+    269 of ntro's 1240 refills, exactly the 2-3 after each dump. A capture's own writes poison a
+    fifth of its cinematic rows, so judge refills by the p50 or by rows more than 30 past a dump
+    (the dump rows are the gaps in the frame numbering). The same applies to any write the game
+    makes on a stick (autosave, config.cfg, logs): the half second after it reads slowly.
+  - **Each cinematic start and end cost 4-6 s on USB**, more than the stutter did: 0.3 s for
+    `pics/loading.pcx`, 1.6 s to open the file and read its 64 KB table and first frame, and
+    2.8 s of `CL_RegisterSounds` reloading the temp-entity sounds after a `snd_restart`, with 1.7 s
+    of the same at the end. The restart came from `SCR_PlayCinematic`'s rate check (see
+    [engine-c.md](engine-c.md)); it is now up-only, so the eight 11 kHz cinematics no longer pay it.
 
 ## Compressed packs (`pakN.pkz`) and load time
 

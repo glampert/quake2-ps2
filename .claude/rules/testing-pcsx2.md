@@ -59,6 +59,12 @@
   shifts the demo for the shots after it. Shots are uncompressed 24-bit TGAs (18-byte
   header, BGR rows), so a mean pixel value is a few lines of Python: the demo's first shot read
   20.1 at the defaults, 64.0 at `vid_gamma 0.5`, 88.9 with `vid_contrast 2` too, 8.2 at 1.3.
+- **Particles in the attract demo:** a series of shots from the `CDAudio_Play` hook, one every
+  two `w100`s, catches the first soldier's blood in shots 3, 4 and 7 (the 4th under the red
+  damage flash) and blaster sparks in 5 (2026-10-25). The `r_particles` looks were checked that
+  way, as pairs five frames apart (`r_particles 2;w10;screenshot cN;r_particles 1;w10;screenshot
+  hN`); without PIL, a 160x120 crop around the centre upscaled 4x by a few lines of Python (TGA
+  rows in, PNG out through `zlib`) makes the squares readable.
 - The user may be at the machine while a run is up, and may close it. Don't relaunch PCSX2
   after they close a run without a reason.
 - Runs read and rewrite `baseq2/config.cfg` (tracked: the default the release packages ship; the

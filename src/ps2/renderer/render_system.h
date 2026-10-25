@@ -380,7 +380,9 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
 // 'quadOffset' is the world-space vector from a particle's anchor corner to its opposite one: the
 // camera's (up + right), pre-scaled by the caller's blow-up (ref_gl uses 1.5). It must be
 // orthogonal to the view axis - that is what lets every corner share the centre's depth and the
-// billboard draw as one axis-aligned sprite.
+// billboard draw as one axis-aligned sprite. With DrawFlags::Untextured the sprite is a flat
+// rectangle of the particle's colour (the classic square particles, r_particles 2); the texture is
+// still bound, as every batch binds one.
 void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
                    const math::Vec3 & quadOffset, const vu1::ParticleVertex * particles,
                    int count, DrawFlags flags = DrawFlags::Blended);

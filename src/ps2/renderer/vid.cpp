@@ -185,6 +185,7 @@ constexpr Choice kMipBiases[]    = { { "-1" }, { "-0.5" }, { "0" }, { "0.5" }, {
 constexpr Choice kSkyMips[]      = { { "0", "full" }, { "1", "half" } };
 constexpr Choice kDLightModes[]  = { { "0", "flares" }, { "1", "lightmaps" }, { "2", "vertex lighting" } };
 constexpr Choice kDLightScales[] = { { "0.05" }, { "0.1" }, { "0.15" }, { "0.2" }, { "0.25" }, { "0.3" } };
+constexpr Choice kParticles[]    = { { "1", "hd" }, { "2", "classic" } };
 
 // vid_gamma from 1.3 down to 0.5, so the slider brightens to the right, in the steps id's
 // vid_menu.c brightness slider had; vid_contrast from 1 to 2, as QuakeSpasm's and the Quake port's.
@@ -224,6 +225,7 @@ constexpr Setting kSettings[] = {
     { "ps2_dynamic_lightmaps", "dynamic lights",    "how explosions and muzzle flashes light the world",     Applies::Now,     true,  kDLightModes,  ps2::ArrayLength(kDLightModes)  },
     { "ps2_dlight_scale",      "dlight brightness", "strength of the dynamic lights in vertex mode",         Applies::Now,     false, kDLightScales, ps2::ArrayLength(kDLightScales) },
     { "ps2_md2_shadows",       "model shadows",     "blob shadows under monsters and items",                 Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
+    { "r_particles",           "particles",         "hd: soft round sprites; classic: ref_gl's flat squares", Applies::Now,     false, kParticles,    ps2::ArrayLength(kParticles)    },
 };
 
 constexpr int kNumSettings = ps2::ArrayLength(kSettings);

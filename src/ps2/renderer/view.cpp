@@ -67,6 +67,7 @@ static const cvar_t * s_skipBrushModels   = nullptr;
 static const cvar_t * s_skipSprites       = nullptr;
 static const cvar_t * s_skipEntities      = nullptr;
 static const cvar_t * s_skipParticles     = nullptr;
+static const cvar_t * s_particles         = nullptr;
 static const cvar_t * s_forceNullModels   = nullptr;
 static const cvar_t * s_skipWeaponModel   = nullptr;
 static const cvar_t * s_dynamicLightmaps  = nullptr;
@@ -2341,15 +2342,31 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 // VU1: the EE writes one quadword per particle - packed colour and world origin
 // - and transforms nothing.
 //
-// Each particle is a soft round sprite anchored at its origin and spanning the
-// camera's (up + right), blown up 1.5x as ref_gl does. Because up and right are
-// orthogonal to forward, every corner shares the anchor's depth, so the quad
-// projects to an axis-aligned screen rectangle and draws as a single GS sprite
-// (see particles.vcl). The distance blow-up that keeps far particles a pixel
-// wide rides along in the microprogram.
+// Each particle is a sprite anchored at its origin and spanning the camera's
+// (up + right), scaled. Because up and right are orthogonal to forward, every
+// corner shares the anchor's depth, so the quad projects to an axis-aligned
+// screen rectangle and draws as a single GS sprite (see particles.vcl). The
+// distance blow-up that keeps far particles a pixel wide rides along in the
+// microprogram.
+//
+// Two looks, r_particles: 1 is a soft round sprite, the particle image's
+// coverage falling off to the edge of a quad blown up 1.5x as ref_gl's textured
+// path does; 2 is ref_gl's classic look, the flat square its GL_POINTS path drew
+// on the hardware of the day - the same sprite, untextured, so the whole
+// rectangle takes the particle's colour.
 //
 // Blended, and DrawFlags::Blended masks depth writes, which is what keeps a
 // cloud of them from z-fighting itself (ref_gl's glDepthMask(FALSE)).
+
+// The quad's side, in world units, at each look. The round one is ref_gl's 1.5.
+// The square is sized to GL_POINTS as ref_gl attenuated them (size 40 with
+// a = c = 0.01: 40 / sqrt(0.01 + 0.01 d^2), about 400 / d pixels at 640 wide):
+// a 1-unit side at depth d covers 320 / d pixels here, times the microprogram's
+// 1 + 0.004 d blow-up, which is 4.5 against 4 at 100 units and 7.7 against 8 at
+// 50. The round look's 1.5 would draw the square half again as big as ref_gl's.
+constexpr float kRoundParticleSide  = 1.5f;
+constexpr float kSquareParticleSide = 1.0f;
+
 void RenderParticles(const refdef_t & viewDef)
 {
     PS2_PROFILE_SCOPED_EVENT(prof_evt::Particles);
@@ -2360,15 +2377,22 @@ void RenderParticles(const refdef_t & viewDef)
         return;
     }
 
-    const tex::Texture & texture = tex::ParticleTexture();
+    const bool  classic = static_cast<int>(s_particles->value) == 2;
+    const float side    = classic ? kSquareParticleSide : kRoundParticleSide;
 
-    // The billboard's diagonal: ref_gl's 1.5x blow-up of the camera basis, and
-    // the only direction the microprogram needs, since the sprite is described
-    // by its anchor corner and the opposite one.
+    // The classic squares sample nothing, but a batch still binds a texture, and this one is
+    // resident whenever the round look has drawn.
+    const tex::Texture & texture = tex::ParticleTexture();
+    const rs::DrawFlags  flags   = classic ? (rs::DrawFlags::Blended | rs::DrawFlags::Untextured)
+                                           : rs::DrawFlags::Blended;
+
+    // The billboard's diagonal: the camera basis scaled to the side, and the
+    // only direction the microprogram needs, since the sprite is described by
+    // its anchor corner and the opposite one.
     const math::Vec3 quadOffset = {
-        (s_upVec[0] + s_rightVec[0]) * 1.5f,
-        (s_upVec[1] + s_rightVec[1]) * 1.5f,
-        (s_upVec[2] + s_rightVec[2]) * 1.5f,
+        (s_upVec[0] + s_rightVec[0]) * side,
+        (s_upVec[1] + s_rightVec[1]) * side,
+        (s_upVec[2] + s_rightVec[2]) * side,
     };
 
     // One qword per particle, gathered straight into the command buffer and referenced in place
@@ -2400,7 +2424,7 @@ void RenderParticles(const refdef_t & viewDef)
                    bits_to_u32(in->origin[2]));
     }
 
-    rs::Submit(particles, s_viewProjMatrix, texture, quadOffset);
+    rs::Submit(particles, s_viewProjMatrix, texture, quadOffset, flags);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -2485,6 +2509,7 @@ void Init()
     s_skipSprites       = Cvar_Get("ps2_skip_sprites",        "0",   0); // Debug: skips drawing sprites.
     s_skipEntities      = Cvar_Get("ps2_skip_entities",       "0",   0); // Debug: skips drawing entities.
     s_skipParticles     = Cvar_Get("ps2_skip_particles",      "0",   0); // Debug: skips drawing particles.
+    s_particles         = Cvar_Get("r_particles",             "1",   CVAR_ARCHIVE); // 1 = soft round sprites, 2 = ref_gl's classic flat squares.
     s_forceNullModels   = Cvar_Get("ps2_force_null_models",   "0",   0); // Debug: draw every entity as the octahedron placeholder.
     s_skipWeaponModel   = Cvar_Get("ps2_skip_weapon_model",   "0",   0); // Debug: skips drawing the weapon model.
     s_dynamicLightmaps  = Cvar_Get("ps2_dynamic_lightmaps",   "2",   CVAR_ARCHIVE); // 0 = RenderDLights flare fallback, 1 = per-luxel lightmap rebuild, 2 = per-vertex point lights on VU1 (lightmaps stay static).

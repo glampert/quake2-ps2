@@ -1141,11 +1141,14 @@ ParticleHead MakeParticleHead(const tex::Texture & texture, gs::DrawContext draw
 
     const bool blended = BuildBatchStateBlock(texture, drawCtx, flags, head.stateBlock);
     const int  abe     = blended ? 1 : 0; // Hoisted: see the note in BuildBatchGifTags.
+    const int  tme     = HasDrawFlag(flags, DrawFlags::Untextured) ? 0 : 1;
 
     // One sprite per particle, five registers each: the A+D that sets its colour, then a UV/XYZ2
     // pair per corner. FST selects UV over ST - a screen-aligned sprite needs no perspective
-    // correction. NLOOP 0 here; each chunk ORs in its own.
-    const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, 1, 0, abe, 0, 1, gs::Index(drawCtx), 0);
+    // correction. An untextured batch (the classic square particles) keeps the UVs in the packet
+    // and the GS ignores them, so the one microprogram draws both. NLOOP 0 here; each chunk ORs in
+    // its own.
+    const u64 prim = GIF_SET_PRIM(PRIM_SPRITE, 0, tme, 0, abe, 0, 1, gs::Index(drawCtx), 0);
     head.spriteTag[0] = GIF_SET_TAG(0, 1, 1, prim, GIF_FLG_PACKED, 5);
     head.spriteTag[1] = vu1::kParticleRegList;
     return head;

@@ -31,6 +31,7 @@ bigger picture.
 | `ps2_screen_y` | `0` | `0` | Arch., Menu | As `ps2_screen_x`, rows down (negative: up), -16 to 16: the room above the picture is a few lines on NTSC before it clips. The video menu's "screen y" row. |
 | `vid_contrast` | `1` | `1` | Arch., Menu | The picture's contrast, the same curve's multiplier (the Quake port's, from QuakeSpasm). The "contrast" slider steps it from 1 to 2 in tenths; the console takes 0.25 to 4. Applies at the next frame. |
 | `ps2_polyblend` | `1` | `1` | | Fullscreen damage/powerup/underwater tint (`ref_gl`'s `gl_polyblend`). |
+| `r_particles` | `1` | `1` | Arch., Menu | The particles' look: 1 is the soft round sprite, the particle image's coverage over a quad blown up 1.5x as `ref_gl`'s textured path did; 2 is the classic flat square `ref_gl`'s `GL_POINTS` path drew, the same GS sprite untextured, sized to ref_gl's point attenuation (about 400 / depth pixels). The video menu's "particles" row, "hd" and "classic". Applies at the next frame. |
 
 ## Renderer: textures and sky
 

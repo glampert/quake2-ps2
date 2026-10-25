@@ -668,7 +668,9 @@ chunk while VU1 still works on the current one. There are two microprograms, wri
   `DrawVertex` or two byte-quantized MD2 keyframes lerped on the VU (with a back-face cull);
   its colour arrives packed or is computed on the VU, from four dynamic lights or from the
   model's shade; and turbulent surfaces warp their texture coordinates there too.
-- `particles.vcl` — camera-facing billboards expanded to GS sprites.
+- `particles.vcl` — camera-facing billboards expanded to GS sprites: the soft round sprite
+  through the alpha ramp, or with `r_particles 2` the classic flat squares of `ref_gl`'s
+  `GL_POINTS`, the same sprite untextured.
 
 **Frame chain** ([cmd_buffer.h](src/ps2/renderer/cmd_buffer.h)). Everything a frame sends — the
 clear, every VU1 batch, the 2D overlay — is one DMA source chain built into one of two 768 KB
@@ -1032,7 +1034,8 @@ triangles drawn/clipped/culled, batches, entities, particles, dlights).
 **Renderer toggles:** `ps2_fb_16bit`, `ps2_fb_dither`, `ps2_lightmaps`, `ps2_lightmap_only`,
 `ps2_lightmap_color`, `ps2_lightmap_modulate`, `ps2_dynamic_lightmaps`,
 `ps2_md2_lerp_on`, `ps2_md2_vu_lerp`, `ps2_md2_cullface`, `ps2_md2_shadows`,
-`ps2_polyblend`, `ps2_skymip`, `ps2_sky_full_bounds`.
+`ps2_polyblend`, `ps2_skymip`, `ps2_sky_full_bounds`, `r_particles` (1 soft round sprites,
+2 the classic squares).
 
 **Bring-up scenes:** `ps2_testcube 1` (VU1 path smoke test, with `ps2_testcube_tess`,
 `ps2_testcube_vulerp`, `ps2_testcube_vram_tex_eviction`), `ps2_testcin 1` (cinematic

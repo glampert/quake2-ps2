@@ -73,6 +73,39 @@ paths:
   because it waits out a pending music read (`audio.md`). Server holds the time, one row
   before the slow Frame (see `frame_budget.py`). Only demo playback streams like this.
 
+- **The console baseline of 2026-10-26** (the user's PAL console, profiling release f7c9918 with the
+  I/O log, launched from the HDD; `build/baselines/console-hdd-2026-10-26.flog`, the raw
+  `frame_log_hdd_2026-10-26.txt` and the io_logs beside it; `frame_budget.py --pal`):
+  - Demos: 0.24% of steady frames dropped (14 of 5867). The slow rows are the known classes: the
+    demo stream's 64 KB refills (Server 66-72 ms, charged a row early), one audsrv submit RPC that
+    waited 42 ms on the IOP, and the two mid-demo loads.
+  - **Mid-level loads are I/O even from the HDD:** the slugs ammo model and skin cost 43 ms of
+    ClParse, 41 ms of it FsIo; `a_slugs.pcx` plus `rg_hum.wav` 61 ms, 58 ms of it FsIo. PCSX2 had
+    shown decode as the larger half (plan notes in `misc/docs/plans/background-loading.md`); on a
+    console the drive is 95% of it, and USB reads are slower again. A loader thread for the I/O is
+    the fix that scales; decode comes second.
+  - **Cinematics:** the Huffman decode alone (`Cinematic` minus `FsIo`) is 9.9 ms per cinematic
+    frame on eou1_ (max 11) and 13.0 ms p50, 19.9 p95, 35.4 max on ntro, against ~3 ms in PCSX2:
+    3-4x, a cache-bound tree walk. A 64 KB stdio refill from the HDD is 9.6 ms when the drive's fast
+    path answers and 42-54 ms when its slow one does (the two HDD speeds above); refill frames run
+    39-43 ms p50 and up to 88 ms, so a third of ntro's rows (989 of 9069) take two fields even from
+    the HDD. No frame reached the 106 ms audsrv ring except at the cinematic's start, but `sndFree`
+    was within 2400 bytes of empty in 23 rows: on USB, where a refill is 83-113 ms (2-8 cluster
+    commands plus 64 KB at ~900 KB/s), the same frame is the stutter the user hears.
+  - **The same ELF launched from the USB stick froze** after the first load. `io_log_usb` shows the
+    base2 load complete (31.7 s, 12.26 MB read at 504 KB/s overall; files over 200 KB at 620-680
+    KB/s, files under 8 KB at a median 140 KB/s, 13 ms each), then nothing: `frame_log.txt` holds
+    only the `FLOG#map` marker, so the freeze fell between the load's end and the first 64-frame
+    batch, 1.3 s into demo1. Not diagnosed. What differs from the HDD run: a `mass:` launch from
+    wLaunchELF reuses the launcher's usbd and usbhdfsd (an `hdd0:` launch resets the IOP, so the
+    game's own drivers run there), the frame log's first *append* (open `O_WRONLY`, `lseek` to the
+    end, write) went through that driver, and the stick's config had `in_keyboard 1`, so the
+    keyboard driver and its polls ran on the launcher's usbd. A release build has no exception
+    handler, so a crash and a hang both end as a frozen screen. Two ELFs for the next attempt are in
+    `build/baselines/`: `quake2_dbg_diag_2026-10-26.elf` (debug: exception report into quake2.log,
+    frame and I/O logs on) and `quake2_profile_reset_2026-10-26.elf` (the profiling release with
+    `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so the game's own BDM stack serves the stick).
+
 ## Compressed packs (`pakN.pkz`) and load time
 
 - **What a pkz changes** (PCSX2 `host:`, debug, I/O log, 2026-10-11, first 8 MapCycle loads):

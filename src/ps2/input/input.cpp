@@ -45,6 +45,10 @@ extern unsigned sys_frame_time;
 // Referenced by the options menu (menu.c). Gates stick movement only - buttons
 // keep working regardless, or the menus would become unnavigable.
 cvar_t * in_joystick = nullptr;
+
+// menu.c: whether the controls menu is waiting for a button to bind. No engine header
+// declares it (menu.c keeps its own prototypes).
+qboolean M_IsGrabbingKey(void);
 } // extern "C"
 
 namespace {
@@ -57,32 +61,39 @@ namespace {
 // it goes down: menus/console/message mode get UI navigation keys, gameplay gets
 // JOY/AUX keys driven by the default binds below (rebindable once configs exist).
 // START and SELECT behave the same in both contexts: ESCAPE toggles the menu and
-// '`' is the hardcoded console toggle in keys.c.
+// '`' is the hardcoded console toggle in keys.c. While the controls menu waits for
+// a button to bind (M_IsGrabbingKey), every button sends its game key, so the bind
+// lands on the key the button sends in play; START still cancels and SELECT still
+// opens the console, as their keys are the same both ways.
+//
+// The name is what the controls menu shows for the game key, in place of keys.c's
+// JOY1/AUX1, and marks the keys that menu lists and clears (IN_GamepadKeyName).
 struct ButtonMapping
 {
     u16 padButton;           // PAD_* bit
     int uiKey;               // key sent while a menu/the console has focus
     int gameKey;             // key sent while playing
     const char * gameBind;   // default binding for gameKey (nullptr = leave unbound)
+    const char * name;       // the button, as the controls menu names it (nullptr = not rebindable)
 };
 
 constexpr ButtonMapping kButtonMap[] = {
-    { PAD_UP,       K_UPARROW,    K_AUX5,   "invuse"     },
-    { PAD_DOWN,     K_DOWNARROW,  K_AUX6,   "inven"      },
-    { PAD_LEFT,     K_LEFTARROW,  K_AUX7,   "invprev"    },
-    { PAD_RIGHT,    K_RIGHTARROW, K_AUX8,   "invnext"    },
-    { PAD_CROSS,    K_ENTER,      K_JOY1,   "+moveup"    }, // jump
-    { PAD_CIRCLE,   K_ESCAPE,     K_JOY2,   "+movedown"  }, // crouch
-    { PAD_SQUARE,   K_ENTER,      K_JOY3,   "+use"       },
-    { PAD_TRIANGLE, K_ESCAPE,     K_JOY4,   "cmd help"   },
-    { PAD_L2,       K_PGUP,       K_AUX2,   "+speed"     },
-    { PAD_R2,       K_PGDN,       K_AUX1,   "+attack"    },
-    { PAD_R1,       K_AUX4,       K_AUX4,   "weapprev"   },
-    { PAD_L1,       K_AUX3,       K_AUX3,   "weapnext"   },
-    { PAD_L3,       K_AUX9,       K_AUX9,   nullptr      },
-    { PAD_R3,       K_AUX10,      K_AUX10,  "centerview" },
-    { PAD_START,    K_ESCAPE,     K_ESCAPE, nullptr      },
-    { PAD_SELECT,   '`',          '`',      nullptr      }
+    { PAD_UP,       K_UPARROW,    K_AUX5,   "invuse",     "d-pad up"    },
+    { PAD_DOWN,     K_DOWNARROW,  K_AUX6,   "inven",      "d-pad down"  },
+    { PAD_LEFT,     K_LEFTARROW,  K_AUX7,   "invprev",    "d-pad left"  },
+    { PAD_RIGHT,    K_RIGHTARROW, K_AUX8,   "invnext",    "d-pad right" },
+    { PAD_CROSS,    K_ENTER,      K_JOY1,   "+moveup",    "cross"       }, // jump
+    { PAD_CIRCLE,   K_ESCAPE,     K_JOY2,   "+movedown",  "circle"      }, // crouch
+    { PAD_SQUARE,   K_ENTER,      K_JOY3,   "+use",       "square"      },
+    { PAD_TRIANGLE, K_BACKSPACE,  K_JOY4,   "cmd help",   "triangle"    }, // backspace: clears a bind in the controls menu
+    { PAD_L2,       K_PGUP,       K_AUX2,   "+speed",     "L2"          },
+    { PAD_R2,       K_PGDN,       K_AUX1,   "+attack",    "R2"          },
+    { PAD_R1,       K_AUX4,       K_AUX4,   "weapprev",   "R1"          },
+    { PAD_L1,       K_AUX3,       K_AUX3,   "weapnext",   "L1"          },
+    { PAD_L3,       K_AUX9,       K_AUX9,   nullptr,      "L3"          },
+    { PAD_R3,       K_AUX10,      K_AUX10,  "centerview", "R3"          },
+    { PAD_START,    K_ESCAPE,     K_ESCAPE, nullptr,      nullptr       },
+    { PAD_SELECT,   '`',          '`',      nullptr,      nullptr       }
 };
 
 constexpr int kNumButtons = static_cast<int>(sizeof(kButtonMap) / sizeof(kButtonMap[0]));
@@ -279,6 +290,20 @@ void IN_Frame()
 // IN_Commands - emit key events for button state changes and keystrokes
 // ------------------------------------------------------------------------------------------------
 
+// The controls menu's name for a key the gamepad sends in play, or null for any other key
+// (a keyboard's, or START's and SELECT's, which can't be rebound).
+const char * IN_GamepadKeyName(const int key)
+{
+    for (const ButtonMapping & mapping : kButtonMap)
+    {
+        if (mapping.gameKey == key && mapping.name != nullptr)
+        {
+            return mapping.name;
+        }
+    }
+    return nullptr;
+}
+
 void IN_Commands()
 {
     const u16 buttons = s_gamepad.Buttons();
@@ -287,7 +312,8 @@ void IN_Commands()
     {
         s_oldButtons = buttons;
 
-        const bool uiFocus = (cls.key_dest != key_game);
+        // The controls menu's grab wants the key the button sends in play, not the menu's.
+        const bool uiFocus = (cls.key_dest != key_game) && !M_IsGrabbingKey();
 
         for (int i = 0; i < kNumButtons; ++i)
         {

@@ -796,12 +796,19 @@ them already:
 | Cross | Enter | `+moveup` (jump) |
 | Circle | Escape | `+movedown` (crouch) |
 | Square | Enter | `+use` |
-| Triangle | Escape | `cmd help` |
+| Triangle | Backspace (clears a bind in the controls menu) | `cmd help` |
 | L1 / R1 | (same key as in game) | `weapnext` / `weapprev` |
 | L2 / R2 | PgUp / PgDn | `+speed` / `+attack` |
 | L3 / R3 | (same key as in game) | unbound / `centerview` |
 | Start | Escape | Escape (menu toggle) |
 | Select | `` ` `` | `` ` `` (console toggle) |
+
+The Options menu's "customize controls" page is about these buttons: each action shows the
+button bound to it, by name ("R2", "d-pad up", "triangle"), cross on a row then a button
+rebinds it, and triangle clears it. While the page waits for a button, every button sends its
+in-game key, so the bind lands where the button fires in play; start cancels. A keyboard's
+binds are neither shown nor cleared there, since the keyboard uses `default.cfg`'s PC layout
+as it is. The mouse look and keyboard look rows are gone, as nothing reads them here.
 
 **Rumble.** [rumble.cpp](src/ps2/input/rumble.cpp) plays force feedback on the pad's two
 motors: the small one is on/off, a light buzz, and the large one has a variable speed for

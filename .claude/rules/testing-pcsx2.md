@@ -117,7 +117,10 @@ The debug page was tested this way (2026-10-12), fired from the `CDAudio_Play` h
 `Key_Event` press and release) lets the queued script drive the pages itself, with a `w10`
 between a press and its `screenshot`. keys.h: Enter 13, Escape 27, Up 128, Down 129, Left 130,
 Right 131. That checked the main menu's four items, Down's wrap and two Options rows, whose
-cvars the script then printed by name (2026-10-23). Killing PCSX2 after the last shot, rather
+cvars the script then printed by name (2026-10-23). The controls page the same way (2026-10-25):
+`menu_keys`, two Downs, Enter (13) for the grab, `tkey 204` (JOY2, circle's game key) to bind
+and `tkey 127` (Backspace, triangle's menu key) to clear, a shot after each. What that can't
+reach is input.cpp's choice of key per button, which needs a pad. Killing PCSX2 after the last shot, rather
 than quitting, leaves config.cfg and the card unwritten. PCSX2 still rewrites its ini's window
 state on the way out, so restore the ini too.
 

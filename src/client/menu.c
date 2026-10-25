@@ -740,8 +740,10 @@ char * bindnames[][2] =
   { "+lookup", "look up" },
   { "+lookdown", "look down" },
   { "centerview", "center view" },
+#if 0 // [PS2_QUAKE]: mouse look and keyboard look do nothing here: the sticks always look.
   { "+mlook", "mouse look" },
   { "+klook", "keyboard look" },
+#endif
   { "+moveup", "up / jump" },
   { "+movedown", "down / crouch" },
 
@@ -758,6 +760,21 @@ char * bindnames[][2] =
 int keys_cursor;
 static int bind_grab;
 
+// [PS2_QUAKE]: read by the input backend, which then sends each gamepad button's game key
+// rather than its menu key, so the bind lands on the key the button sends in play.
+qboolean M_IsGrabbingKey(void)
+{
+    return bind_grab != 0;
+}
+
+// [PS2_QUAKE]: the controls menu is about the gamepad. It lists, names and clears the keys
+// its buttons send in play; a keyboard's binds (default.cfg's) are left as they are.
+static const char * M_GamepadKeyName(int keynum)
+{
+    const char * name = IN_GamepadKeyName(keynum);
+    return name ? name : Key_KeynumToString(keynum);
+}
+
 static menuframework_s s_keys_menu;
 static menuaction_s s_keys_attack_action;
 static menuaction_s s_keys_change_weapon_action;
@@ -772,8 +789,10 @@ static menuaction_s s_keys_sidestep_action;
 static menuaction_s s_keys_look_up_action;
 static menuaction_s s_keys_look_down_action;
 static menuaction_s s_keys_center_view_action;
+#if 0 // [PS2_QUAKE]: see bindnames.
 static menuaction_s s_keys_mouse_look_action;
 static menuaction_s s_keys_keyboard_look_action;
+#endif
 static menuaction_s s_keys_move_up_action;
 static menuaction_s s_keys_move_down_action;
 static menuaction_s s_keys_inventory_action;
@@ -796,6 +815,8 @@ static void M_UnbindCommand(char * command)
         b = keybindings[j];
         if (!b)
             continue;
+        if (!IN_GamepadKeyName(j)) // [PS2_QUAKE]: gamepad buttons only
+            continue;
         if (!strncmp(b, command, l))
             Key_SetBinding(j, "");
     }
@@ -816,6 +837,8 @@ static void M_FindKeysForCommand(char * command, int * twokeys)
     {
         b = keybindings[j];
         if (!b)
+            continue;
+        if (!IN_GamepadKeyName(j)) // [PS2_QUAKE]: gamepad buttons only
             continue;
         if (!strncmp(b, command, l))
         {
@@ -850,7 +873,7 @@ static void DrawKeyBindingFunc(void * self)
     {
         int x;
         const char * name;
-        name = Key_KeynumToString(keys[0]);
+        name = M_GamepadKeyName(keys[0]); // [PS2_QUAKE]: the button's name, not JOY1/AUX1
 
         Menu_DrawString(a->generic.x + a->generic.parent->x + 16, a->generic.y + a->generic.parent->y, name);
         x = strlen(name) * 8;
@@ -858,7 +881,7 @@ static void DrawKeyBindingFunc(void * self)
         if (keys[1] != -1)
         {
             Menu_DrawString(a->generic.x + a->generic.parent->x + 24 + x, a->generic.y + a->generic.parent->y, "or");
-            Menu_DrawString(a->generic.x + a->generic.parent->x + 48 + x, a->generic.y + a->generic.parent->y, Key_KeynumToString(keys[1]));
+            Menu_DrawString(a->generic.x + a->generic.parent->x + 48 + x, a->generic.y + a->generic.parent->y, M_GamepadKeyName(keys[1]));
         }
     }
 }
@@ -875,7 +898,7 @@ static void KeyBindingFunc(void * self)
 
     bind_grab = true;
 
-    Menu_SetStatusBar(&s_keys_menu, "press a key or button for this action");
+    Menu_SetStatusBar(&s_keys_menu, "press a button for this action"); // [PS2_QUAKE]
 }
 
 static void Keys_MenuInit(void)
@@ -991,6 +1014,7 @@ static void Keys_MenuInit(void)
     s_keys_center_view_action.generic.localdata[0] = ++i;
     s_keys_center_view_action.generic.name = bindnames[s_keys_center_view_action.generic.localdata[0]][1];
 
+#if 0 // [PS2_QUAKE]: no mouse look / keyboard look rows, see bindnames.
     s_keys_mouse_look_action.generic.type = MTYPE_ACTION;
     s_keys_mouse_look_action.generic.flags = QMF_GRAYED;
     s_keys_mouse_look_action.generic.x = 0;
@@ -1006,6 +1030,7 @@ static void Keys_MenuInit(void)
     s_keys_keyboard_look_action.generic.ownerdraw = DrawKeyBindingFunc;
     s_keys_keyboard_look_action.generic.localdata[0] = ++i;
     s_keys_keyboard_look_action.generic.name = bindnames[s_keys_keyboard_look_action.generic.localdata[0]][1];
+#endif
 
     s_keys_move_up_action.generic.type = MTYPE_ACTION;
     s_keys_move_up_action.generic.flags = QMF_GRAYED;
@@ -1084,8 +1109,10 @@ static void Keys_MenuInit(void)
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_look_up_action);
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_look_down_action);
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_center_view_action);
+#if 0 // [PS2_QUAKE]: see above.
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_mouse_look_action);
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_keyboard_look_action);
+#endif
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_move_up_action);
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_move_down_action);
 
@@ -1097,7 +1124,7 @@ static void Keys_MenuInit(void)
 
     Menu_AddItem(&s_keys_menu, (void *)&s_keys_help_computer_action);
 
-    Menu_SetStatusBar(&s_keys_menu, "enter to change, backspace to clear");
+    Menu_SetStatusBar(&s_keys_menu, "cross to change, triangle to clear"); // [PS2_QUAKE]
     Menu_Center(&s_keys_menu);
 }
 
@@ -1113,7 +1140,10 @@ static const char * Keys_MenuKey(int key)
 
     if (bind_grab)
     {
-        if (key != K_ESCAPE && key != '`')
+        // [PS2_QUAKE]: a gamepad button binds (the backend sends its game key while grabbing);
+        // anything else - start's escape, a keyboard key - just ends the grab, since the menu
+        // neither shows nor clears keyboard binds.
+        if (IN_GamepadKeyName(key) != NULL)
         {
             char cmd[1024];
 
@@ -1121,7 +1151,7 @@ static const char * Keys_MenuKey(int key)
             Cbuf_InsertText(cmd);
         }
 
-        Menu_SetStatusBar(&s_keys_menu, "enter to change, backspace to clear");
+        Menu_SetStatusBar(&s_keys_menu, "cross to change, triangle to clear"); // [PS2_QUAKE]
         bind_grab = false;
         return menu_out_sound;
     }

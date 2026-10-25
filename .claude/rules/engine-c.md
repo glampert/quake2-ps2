@@ -43,7 +43,11 @@ paths:
   `s_primary` only by snd_win.c. They are still registered and archived, so config.cfg keeps
   them. The right stick reads `sensitivity` and `m_pitch`'s sign instead (input.cpp). The
   Options page has no rows for them since 2026-10-23, nor for sound quality, whose callback
-  does nothing (`UpdateSoundQualityFunc`).
+  does nothing (`UpdateSoundQualityFunc`). The controls page lost its mouse look and keyboard
+  look rows (`+mlook`, `+klook`) on 2026-10-25 for the same reason, and lists gamepad buttons
+  only, by the names input.cpp's table gives them (`IN_GamepadKeyName`); its grab is answered
+  with each button's game key (`M_IsGrabbingKey`), since the menu keys the pad otherwise sends
+  (Enter for cross and square, Escape for circle) would bind the wrong key.
 
 ## Level loading and registration
 

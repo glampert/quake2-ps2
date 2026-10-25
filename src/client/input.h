@@ -39,4 +39,7 @@ void IN_RumbleItemSound(const char * sound); // a sound on the player's CHAN_ITE
 void IN_RumbleFrame(void);                   // a valid frame was parsed: damage, powerups...
 void IN_RumbleStop(void);                    // stop the motors now, e.g. ahead of a load
 
+// [PS2_QUAKE]: the controls menu lists gamepad buttons, by the names the backend gives them.
+const char * IN_GamepadKeyName(int key);     // the button sending 'key' in play, or NULL for any other key
+
 #endif // CL_INPUT_H

@@ -29,11 +29,12 @@ paths:
   local cursor, a BSP walk that passes clip flags down the tree with an inline corner test
   instead of `BoxOnPlaneSide` (-32%), and the particle gather through a local cursor with
   `sq`. Release View went from 3405 to 2614 µs.
-- **Parked: background loading** of mid-level models/skins (a loader thread doing I/O,
-  decode, and a Loading state). It is the only fix left for DM player joins and dropped world
-  weapons. Decode matters as much as I/O: v_rail's md2+skin cost ~8.9 ms, of which only
-  ~1.7 ms was I/O. The design is in
-  [misc/docs/plans/background-loading.md](../../misc/docs/plans/background-loading.md).
+- **Active: background loading** (design rewritten 2026-10-26 from the console baselines below:
+  one loader thread for mid-level models, skins, pics and sounds, plus a read-ahead stream for
+  cinematics and demos; stages 1-8, none implemented yet). The design is in
+  [misc/docs/plans/background-loading.md](../../misc/docs/plans/background-loading.md). The
+  PCSX2-era note that decode mattered as much as I/O was wrong on hardware: the drive is 95% of a
+  mid-level load there.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1-5 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1-6 landed 2026-10-26, their console runs still owed; 7 waits on those measurements. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -477,7 +477,16 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   transparency scan). Visual handoff: pickups and player skins appear a few frames late, nothing
   draws the checkerboard or garbage, menus unchanged. Gate: `a_slugs.pcx`'s FsIo gone;
   `ps2_testmaps 1` unchanged.
-- [ ] **6. Models** (MD2 in two phases, SP2 in one read, the loader split). Handoff: weapon and
+- [x] **6. Models.** Landed 2026-10-26 (`LoadState` in `ModelInstance::state`, `IsDrawable`,
+  `mod::PumpLoads`, `LoadAliasMD2ModelFromMemory`/`LoadSpriteModelFromMemory` sharing
+  `LayOutAliasHunk`/`ClampAliasNormals`/`ValidateSpriteHeader`/`ResolveSpriteFrames` with the
+  streamed loaders, the `RenderEntities` skip). **Deviation from §6.6:** the file is read or
+  inflated whole into a staging buffer and converted from memory, not read in place in two phases:
+  a pkz entry is deflated, so it has no ranges to read, and pak0.pkz is what a USB stick carries.
+  Files over 768 KB load synchronously, so the staging copy never doubles a level's largest model.
+  PCSX2 throttled: slugs model opened 4758, ready 4760, its skin 4761; row ClParse 4.8 → 0.4 ms,
+  FsIo 2.8 ms → 4 µs; 0 drops; no asserts. Console handoff and MapCycle PEAK still owed. Original:
+  (MD2 in two phases, SP2 in one read, the loader split). Handoff: weapon and
   ammo pickups, a weapon switch, the player-setup menu, a DM join (the 278 KB loose model). Gate:
   the slugs row's ClParse near 0; `#ready` 3-4 frames on USB for a pickup model; a throttled
   PCSX2 run with 0 drops; `ps2_testmaps 1` PEAK unchanged.

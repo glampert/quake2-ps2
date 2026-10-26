@@ -74,6 +74,13 @@ paths:
   1.2 MB more than fragmentation does. Fragmentation (arena minus live peak) measured
   0.67-1.55 MB. If it ever matters, the follow-up is a top-down compacting tex/model region
   that shares the gap with dlmalloc.
+- **The background loader** (tag `Aio`, 2026-10-26): ~20 KB static (its 16 KB stack, 32 request
+  slots, the pending tables: 8 sounds, 16 textures, 16 models), a 44 KB inflate workspace on the
+  heap from the first deflated request on, a 256-512 KB ring while a cinematic plays (in place of
+  the 64 KB stdio buffer), and file-sized staging for each sound, texture or model in flight
+  (models over 768 KB load synchronously). Every drain site runs before a level's sweeps, so
+  nothing of it survives into a load; a MapCycle, which has no mid-level loads, should show the
+  worst moment unchanged. Not yet re-measured.
 - `pics/*` are never freed. A stray key press that opens a menu shows up as extra Tex in a
   cycle (e.g. `pics/inventory.pcx`, 48 KB).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which saves ~9 KB of

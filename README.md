@@ -898,8 +898,8 @@ mostly reads, so the changes are all about reading less, less often:
   sleeps on the vblank interrupt is most of every frame. Destinations are 64-byte aligned SIF
   DMA targets; the loader never allocates, prints or touches the engine, and the places that
   free or close behind a read drain it first. Cinematics and demos, mid-level sounds, skins,
-  sprite frames and HUD pics go through it (an asset still loading is skipped by its draw, never
-  drawn as a placeholder); models are next. The design is
+  sprite frames, HUD pics and models go through it (an asset still loading is skipped by its
+  draw, never drawn as a placeholder; a missing one behaves as before). The design is
   [background-loading.md](misc/docs/plans/background-loading.md), and `ps2_testaio 1` is its
   self-test. Tag `Aio`.
 - **Cinematics and demos stream through it** ([readahead_stream.h](src/ps2/fs/readahead_stream.h)).

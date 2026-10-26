@@ -252,7 +252,7 @@ u64 MakeTex0(const tex::Texture & texture, bool lit);
 // Puts the framebuffer of drawing context 'ctx' on screen, at the next vsync.
 void PresentFramebuffer(DrawContext ctx);
 
-// Every present, stamped the moment PresentFramebuffer's vsync spin lets go, which puts each stamp
+// Every present, stamped the moment PresentFramebuffer's vsync wait lets go, which puts each stamp
 // on a field boundary. That makes it the clock to measure frame rate on: the gap between two
 // presents is a whole number of fields - one while the frame made its vsync - where a clock read
 // anywhere else lands after however much of the frame happened to come first.
@@ -262,6 +262,9 @@ struct PresentClock
     u32 fields;    // fields those presents spanned: one each, plus one per vsync a frame missed
     u32 lastTicks; // when the latest present went up, in kPresentTicksPerSec units. Wraps every
                    // two hours or so: work in differences.
+    u32 worstWriteTicks; // the longest a present's DISPFB write came after its stamp, in the same
+                         // units: the sleeping vsync wait's wake latency, which the blanking
+                         // interval (about 1.5 ms, 860 ticks) bounds
 };
 
 // The timer the stamps are read off: the EE system timer, T2, which runs at BUSCLK/256.

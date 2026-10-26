@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; none implemented. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stage 1 landed 2026-10-26. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -280,7 +280,7 @@ void FS_ReleaseLocation(fs_location_t * loc);
   pkz-deflated, with `ps2_readahead_kb > 0`, returns `PS2_OpenReadAheadStream(&loc, kb)` instead
   of the stdio stream.
 
-### 6.2 Sleeping vsync (`gs.cpp`)
+### 6.2 Sleeping vsync (`gs.cpp`): landed 2026-10-26
 
 - `gs::Init`: `CreateSema` {init 0, max 1}; `AddIntcHandler(INTC_VBLANK_S, VblankHandler, -1)`;
   `EnableIntc(INTC_VBLANK_S)`. The handler: `iSignalSema(s_vblankSema); ExitHandler(); return 0;`.
@@ -429,10 +429,13 @@ Each stage builds under `make` and `make release`, lands on its own, and is meas
 `frame_budget.py --pal` (PCSX2 for correctness, the console for timing; compare by `FLOG#map`
 segment, since the USB capture's frame numbers are offset by a menu detour).
 
-- [ ] **1. Sleeping vsync.** Gate: a PCSX2 capture's Frame and VSync distributions within
-  run-to-run noise, 0 drops, `PresentClock`'s field counts unchanged; on the console no tearing
-  and the DISPFB writes still in blanking (a debug counter of `GS_CSR` FIELD at the write);
-  `ps2_vsync_spin 1` reproduces the old numbers.
+- [x] **1. Sleeping vsync.** Landed 2026-10-26 (gs.cpp `InitVsyncWait`/`WaitVsync`, through
+  ps2sdk's `graph_add_vsync_handler`). Gate met in PCSX2: `pcsx2-vsync-sleep-2026-10-26.flog`
+  against `-spin-` (same build, `ps2_vsync_spin 1`) within noise on every column, 0 drops both
+  ways, 19111 against 19112 presents; the wake-to-write gap is measured instead of a FIELD
+  counter: `PresentClock::worstWriteTicks`, printed as the frame log's closing `FLOG#note,present:`
+  line, read 1 µs (the blanking interval is ~1500 µs). Still owed on the console: no tearing by
+  eye and that note's number from a USB run.
 - [ ] **2. `ps2::aio`, `FS_LocateFile` and a self-test, no clients.** `ps2_testaio 1` (debug,
   driven from `PS2_EndFrame` like the other tests): a fixed file list covering all four source
   kinds, read through `FS_LoadFile` and through the loader (`Read` and `InflateWhole`),

@@ -13,6 +13,7 @@
 #include "ps2/renderer/lightmap.h"
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
+#include "ps2/renderer/gs.h" // GetPresentClock
 #include "ps2/renderer/view.h"
 #include "ps2/audio/sound_hold.h" // SubmitFreeBytes, DeviceRingBytes
 
@@ -475,6 +476,13 @@ void FrameLogFinish()
     {
         WriteBatch();
     }
+
+    // The vsync wait's worst wake latency over the run (gs.h): the DISPFB write has to land inside
+    // the blanking interval, about 1500 us.
+    const ps2::gs::PresentClock & clock = ps2::gs::GetPresentClock();
+    Emit("FLOG#note,present: worst stamp-to-DISPFB %u us over %u presents\n",
+         static_cast<unsigned>((static_cast<u64>(clock.worstWriteTicks) * 1000000u) / ps2::gs::kPresentTicksPerSec),
+         static_cast<unsigned>(clock.frames));
 
     // Lets the reader tell a completed capture from one the emulator cut short.
     Emit("FLOG#end,%u\n", s_frameIndex);

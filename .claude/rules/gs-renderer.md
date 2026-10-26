@@ -23,6 +23,16 @@ The README's "Rendering" section is the architecture overview. The renderer file
   calls it first**, and `EndFrame` calls it last. Never defer all 2D to frame end: the 2D
   packet bakes texture VRAM addresses, and mid-frame 3D uploads can evict them. Don't
   reintroduce a frame-wide 2D bracket. Each 2D→3D switch is a GS sync point (~2 per frame).
+- **`PresentFramebuffer` sleeps for vsync since 2026-10-26** (background loading stage 1): the
+  EE INTC's vblank-start line (`INTC_VBLANK_S`, installed through `graph_add_vsync_handler`)
+  signals a {0, 1} semaphore from its handler, and the wait drains it with `PollSema` before
+  `WaitSema`, so it ends at the *next* edge as `graph_wait_vsync`'s spin did (that cleared VSINT
+  before watching it). The stamp and the DISPFB write follow the wake. The PCSX2 A/B against
+  `ps2_vsync_spin 1` (same build, `pcsx2-vsync-{sleep,spin}-2026-10-26.flog`) moved no column by
+  more than 0.4% (SndMix, which wanders), 0 drops both ways, and the frame log's closing
+  `FLOG#note,present:` line put the worst stamp-to-DISPFB gap at 1 µs, against a blanking interval
+  of about 1.5 ms. On a console the gate is no tearing and that note's number. The semaphore or
+  handler failing to create falls back to the spin with a console warning.
 - **With `ps2_gs_latency` on (the default), a frame reaches the screen only when the next
   `BeginFrame` runs.** A frame that nothing follows never shows. The loading plaque was one:
   `SCR_BeginLoadingPlaque` draws it once, then `cls.disable_screen` stops all drawing until

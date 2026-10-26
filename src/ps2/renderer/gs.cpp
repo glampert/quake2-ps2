@@ -38,7 +38,7 @@
 #include <gs_gp.h>
 #include <gs_psm.h>
 #include <graph.h>
-#include <kernel.h> // SyncDCache
+#include <kernel.h> // SyncDCache, CreateSema/WaitSema/PollSema, iSignalSema, ExitHandler
 #include <timer.h>  // GetTimerSystemTime / kBUSCLKBY256
 #include <draw.h>
 #include <draw2d.h>
@@ -278,6 +278,71 @@ void SeedClutBuffer()
 }
 
 // ------------------------------------------------------------------------------------------------
+// Vsync wait
+// ------------------------------------------------------------------------------------------------
+
+// PresentFramebuffer used to spin on GS_CSR's VSINT bit (graph_wait_vsync), which held the EE for
+// the 8-11 ms a frame leaves before its field ends. The main thread sleeps instead: the EE INTC's
+// vblank-start line (INTC_VBLANK_S, the same edge the spin watched) signals this semaphore from
+// an interrupt handler, and the kernel resumes the waiter at the handler's exit - microseconds,
+// well inside the blanking interval the DISPFB write needs. The lower-priority threads, the
+// music reader today and the asset loader to come, run in the time the spin burned.
+static s32           s_vblankSema      = -1;
+static int           s_vblankHandlerId = -1;
+static const cvar_t * s_vsyncSpin      = nullptr; // ps2_vsync_spin: 1 brings the spin back, for an A/B
+
+static s32 VblankHandler(const s32 cause)
+{
+    (void)cause;
+    // The semaphore's max count is one, so a vblank nobody waited for is remembered as a single
+    // pending signal, and the overflow error a second one gets is harmless.
+    iSignalSema(s_vblankSema);
+    ExitHandler();
+    return 0;
+}
+
+// Installs the handler; a failure leaves the spin in place, which is what every frame before
+// 2026-10-26 used.
+static void InitVsyncWait()
+{
+    s_vsyncSpin = Cvar_Get("ps2_vsync_spin", "0", 0);
+
+    ee_sema_t sema  = {};
+    sema.init_count = 0;
+    sema.max_count  = 1;
+    s_vblankSema    = CreateSema(&sema);
+    if (s_vblankSema < 0)
+    {
+        Com_Printf("WARNING: GS: no vblank semaphore (%d); vsync waits spin.\n", static_cast<int>(s_vblankSema));
+        return;
+    }
+
+    s_vblankHandlerId = graph_add_vsync_handler(&VblankHandler);
+    if (s_vblankHandlerId < 0)
+    {
+        Com_Printf("WARNING: GS: no vblank handler (%d); vsync waits spin.\n", s_vblankHandlerId);
+        DeleteSema(s_vblankSema);
+        s_vblankSema = -1;
+    }
+}
+
+// Returns at the next vblank start, the way graph_wait_vsync did.
+static void WaitVsync()
+{
+    if (s_vblankSema < 0 || s_vsyncSpin->value != 0.0f)
+    {
+        graph_wait_vsync();
+        return;
+    }
+
+    // A vblank that passed while the frame was still being built is not the one to present on,
+    // any more than it was for the spin, which cleared VSINT before watching it: drain it so the
+    // wait ends at the next edge.
+    while (PollSema(s_vblankSema) >= 0) {}
+    WaitSema(s_vblankSema);
+}
+
+// ------------------------------------------------------------------------------------------------
 // Present clock
 // ------------------------------------------------------------------------------------------------
 
@@ -288,7 +353,7 @@ static PresentClock s_presentClock;
 static u32          s_ticksPerField;
 
 // Stamps the present just made, counting its gap from the last one in fields, rounded to the
-// nearest: a stamp sits a few spin iterations past its field boundary, never half a field.
+// nearest: a stamp sits microseconds past its field boundary, never half a field.
 void StampPresent()
 {
     // GetTimerSystemTime scales T2's count up to BUSCLK units, so the low byte is always zero (see
@@ -296,7 +361,7 @@ void StampPresent()
     // every two hours or so, which the unsigned difference below does not mind.
     const u32 now = static_cast<u32>(GetTimerSystemTime() >> 8);
 
-    // Two presents are never less than a field apart - each spins for a vsync of its own - so a
+    // Two presents are never less than a field apart - each waits for a vsync of its own - so a
     // gap that rounds to none could only be a clock fault, and counts as the one field it was.
     u32 fields = 1;
     if (s_presentClock.frames != 0)
@@ -308,6 +373,19 @@ void StampPresent()
     s_presentClock.frames   += 1;
     s_presentClock.fields   += fields;
     s_presentClock.lastTicks = now;
+}
+
+// Called once the DISPFB write is out: how long after its stamp this present's write landed. The
+// write has to fall inside the blanking interval (about 1.5 ms), so the worst case is the one
+// number that says whether the sleeping wait wakes in time; it read 1 us in PCSX2.
+void StampDisplayWrite()
+{
+    const u32 now   = static_cast<u32>(GetTimerSystemTime() >> 8);
+    const u32 ticks = now - s_presentClock.lastTicks;
+    if (ticks > s_presentClock.worstWriteTicks)
+    {
+        s_presentClock.worstWriteTicks = ticks;
+    }
 }
 
 } // namespace
@@ -413,6 +491,7 @@ void Init(const Config & cfg)
                                                              : (((kPresentTicksPerSec * 1001u) + 30000u) / 60000u);
 
     s_texUploadPacket.Init(kTexUploadQwords);
+    InitVsyncWait();
 
     // Program both drawing contexts: context 0 -> frame 0, context 1 -> frame 1.
     // The environment defaults texture wrapping to CLAMP; Quake's DrawTileClear
@@ -578,11 +657,12 @@ void DefragVramHeap()
 
 void PresentFramebuffer(const DrawContext ctx)
 {
-    // DISPFB has to be rewritten inside the blanking interval or the change tears, and the spin
-    // doubles as the frame's pacing.
+    // DISPFB has to be rewritten inside the blanking interval or the change tears, and the wait
+    // doubles as the frame's pacing. The probe wraps the sleep as it wrapped the spin, so the
+    // frame log's "EE work = Frame - VSync" reads the same either way.
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
-        graph_wait_vsync();
+        WaitVsync();
     }
     StampPresent();
 
@@ -596,6 +676,7 @@ void PresentFramebuffer(const DrawContext ctx)
     graph_set_framebuffer_filtered(static_cast<int>(fb.address),
                                    static_cast<int>(fb.width),
                                    static_cast<int>(fb.psm), 0, 0);
+    StampDisplayWrite();
 }
 
 const PresentClock & GetPresentClock()

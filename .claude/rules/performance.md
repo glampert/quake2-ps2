@@ -31,10 +31,17 @@ paths:
   `sq`. Release View went from 3405 to 2614 µs.
 - **Active: background loading** (design rewritten 2026-10-26 from the console baselines below:
   one loader thread for mid-level models, skins, pics and sounds, plus a read-ahead stream for
-  cinematics and demos; stages 1-8, none implemented yet). The design is in
+  cinematics and demos; stages 1-8). The design is in
   [misc/docs/plans/background-loading.md](../../misc/docs/plans/background-loading.md). The
   PCSX2-era note that decode mattered as much as I/O was wrong on hardware: the drive is 95% of a
-  mid-level load there.
+  mid-level load there. **Stage 1 landed 2026-10-26**: the vsync wait sleeps on the vblank
+  interrupt (gs.cpp, see gs-renderer.md). Its PCSX2 A/B against `ps2_vsync_spin 1`
+  (`pcsx2-vsync-sleep-2026-10-26.flog` against `-spin-`) matched to 0.1% on every rendering
+  column, 0 drops, EE work mean 4556 against 4560 µs; the one `compare_flog` flag was ClParse's
+  mean (93 against 22 µs), a single 1.3 s level-change row that the sleep run's capture charged to
+  ClParse and the spin run's to no column, the kind of attribution jitter a `gamemap` row has.
+  Nothing a PCSX2 capture can see should change at this stage: the gain is the idle time the EE
+  now hands to the other threads, which only shows once they have work.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those
@@ -345,7 +352,10 @@ cinematic's frame-read work is the `Cinematic` column (`PS2_PROF_CINEMATIC` arou
 `sndFree` is the free bytes of audsrv's ring at the frame's submit (-1 held; the header's
 `FLOG#note` gives the ring's size, 9400 at 22 kHz). A `Frame` longer than the ring is a
 certain audio underrun (audsrv loops its last 106 ms, `sound_hold.h`); `sndFree` shows how
-close the others came, and loses meaning once the ring has run dry.
+close the others came, and loses meaning once the ring has run dry. The run's closing
+`FLOG#note,present: worst stamp-to-DISPFB N us` is the sleeping vsync wait's worst wake-to-write
+gap (gs.h `PresentClock::worstWriteTicks`); it has to stay well inside the ~1500 µs blanking
+interval, and read 1 µs in PCSX2.
 
 1. Back up `baseq2/config.cfg` and set `ps2_perftest "1"` in it. `make run`.
 2. Wait for `PerfRun: complete` / `FLOG#end` in emulog, then copy `emulog.txt` into

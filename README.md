@@ -597,7 +597,10 @@ black instead, since it would read the logo's texels the wrong way. A splash tha
 is skipped.
 
 **Frame structure.** `BeginFrame()` clears colour and depth; 2D and 3D then draw in any
-order; `EndFrame()` flushes, waits for vsync and flips. 2D primitives accumulate into a
+order; `EndFrame()` flushes, waits for vsync and flips. The vsync wait sleeps on the vblank
+interrupt (a semaphore signalled from an `INTC_VBLANK_S` handler), so the 8-11 ms a frame leaves
+before its field ends go to the other threads; `ps2_vsync_spin 1` brings the old status-register
+spin back. 2D primitives accumulate into a
 deferred batch with an always-pass z-test so they land on top, and that batch is flushed
 automatically at each 2D→3D boundary and again at end of frame. Flushing at the boundary is
 not just about layering: it consumes the deferred draws before a later 3D texture upload can

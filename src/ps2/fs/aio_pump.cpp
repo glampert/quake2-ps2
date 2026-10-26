@@ -10,6 +10,7 @@
 #include "ps2/fs/async_io.h"
 #include "ps2/audio/sound_load.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/model.h"
 
 namespace ps2::aio {
 
@@ -27,6 +28,7 @@ void Pump()
     const unsigned budgetCycles = static_cast<unsigned>(s_budgetUs->value) * 295u;
     audio::PumpSoundLoads(budgetCycles);
     tex::PumpLoads(budgetCycles);
+    mod::PumpLoads(budgetCycles);
 }
 
 } // namespace ps2::aio

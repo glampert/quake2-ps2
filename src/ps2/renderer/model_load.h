@@ -65,6 +65,14 @@ bool LoadBrushModel(ModelInstance & outModel, FILE * file, const char * fileName
 bool LoadSpriteModel(ModelInstance & outModel, FILE * file, int fileLen);
 bool LoadAliasMD2Model(ModelInstance & outModel, FILE * file, int fileLen);
 
+// The same two from a file image in memory: what the background loader lands (fs/async_io.h) and
+// the model cache's pump converts. Validation, hunk layout, glcmd expansion and the normal clamp
+// are the functions the streamed loaders use, so the two paths can't drift; the skins and frames
+// are looked up with tex::FindAsync, so they load in the background too. On false the hunk, if one
+// was allocated, is the caller's to free (ModelCache::Unload does).
+bool LoadSpriteModelFromMemory(ModelInstance & outModel, const u8 * data, int len);
+bool LoadAliasMD2ModelFromMemory(ModelInstance & outModel, const u8 * data, int len);
+
 // ------------------------------------------------------------------------------------------------
 // MD2 parsing, shared with the memory card icon (save/mc_icon.cpp), which builds its model
 // from one in a buffer rather than through the model cache.

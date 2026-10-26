@@ -1745,6 +1745,45 @@ bool LoadBrushModel(ModelInstance & mdl, FILE * const file, const char * const f
 // SPRITE MODELS
 // ------------------------------------------------------------------------------------------------
 
+// The sprite header checks LoadSpriteModel and LoadSpriteModelFromMemory share.
+static bool ValidateSpriteHeader(const dsprite_t & header, const int fileLen, const char * const name)
+{
+    if (fileLen < static_cast<int>(sizeof(dsprite_t))) [[unlikely]]
+    {
+        Com_Printf("ERROR: Sprite '%s' is too small to hold a header (%i bytes)\n", name, fileLen);
+        return false;
+    }
+    if (header.ident != IDSPRITEHEADER) [[unlikely]]
+    {
+        Com_Printf("ERROR: Sprite '%s' has bad file ident!\n", name);
+        return false;
+    }
+    if (header.version != SPRITE_VERSION) [[unlikely]]
+    {
+        Com_Printf("ERROR: Sprite '%s' has wrong version (%i should be %i)\n",
+                   name, header.version, SPRITE_VERSION);
+        return false;
+    }
+    if (header.numframes < 0 || header.numframes > kMaxMD2Skins) [[unlikely]]
+    {
+        Com_Printf("ERROR: Sprite '%s' has bad frame count (%i)\n", name, header.numframes);
+        return false;
+    }
+    return true;
+}
+
+// The frame textures, from the names in the hunk's file image: once, here, so the draw path
+// needs no lookup. 'async' lets a mid-level sprite's frames load in the background.
+static void ResolveSpriteFrames(ModelInstance & mdl, const dsprite_t & sprite, const bool async)
+{
+    for (int i = 0; i < sprite.numframes; ++i)
+    {
+        mdl.Sprite().frames[i] = async ? tex::FindAsync(sprite.frames[i].name, tex::ImageType::Sprite)
+                                       : tex::Find(sprite.frames[i].name, tex::ImageType::Sprite);
+    }
+    mdl.numFrames = ToU16(sprite.numframes);
+}
+
 bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
 {
     PS2_Assert(file != nullptr);
@@ -1761,15 +1800,8 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     dsprite_t header{};
     FS_Read(&header, static_cast<int>(sizeof(header)), file);
 
-    if (header.version != SPRITE_VERSION) [[unlikely]]
+    if (!ValidateSpriteHeader(header, fileLen, mdl.name)) [[unlikely]]
     {
-        Com_Printf("ERROR: Sprite '%s' has wrong version (%i should be %i)\n",
-                   mdl.name, header.version, SPRITE_VERSION);
-        return false;
-    }
-    if (header.numframes < 0 || header.numframes > kMaxMD2Skins) [[unlikely]]
-    {
-        Com_Printf("ERROR: Sprite '%s' has bad frame count (%i)\n", mdl.name, header.numframes);
         return false;
     }
 
@@ -1794,16 +1826,40 @@ bool LoadSpriteModel(ModelInstance & mdl, FILE * const file, const int fileLen)
     // Resolved once, here. The frame rectangles are still read out of the hunk at
     // draw time, but the names are not needed again: ReferenceAllTextures touches
     // these pointers rather than looking them up.
-    for (int i = 0; i < out->numframes; ++i)
-    {
-        mdl.Sprite().frames[i] = tex::Find(out->frames[i].name, tex::ImageType::Sprite);
-    }
-    mdl.numFrames = ToU16(out->numframes);
+    ResolveSpriteFrames(mdl, *out, /*async=*/false);
 
     if (kVerboseModelLoading)
     {
         Com_DPrintf("Sprite model '%s' loaded (%u KB hunk, read in place).\n", mdl.name, hunkSize / 1024u);
     }
+    return true;
+}
+
+bool LoadSpriteModelFromMemory(ModelInstance & mdl, const u8 * const data, const int len)
+{
+    dsprite_t header{};
+    if (len >= static_cast<int>(sizeof(header)))
+    {
+        std::memcpy(&header, data, sizeof(header));
+    }
+    if (!ValidateSpriteHeader(header, len, mdl.name)) [[unlikely]]
+    {
+        return false;
+    }
+
+    // As LoadSpriteModel: the hunk is the file image.
+    const u32 hunkSize = AlignUp(static_cast<u32>(len), kHunkAlign);
+
+    HunkAllocator hunk{};
+    hunk.Init(hunkSize, ps2::heap::MemTag::SpriteMdl);
+    mdl.hunkBase = hunk.Base();
+    mdl.hunkSize = hunkSize;
+    mdl.type     = ModelType::Sprite;
+
+    auto * out = static_cast<dsprite_t *>(hunk.Alloc(static_cast<u32>(len)));
+    std::memcpy(out, data, static_cast<size_t>(len));
+
+    ResolveSpriteFrames(mdl, *out, /*async=*/true);
     return true;
 }
 
@@ -2000,6 +2056,73 @@ bool ValidateMD2Header(const dmdl_t & header, const int fileLen, const char * co
     return true;
 }
 
+// Allocates the model's hunk and points its AliasData into it. The hunk holds nothing but data:
+// the expanded triangle stream, then the keyframes verbatim. The dmdl_t header, the st and
+// triangle arrays, the glcmds and the skin name strings are all consumed by the loaders and
+// dropped - the counts and pointers that replace them live in ModelInstance::AliasData. Returns
+// the hunk's size.
+static u32 LayOutAliasHunk(ModelInstance & mdl, const dmdl_t & header, const u32 frameStride,
+                           AliasVertex ** outVertexes, u8 ** outFrames)
+{
+    const int numFlatVerts = header.num_tris * 3;
+
+    HunkSizer sizer{};
+    sizer.AddArray<AliasVertex>(numFlatVerts);
+    sizer.Add(static_cast<u32>(header.num_frames) * frameStride);
+    const u32 hunkSize = sizer.BytesUsed();
+
+    HunkAllocator hunk{};
+    hunk.Init(hunkSize, ps2::heap::MemTag::AliasMdl);
+    mdl.hunkBase = hunk.Base();
+    mdl.hunkSize = hunkSize;
+    mdl.type     = ModelType::AliasMD2;
+
+    AliasVertex * const vertexes = hunk.AllocArray<AliasVertex>(numFlatVerts);
+    u8 * const frames = static_cast<u8 *>(hunk.Alloc(static_cast<u32>(header.num_frames) * frameStride));
+    PS2_Assert(hunk.BytesUsed() == hunkSize);
+
+    mdl.numFrames = ToU16(header.num_frames);
+
+    ModelInstance::AliasData & alias = mdl.Alias();
+    alias.numSkins    = ToU16(header.num_skins);
+    alias.numTris     = ToU16(header.num_tris);
+    alias.numXyz      = ToU16(header.num_xyz);
+    alias.frameStride = ToU16(static_cast<int>(frameStride));
+    alias.vertexes    = vertexes;
+    alias.frames      = frames;
+
+    *outVertexes = vertexes;
+    *outFrames   = frames;
+    return hunkSize;
+}
+
+// Every draw path indexes a 162-entry table with a vertex's lightnormalindex, and the powersuit
+// path indexes the normal table with it. Guarantee the range once here rather than masking it per
+// vertex, per frame, forever after. No model in pak0 trips this - the highest index in the stock
+// data is 161.
+static void ClampAliasNormals(const ModelInstance & mdl, const dmdl_t & header, const u32 frameStride, u8 * const frames)
+{
+    int clampedNormals = 0;
+    for (int f = 0; f < header.num_frames; ++f)
+    {
+        u8 * const frameVerts = frames + (static_cast<u32>(f) * frameStride) + kAliasFrameVertsOffset;
+        for (int v = 0; v < header.num_xyz; ++v)
+        {
+            u8 & lightNormalIndex = frameVerts[(v * DTRIVERTX_SIZE) + DTRIVERTX_LNI];
+            if (lightNormalIndex >= kNumVertexNormals) [[unlikely]]
+            {
+                lightNormalIndex = 0;
+                ++clampedNormals;
+            }
+        }
+    }
+    if (clampedNormals != 0) [[unlikely]]
+    {
+        Com_Printf("WARNING: Model '%s' had %i vertex normal indexes out of range; clamped.\n",
+                   mdl.name, clampedNormals);
+    }
+}
+
 bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen)
 {
     PS2_Assert(file != nullptr);
@@ -2024,36 +2147,10 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
 
     const u32 frameStride = AliasFrameStride(header.num_xyz);
 
-    // The hunk holds nothing but data: the expanded triangle stream, then the
-    // keyframes verbatim. The dmdl_t header, the st and triangle arrays, the
-    // glcmds and the skin name strings are all consumed here and dropped - the
-    // counts and pointers that replace them live in ModelInstance::AliasData.
-    const int numFlatVerts = header.num_tris * 3;
-
-    HunkSizer sizer{};
-    sizer.AddArray<AliasVertex>(numFlatVerts);
-    sizer.Add(static_cast<u32>(header.num_frames) * frameStride);
-    const u32 hunkSize = sizer.BytesUsed();
-
-    HunkAllocator hunk{};
-    hunk.Init(hunkSize, ps2::heap::MemTag::AliasMdl);
-    mdl.hunkBase = hunk.Base();
-    mdl.hunkSize = hunkSize;
-    mdl.type     = ModelType::AliasMD2;
-
-    AliasVertex * const vertexes = hunk.AllocArray<AliasVertex>(numFlatVerts);
-    u8 * const frames = static_cast<u8 *>(
-        hunk.Alloc(static_cast<u32>(header.num_frames) * frameStride));
-
-    mdl.numFrames = ToU16(header.num_frames);
-
+    AliasVertex * vertexes = nullptr;
+    u8 *          frames   = nullptr;
+    const u32 hunkSize = LayOutAliasHunk(mdl, header, frameStride, &vertexes, &frames);
     ModelInstance::AliasData & alias = mdl.Alias();
-    alias.numSkins    = ToU16(header.num_skins);
-    alias.numTris     = ToU16(header.num_tris);
-    alias.numXyz      = ToU16(header.num_xyz);
-    alias.frameStride = ToU16(static_cast<int>(frameStride));
-    alias.vertexes    = vertexes;
-    alias.frames      = frames;
 
     // Skins resolved once, here. ReferenceAllTextures touches these pointers on a
     // cache hit rather than looking the names up again, so the strings go no
@@ -2117,37 +2214,73 @@ bool LoadAliasMD2Model(ModelInstance & mdl, FILE * const file, const int fileLen
     }
     FS_Read(frames, header.num_frames * header.framesize, file);
 
-    // Every draw path indexes a 162-entry table with a vertex's lightnormalindex,
-    // and the powersuit path indexes the normal table with it. Guarantee the range
-    // once here rather than masking it per vertex, per frame, forever after. No
-    // model in pak0 trips this - the highest index in the stock data is 161.
-    int clampedNormals = 0;
-    for (int f = 0; f < header.num_frames; ++f)
-    {
-        u8 * const frameVerts = frames + (static_cast<u32>(f) * frameStride) + kAliasFrameVertsOffset;
-        for (int v = 0; v < header.num_xyz; ++v)
-        {
-            u8 & lightNormalIndex = frameVerts[(v * DTRIVERTX_SIZE) + DTRIVERTX_LNI];
-            if (lightNormalIndex >= kNumVertexNormals) [[unlikely]]
-            {
-                lightNormalIndex = 0;
-                ++clampedNormals;
-            }
-        }
-    }
-    if (clampedNormals != 0) [[unlikely]]
-    {
-        Com_Printf("WARNING: Model '%s' had %i vertex normal indexes out of range; clamped.\n",
-                   mdl.name, clampedNormals);
-    }
-
-    PS2_Assert(hunk.BytesUsed() == hunkSize);
+    ClampAliasNormals(mdl, header, frameStride, frames);
 
     if (kVerboseModelLoading)
     {
         Com_DPrintf("Alias model '%s' loaded (%u KB hunk, %i tris, %i frames).\n",
                     mdl.name, hunkSize / 1024u, header.num_tris, header.num_frames);
     }
+    return true;
+}
+
+bool LoadAliasMD2ModelFromMemory(ModelInstance & mdl, const u8 * const data, const int len)
+{
+    dmdl_t header{};
+    if (len >= static_cast<int>(sizeof(header)))
+    {
+        std::memcpy(&header, data, sizeof(header));
+    }
+    if (len < static_cast<int>(sizeof(header)) || header.ident != IDALIASHEADER) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' is not an MD2 (%i bytes)\n", mdl.name, len);
+        return false;
+    }
+    if (!ValidateMD2Header(header, len, mdl.name)) [[unlikely]]
+    {
+        return false;
+    }
+    // Every section of an MD2 is int-sized records, so the offsets are multiples of four in any
+    // file the tools wrote; the glcmds are read in place below, which needs it.
+    if ((header.ofs_glcmds & 3) != 0) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s': glcmds at an unaligned offset (%i)\n", mdl.name, header.ofs_glcmds);
+        return false;
+    }
+
+    const u32 frameStride = AliasFrameStride(header.num_xyz);
+
+    AliasVertex * vertexes = nullptr;
+    u8 *          frames   = nullptr;
+    LayOutAliasHunk(mdl, header, frameStride, &vertexes, &frames);
+    ModelInstance::AliasData & alias = mdl.Alias();
+
+    // The skins load in the background too: the entity draws once model and skin have landed.
+    for (int i = 0; i < header.num_skins; ++i)
+    {
+        char skinName[MAX_SKINNAME];
+        std::memcpy(skinName, data + header.ofs_skins + (i * MAX_SKINNAME), sizeof(skinName));
+        skinName[sizeof(skinName) - 1] = '\0';
+        alias.skins[i] = tex::FindAsync(skinName, tex::ImageType::Skin);
+    }
+
+    // No scratch for the glcmds here: they are expanded straight out of the file image.
+    const auto * const glcmds = static_cast<const s32 *>(static_cast<const void *>(data + header.ofs_glcmds));
+    const int numTris = ExpandGLCmdsToTriangles(glcmds, header.num_glcmds, header.num_xyz,
+                                                header.num_tris, vertexes, mdl.name);
+    if (numTris < 0) [[unlikely]]
+    {
+        return false;
+    }
+    if (numTris != header.num_tris) [[unlikely]]
+    {
+        Com_Printf("ERROR: Model '%s' expanded to %i triangles, but num_tris is %i!\n",
+                   mdl.name, numTris, header.num_tris);
+        return false;
+    }
+
+    std::memcpy(frames, data + header.ofs_frames, static_cast<size_t>(header.num_frames) * frameStride);
+    ClampAliasNormals(mdl, header, frameStride, frames);
     return true;
 }
 

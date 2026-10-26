@@ -14,6 +14,10 @@
 #include "ps2/small_pool.h"
 #include "ps2/hash.h"
 #include "ps2/common.h"
+#include "ps2/fs/async_io.h"      // the background loader
+#include "ps2/system/heap.h"
+#include "ps2/debug/profile.h"    // ReadCycles
+#include "ps2/renderer/profile.h" // FrameLogNoteReady
 
 #include <cstdio>
 #include <cstdlib>
@@ -60,9 +64,40 @@ public:
     // at EndRegistration (see mod::FreeUnregistered). Returns how many.
     int FreeUnregistered(bool early);
 
+    // Background loads: see mod::PumpLoads. DrainLoads finishes every one, waiting for the loader.
+    int  PumpLoads(unsigned budgetCycles);
+    void DrainLoads();
+
 private:
     const ModelInstance * LoadModel(const char * name);
     void LoadWorldModel(const char * mapName);
+
+    // A model file in flight for a Loading slot: read (or inflated) whole into a staging buffer,
+    // converted into its hunk by FinishPending on the main thread.
+    struct PendingLoad
+    {
+        bool          active;
+        u16           slot;
+        aio::Ticket   ticket;
+        fs_location_t loc;
+        u8 *          staging;
+        u32           stagingBytes;
+        int           length;
+    };
+    enum class AsyncStart { Missing, Queued, Declined };
+
+    AsyncStart StartAsyncLoad(const char * name, ModelType type, const ModelInstance ** out);
+    void FinishPending(PendingLoad & pending);
+
+    static constexpr int kMaxPendingLoads = 16;
+
+    // The largest file loaded in the background: the staging copy and the hunk are both live at
+    // the finish, which for pak0's biggest MD2 would be 2 MB on top of the hunk; a model that
+    // size is a level's, loaded under the plaque anyway.
+    static constexpr int kMaxAsyncModelBytes = 768 * 1024;
+
+    PendingLoad m_pending[kMaxPendingLoads];
+    int         m_numPending = 0;
 
     const ModelInstance * FindInlineModel(const char * name);
     void SetUpInlineModels(ModelInstance & world, const SubModelTable & subModels);
@@ -177,7 +212,199 @@ const ModelInstance * ModelCache::Find(const char * const name)
     }
 #endif // PS2_QUAKE_ASSERTS
 
+    // A model first wanted while a level runs loads in the background: the file read alone was
+    // 41 ms from the HDD and 91 from a USB stick, in the frame that asked (a pickup, a weapon
+    // switch, a player joining). Its type comes from the extension here and is checked against
+    // the file's ident when it lands. Level loads stay synchronous under the plaque.
+    if (!m_registering && aio::Enabled())
+    {
+        const char * const extension = std::strrchr(name, '.');
+        const bool md2 = (extension != nullptr && std::strcmp(extension, ".md2") == 0);
+        const bool sp2 = (extension != nullptr && std::strcmp(extension, ".sp2") == 0);
+        if (md2 || sp2)
+        {
+            const ModelInstance * pending = nullptr;
+            switch (StartAsyncLoad(name, md2 ? ModelType::AliasMD2 : ModelType::Sprite, &pending))
+            {
+            case AsyncStart::Missing:  return nullptr; // the synchronous answer: CL_LoadClientinfo's fallbacks rely on it
+            case AsyncStart::Queued:   return pending;
+            case AsyncStart::Declined: break; // too big, or no slot, memory or ticket: synchronously, below
+            }
+        }
+    }
+
     return LoadModel(name);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Background loads
+// ------------------------------------------------------------------------------------------------
+
+ModelCache::AsyncStart ModelCache::StartAsyncLoad(const char * const name, const ModelType type, const ModelInstance ** const out)
+{
+    PendingLoad * entry = nullptr;
+    for (PendingLoad & p : m_pending)
+    {
+        if (!p.active)
+        {
+            entry = &p;
+            break;
+        }
+    }
+    if (entry == nullptr)
+    {
+        return AsyncStart::Declined;
+    }
+
+    fs_location_t loc;
+    const int length = FS_LocateFile(name, &loc);
+    if (length < 0)
+    {
+        return AsyncStart::Missing;
+    }
+    if (length == 0 || loc.fd < 0 || length > kMaxAsyncModelBytes)
+    {
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    const u32 stagingBytes = aio::RoundUp64(static_cast<u32>(length));
+    u8 * const staging = static_cast<u8 *>(ps2::heap::TryAllocAligned(ps2::heap::MemAlign(64), stagingBytes, ps2::heap::MemTag::Aio));
+    if (staging == nullptr)
+    {
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    aio::Request request;
+    request.kind      = (loc.kind == FS_LOC_PKZ_DEFLATED) ? aio::Kind::InflateWhole : aio::Kind::Read;
+    request.prio      = aio::Priority::Asset;
+    request.fd        = loc.fd;
+    request.offset    = loc.offset;
+    request.bytes     = loc.bytes;
+    request.dest      = staging;
+    request.destBytes = stagingBytes;
+    request.rawBytes  = loc.rawBytes;
+
+    const aio::Ticket ticket = aio::Submit(request);
+    if (!ticket.IsValid())
+    {
+        ps2::heap::Free(staging, stagingBytes, ps2::heap::MemTag::Aio);
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    const u16 slot = m_modelPool.Alloc();
+    if (slot == ModelPool::kInvalidIndex) [[unlikely]]
+    {
+        Sys_Error("Out of model cache slots for '%s'! Bump ModelCache::kMaxModels (%u).", name, kMaxModels);
+    }
+
+    ModelInstance & mdl = m_modelPool.Slot(slot);
+    std::snprintf(mdl.name, sizeof(mdl.name), "%s", name);
+    mdl.type        = type;
+    mdl.state       = LoadState::Loading;
+    mdl.regSequence = m_regSequence;
+
+    const bool inserted = m_lookup.Insert(HashStr64(name), slot);
+    PS2_AssertMsg(inserted, "Duplicate model name!");
+
+    entry->active       = true;
+    entry->slot         = slot;
+    entry->ticket       = ticket;
+    entry->loc          = loc;
+    entry->staging      = staging;
+    entry->stagingBytes = stagingBytes;
+    entry->length       = length;
+    ++m_numPending;
+
+    *out = &mdl;
+    return AsyncStart::Queued;
+}
+
+void ModelCache::FinishPending(PendingLoad & pending)
+{
+    ModelInstance & mdl = m_modelPool.Slot(pending.slot);
+    PS2_Assert(mdl.state == LoadState::Loading);
+
+    const aio::State state  = aio::Poll(pending.ticket);
+    const int        result = aio::Result(pending.ticket);
+
+    bool ok = (state == aio::State::Done && result == pending.length);
+    if (ok)
+    {
+        ok = (mdl.type == ModelType::Sprite) ? LoadSpriteModelFromMemory(mdl, pending.staging, pending.length)
+                                             : LoadAliasMD2ModelFromMemory(mdl, pending.staging, pending.length);
+    }
+
+    if (ok)
+    {
+        mdl.state = LoadState::Ready;
+    }
+    else
+    {
+        // Never drawn from here on; the slot stays so repeated Finds don't retry. Whatever hunk
+        // the conversion got as far as allocating goes.
+        if (mdl.hunkBase != nullptr)
+        {
+            ps2::heap::Free(mdl.hunkBase, mdl.hunkSize, MemTagForType(mdl.type));
+            mdl.hunkBase = nullptr;
+            mdl.hunkSize = 0;
+        }
+        mdl.state = LoadState::Failed;
+        Com_Printf("WARNING: model '%s': background load failed (%d); not drawn.\n", mdl.name, result);
+    }
+
+    aio::Release(pending.ticket);
+    ps2::heap::Free(pending.staging, pending.stagingBytes, ps2::heap::MemTag::Aio);
+    FS_ReleaseLocation(&pending.loc);
+    debug::FrameLogNoteReady(mdl.name);
+
+    pending.active  = false;
+    pending.staging = nullptr;
+    --m_numPending;
+}
+
+int ModelCache::PumpLoads(const unsigned budgetCycles)
+{
+    if (m_numPending == 0)
+    {
+        return 0;
+    }
+
+    const debug::CpuCycles start = debug::ReadCycles();
+    int finished = 0;
+    for (PendingLoad & p : m_pending)
+    {
+        if (!p.active)
+        {
+            continue;
+        }
+        const aio::State state = aio::Poll(p.ticket);
+        if (state != aio::State::Done && state != aio::State::Failed)
+        {
+            continue;
+        }
+        FinishPending(p);
+        ++finished;
+        if (debug::ReadCycles() - start > budgetCycles)
+        {
+            break;
+        }
+    }
+    return finished;
+}
+
+void ModelCache::DrainLoads()
+{
+    for (PendingLoad & p : m_pending)
+    {
+        if (p.active)
+        {
+            aio::Wait(p.ticket);
+            FinishPending(p);
+        }
+    }
 }
 
 // Opens the model file and reads its 4-byte format id, then rewinds so the file is
@@ -437,6 +664,7 @@ void ModelCache::ReferenceAllTextures(ModelInstance & mdl)
 void ModelCache::Unload(u16 slot)
 {
     ModelInstance & mdl = m_modelPool.Slot(slot);
+    PS2_AssertMsg(mdl.state != LoadState::Loading, "Unloading a model the background loader still owns!");
 
     // Brush models are carved out of the permanently reserved world arena, so their
     // hunk is not the allocator's to take back - dropping the slot is the whole of
@@ -457,6 +685,9 @@ void ModelCache::Unload(u16 slot)
 void ModelCache::BeginRegistration(const char * const mapName)
 {
     PS2_Assert(mapName != nullptr && *mapName != '\0');
+
+    // Nothing of the loader's may be in flight while this cycle's sweeps free slots.
+    DrainLoads();
 
     // Bump first, so everything found or loaded this cycle is stamped current
     // and survives EndRegistration().
@@ -629,6 +860,11 @@ bool ReleaseWorldModel(const char * fullName)
 const ModelInstance * Find(const char * name)
 {
     return s_cache.Find(name);
+}
+
+void PumpLoads(const unsigned budgetCycles)
+{
+    s_cache.PumpLoads(budgetCycles);
 }
 
 const ModelInstance * GetWorldModel()

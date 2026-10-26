@@ -2479,6 +2479,10 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
             DrawNullModelEntity(viewDef, entity);
             continue;
         }
+        if (!model->IsDrawable())
+        {
+            continue; // still loading in the background (or failed): skipped, never a placeholder
+        }
 
         switch (model->type)
         {

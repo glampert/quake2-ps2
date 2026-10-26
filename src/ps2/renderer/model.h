@@ -42,6 +42,14 @@ constexpr bool HasFlag(SurfaceFlags flags, SurfaceFlags test)
     return (static_cast<u8>(flags) & static_cast<u8>(test)) != 0;
 }
 
+// ModelInstance::state.
+enum class LoadState : u8
+{
+    Ready,
+    Loading,
+    Failed,
+};
+
 enum class ModelType : u8
 {
     Brush,    // World geometry.
@@ -342,6 +350,11 @@ struct ModelInstance final
     // Model type flag - selects the live payload member below.
     ModelType type;
 
+    // Ready (0, what a zeroed slot reads) once loaded; Loading while the background loader reads
+    // its file, with no hunk yet, which every draw skips (see IsDrawable); Failed when that load
+    // could not be used, never drawn. Sits in the byte 'type' left before numFrames.
+    LoadState state;
+
     // Number of animation frames (usually = 2 for brush models: regular and alternate animation).
     u16 numFrames;
 
@@ -371,6 +384,11 @@ struct ModelInstance final
 
     Q_ALWAYS_INLINE AliasData & Alias() { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
     Q_ALWAYS_INLINE const AliasData & Alias() const { PS2_Assert(type == ModelType::AliasMD2); return payload.alias; }
+
+    // False while the background loader still owns the model or after its load failed: the
+    // entity is skipped this frame, not drawn as the null model (that is for a missing file, which
+    // Find still answers with nullptr).
+    Q_ALWAYS_INLINE bool IsDrawable() const { return state == LoadState::Ready; }
 };
 
 // Asserted rather than commented because the model cache holds 544 of these (320
@@ -444,6 +462,13 @@ void SetRebaseWallSt(bool rebase);
 bool RebaseWallSt();
 
 const ModelInstance * Find(const char * name);
+
+// Finishes the background model loads that landed, oldest first, within 'budgetCycles' (at
+// least one when any has landed); from aio::Pump once a frame. A model first wanted while a
+// level runs (a pickup, a weapon switch, a player's model) comes back from Find at once with
+// LoadState::Loading, in the cache under its name, and is drawable once its file has been read
+// and converted here; its skins load the same way (tex::FindAsync).
+void PumpLoads(unsigned budgetCycles);
 
 // Frees the resident world model, unless it is already 'fullName' (a "maps/*.bsp"
 // path; null or empty releases unconditionally). BeginRegistration does this

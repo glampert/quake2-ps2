@@ -47,6 +47,19 @@ The README's "Rendering" section is the architecture overview. The renderer file
   synchronous (`m_registering`). PCSX2, throttled to a USB rate: `pics/a_slugs.pcx` (a HUD icon
   the server names at a pickup) opened on frame 5012 and was ready on 5018; its row's ClParse
   went from 5.6 to 0.3 ms.
+- **A model may be `LoadState::Loading` or `Failed`** (model.h `ModelInstance::state`, in the
+  padding byte after `type`; since 2026-10-26, stage 6): `mod::Find` on a cache miss for a
+  `.md2`/`.sp2` outside registration locates the file, reads (or inflates) it whole into a staging
+  buffer through the loader, and answers at once with a Loading slot in the lookup; `mod::PumpLoads`
+  converts it with `LoadAliasMD2ModelFromMemory`/`LoadSpriteModelFromMemory`, which share
+  `ValidateMD2Header`, `LayOutAliasHunk`, `ExpandGLCmdsToTriangles` and `ClampAliasNormals` with the
+  streamed loaders, and look its skins or frames up with `tex::FindAsync`. Whole-file staging rather
+  than the plan's read-in-place phases because a pkz entry is deflated and has no ranges; files over
+  768 KB load synchronously instead. `RenderEntities` skips a non-drawable model (`IsDrawable`),
+  never the octahedron, which stays for a missing file (Find's nullptr, which `CL_LoadClientinfo`
+  relies on). `mod::BeginRegistration` drains first. PCSX2 throttled to a USB rate:
+  `models/items/ammo/slugs/medium/tris.md2` opened on frame 4758 and was ready on 4760, its skin on
+  4761; the row's ClParse 4.8 → 0.4 ms, FsIo 2.8 ms → 4 µs.
 - **With `ps2_gs_latency` on (the default), a frame reaches the screen only when the next
   `BeginFrame` runs.** A frame that nothing follows never shows. The loading plaque was one:
   `SCR_BeginLoadingPlaque` draws it once, then `cls.disable_screen` stops all drawing until

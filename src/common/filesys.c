@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "ps2/debug/io_log.h"           // [PS2_QUAKE]
 #include "ps2/debug/load_trace.h"       // [PS2_QUAKE]
 #include "ps2/fs/pkz_pack.h"            // [PS2_QUAKE]
+#include "ps2/fs/async_io_c.h"          // [PS2_QUAKE]: PS2_AsyncIoDrain before a pack closes
+#include <fcntl.h>                       // [PS2_QUAKE]: open, for FS_LocateFile
+#include <unistd.h>                      // [PS2_QUAKE]: close
 #include "ps2/renderer/loading_screen.h" // [PS2_QUAKE]
 
 //===========================================================================
@@ -70,6 +73,10 @@ typedef struct pack_s
     // It reads its files itself: handle is NULL, and each packfile_t's filepos is the file's
     // index in the pkz rather than an offset.
     ps2_pkz_t * pkz;
+
+    // [PS2_QUAKE]: the background loader's descriptor on a .pak (FS_LocateFile), opened on first
+    // use, -1 until then. Only the loader reads through it; the main thread's reads use 'handle'.
+    int asyncFd;
 } pack_t;
 
 typedef struct filelink_s
@@ -680,6 +687,92 @@ void FS_FreeFile(void * buffer)
 
 /*
 =================
+FS_LocateFile
+
+[PS2_QUAKE]: FS_LoadFile's search without its read, for the background loader (ps2/fs/async_io.h,
+declared in q_common.h). The loader only ever sees a descriptor and a byte range: a pak's second
+descriptor, opened here the first time a file of it is located; a pkz's reader descriptor and the
+entry's (compressed) range; a loose file's own stream, through fileno, held open until
+FS_ReleaseLocation. The existence check stays synchronous: a missing file is -1 here, as it is
+everywhere else, so the callers' "missing" paths are unchanged.
+=================
+*/
+int FS_LocateFile(const char * filename, fs_location_t * out)
+{
+    FILE * h;
+    pack_t * pak;
+    packfile_t * entry;
+    int len;
+
+    memset(out, 0, sizeof(*out));
+    out->fd = -1;
+
+    PS2_FrameLogNoteOpen(filename);
+    PS2_ProfileBegin(PS2_PROF_FS_IO);
+    len = FS_FindFile(filename, &h, &pak, &entry);
+    PS2_ProfileEnd(PS2_PROF_FS_IO);
+
+    file_from_pak = (pak != NULL);
+
+    if (len < 0)
+    {
+        return -1;
+    }
+
+    if (pak && pak->pkz)
+    {
+        int fd, deflated;
+        unsigned offset, compBytes, rawBytes;
+        const int found = PS2_PkzLocate(pak->pkz, entry->filepos, &fd, &offset, &compBytes, &rawBytes, &deflated);
+        if (found == 0)
+        {
+            Com_Error(ERR_FATAL, "FS_LocateFile: %s is damaged in %s", filename, pak->filename);
+        }
+        if (found > 0)
+        {
+            out->kind = deflated ? FS_LOC_PKZ_DEFLATED : FS_LOC_PKZ_STORED;
+            out->fd = fd;
+            out->offset = offset;
+            out->bytes = compBytes;
+            out->rawBytes = rawBytes;
+        }
+    }
+    else if (pak)
+    {
+        if (pak->asyncFd < 0)
+        {
+            pak->asyncFd = open(pak->filename, O_RDONLY);
+        }
+        out->kind = FS_LOC_PAK;
+        out->fd = pak->asyncFd;
+        out->offset = (unsigned)entry->filepos;
+        out->bytes = (unsigned)len;
+        out->rawBytes = (unsigned)len;
+    }
+    else
+    {
+        out->kind = FS_LOC_LOOSE;
+        out->fd = fileno(h);
+        out->looseFile = h;
+        out->offset = 0;
+        out->bytes = (unsigned)len;
+        out->rawBytes = (unsigned)len;
+    }
+    return len;
+}
+
+void FS_ReleaseLocation(fs_location_t * loc)
+{
+    if (loc->looseFile)
+    {
+        fclose(loc->looseFile);
+        loc->looseFile = NULL;
+    }
+    loc->fd = -1;
+}
+
+/*
+=================
 FS_LoadPackFile
 
 Takes an explicit (not game tree related) path to a pak file.
@@ -777,6 +870,7 @@ pack_t * FS_LoadPackFile(char * packfile)
     pack = Z_Malloc(sizeof(pack_t));
     strcpy(pack->filename, packfile);
     pack->handle = packhandle;
+    pack->asyncFd = -1; // [PS2_QUAKE]
     pack->numfiles = numpackfiles;
     pack->files = newfiles;
     FS_HashPack(pack); // [PS2_QUAKE]
@@ -823,6 +917,7 @@ static pack_t * FS_LoadPkzFile(const char * packfile)
     strcpy(pack->filename, packfile);
     pack->handle = NULL;
     pack->pkz = pkz;
+    pack->asyncFd = -1;
     pack->numfiles = numfiles;
     FS_HashPack(pack);
 
@@ -946,6 +1041,7 @@ void FS_SetGamedir(const char * dir)
     //
     // free up any current game dir info
     //
+    PS2_AsyncIoDrain(); // [PS2_QUAKE]: a background read may still be going through a pack closed below
     while (fs_searchpaths != fs_base_searchpaths)
     {
         if (fs_searchpaths->pack)
@@ -957,6 +1053,10 @@ void FS_SetGamedir(const char * dir)
             else
             {
                 fclose(fs_searchpaths->pack->handle);
+                if (fs_searchpaths->pack->asyncFd >= 0) // [PS2_QUAKE]
+                {
+                    close(fs_searchpaths->pack->asyncFd);
+                }
             }
             Z_Free(fs_searchpaths->pack->files);
             Z_Free(fs_searchpaths->pack->hash); // [PS2_QUAKE]

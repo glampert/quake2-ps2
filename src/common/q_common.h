@@ -740,6 +740,28 @@ void FS_Read(void * buffer, int len, FILE * f);
 void FS_FreeFile(void * buffer);
 void FS_CreatePath(char * path);
 
+// [PS2_QUAKE]: where a file lies, for the background loader (ps2/fs/async_io.h): a descriptor
+// and a byte range, found without reading it. FS_LocateFile returns the file's length or -1, as
+// FS_LoadFile does with a NULL buffer; a found file whose fd is -1 can only be loaded
+// synchronously (the pack's reader descriptor couldn't be opened). The range is the compressed
+// one for FS_LOC_PKZ_DEFLATED, with rawBytes the inflated size. Release it once the read is done:
+// a loose file's stream is held open until then.
+#define FS_LOC_LOOSE        0
+#define FS_LOC_PAK          1
+#define FS_LOC_PKZ_STORED   2
+#define FS_LOC_PKZ_DEFLATED 3
+typedef struct fs_location_s
+{
+    int kind;
+    int fd;
+    unsigned offset;
+    unsigned bytes;
+    unsigned rawBytes;
+    FILE * looseFile;
+} fs_location_t;
+int FS_LocateFile(const char * name, fs_location_t * out);
+void FS_ReleaseLocation(fs_location_t * loc);
+
 /*
 ==============================================================
 

@@ -72,6 +72,12 @@ paths:
   prepped), or after a timeout (150 s on this port, 120 s in id's code: a USB load can take
   longer). The PS2 loading screen hangs off those calls and off `FS_LoadFile`/`FS_FOpenFile`
   (`ps2/renderer/loading_screen.h`).
+- **`FS_LocateFile` (filesys.c, declared in q_common.h) finds a file without reading it**, for the
+  background loader (`ps2/fs/async_io.h`): a `.pak` gets a second descriptor (`pack_t::asyncFd`,
+  opened on first use, closed in `FS_SetGamedir` after `PS2_AsyncIoDrain`), a pkz entry comes back
+  as its compressed range on the pack's reader descriptor (`PS2_PkzLocate`), a loose file as its
+  own stream's `fileno`, held open until `FS_ReleaseLocation`. Missing is -1 as everywhere else;
+  found with `fd` -1 means "load synchronously". It notes `FLOG#open` and `FsIo` like a load.
 - **filesys.c loads `pakN.pkz` in place of `pakN.pak`** when both exist, through
   `ps2/fs/pkz_pack.h`. For a pkz, `pack_t.handle` is NULL and `packfile_t.filepos` is the
   file's index in the pkz, not an offset. Its `FS_FOpenFile` streams start at position 0 for a

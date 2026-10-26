@@ -15,6 +15,7 @@
 
 #include "ps2/input/keyboard.h"
 #include "ps2/audio/music_stream.h"
+#include "ps2/fs/async_io.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/common.h"
 
@@ -264,7 +265,7 @@ void Keyboard::Update()
         // ~300 ms, every 640 ms. The driver keeps the keys queued, so they are picked up the
         // frame the read is done; checked per read, since each one sleeps and lets the reader
         // start.
-        if (audio::MusicReadPending())
+        if (audio::MusicReadPending() || aio::Pending())
         {
             break;
         }

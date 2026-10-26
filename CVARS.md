@@ -94,6 +94,13 @@ bigger picture.
 | `ps2_logfile` | `0` | `0` | | Copy the console, `Sys_Error` and the reports printed before it (pipeline hang dump, stack traces, out-of-memory stats) to `quake2.log` next to `baseq2/`, one open/append/close per write so a hang leaves the log on the drive. Defaults to `1` in a build with `PS2_QUAKE_LOAD_TRACE` set to 1. The Options menu's debug page sets it. |
 | `ps2_perftest` | `0` | `0` | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits; does nothing in release, where the profiler is compiled out. The debug page's "start perf test" sets it. |
 
+## File system and background loading
+
+| Cvar | Debug | Release | Flags | Description |
+| --- | --- | --- | --- | --- |
+| `ps2_aio` | `1` | `1` | | The background loader (`src/ps2/fs/async_io.cpp`): a thread one priority below the main one that reads file ranges and inflates pack entries while frames run. 0 makes every client load synchronously, the A/B switch. Read at each request. |
+| `ps2_aio_throttle_kbps` | `0` | `0` | | Loader throughput cap in KB/s, as a sleep after each 32 KB chunk (plus 5 ms per chunk for the command), so PCSX2's instant host reads pace like a drive; 900 is a USB stick's. 0 is off. |
+
 ## Sound and music
 
 | Cvar | Debug | Release | Flags | Description |
@@ -140,6 +147,7 @@ perf test).
 | `ps2_testcube_vram_tex_eviction` | `0` | — | | Slide the cube's textures through a window that forces VRAM evictions and re-uploads. |
 | `ps2_testcube_vulerp` | `0` | — | | Draw the cube through the MD2 keyframe-lerp VU path. |
 | `ps2_testcin` | `0` | — | | Play every stock cinematic in turn. |
+| `ps2_testaio` | `0` | — | | Background loader self-test: a fixed file list read through the loader and through `FS_LoadFile` and compared, as the drive is and throttled to 900 KB/s, with a main-thread read timed every frame meanwhile; ends in `AioTest: PASS`/`FAIL`, then quits unless `ps2_test_quit` is 0. |
 | `ps2_testmaps` | `0` | — | | Load all 39 stock maps in order, logging memory use per map; a map that takes over 240 s to load is skipped. The debug page's "start map cycle" sets it. |
 | `ps2_testmaps_dwell` | `8` | — | | Seconds `ps2_testmaps` stays in each map once loaded. |
 | `ps2_testsaves` | `0` | — | | Save game test: 1 = the boot drive (host files under PCSX2), 2 = the boot drive and the memory card, 3 = load an earlier run's save from the boot drive only. |

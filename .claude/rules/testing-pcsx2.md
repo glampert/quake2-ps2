@@ -147,6 +147,13 @@ state on the way out, so restore the ini too.
 - `ps2_perftest 1`: unattended frame-log capture of the demo loop. See
   [performance.md](performance.md).
 - `ps2_testcube 1` (VU1 path smoke test), `ps2_testcin 1` (cinematics).
+- `ps2_testaio 1`: the background loader (fs/async_io.h) reads 13 files through the loader and
+  through `FS_LoadFile` and compares them, twice (the second pass throttled to 900 KB/s), timing a
+  main-thread read of `pics/conchars.pcx` every frame meanwhile; prints each file's source kind and
+  request-to-landed time, the loader's read throughput and `AioTest: PASS`/`FAIL`. ~15 s in PCSX2
+  from the pkz (2026-10-26: 24 comparisons, 0 failures, loose/pkz-stored/pkz-deflated seen, the
+  probe read 4 ms at worst). It needs a run on a console from USB too: PCSX2 has no data cache,
+  so a destination sharing a cache line with something else only shows there.
 - **The USB boot branch:** run a copy of the ELF from a directory with no `baseq2/` (e.g. the
   scratchpad), with HDD disabled. The `host:` probe misses, so the IOP inventory (PCSX2's BIOS
   leaves nothing in the way, so no reset), optional HDD probe, BDM module chain and 10 s

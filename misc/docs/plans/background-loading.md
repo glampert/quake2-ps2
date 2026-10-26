@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stage 1 landed 2026-10-26. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1 and 2 landed 2026-10-26 (stage 2's console run still owed). Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -228,10 +228,10 @@ struct Request {
   41 ms on USB, under 10 ms on the HDD.
 - **InflateWhole:** the compressed range is read in 32 KB pieces into the workspace input and
   inflated straight into `dest` with `TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF`, the loop
-  `InflateWhole` in pkz_pack.cpp already has, lifted into
-  `pkz::InflateWholeWith(reader, location, dest, workspace)` so the synchronous path and the
-  loader share it. Per piece: ~41 ms of I/O and ~10 ms of CPU on the console (12 MB/s),
-  preemptible.
+  `InflateWhole` in pkz_pack.cpp already has, as a resumable step (`RunInflateChunk`, one piece
+  per scheduler step; a mirror of the synchronous loop rather than a lift of it, see stage 2, with
+  the self-test comparing the two outputs). Per piece: ~41 ms of I/O and ~10 ms of CPU on the
+  console (12 MB/s), preemptible.
 - **Debug cvars** (all in CVARS.md): `ps2_aio` (1; 0 makes every client load synchronously, the
   A/B switch), `ps2_aio_throttle_kbps` (0; a `DelayThread` after each chunk so PCSX2 behaves like
   USB), `ps2_aio_pump_us` (2000, §6.7), `ps2_testaio` (stage 2), `ps2_readahead_kb` (512, §6.3),
@@ -436,13 +436,19 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   counter: `PresentClock::worstWriteTicks`, printed as the frame log's closing `FLOG#note,present:`
   line, read 1 µs (the blanking interval is ~1500 µs). Still owed on the console: no tearing by
   eye and that note's number from a USB run.
-- [ ] **2. `ps2::aio`, `FS_LocateFile` and a self-test, no clients.** `ps2_testaio 1` (debug,
-  driven from `PS2_EndFrame` like the other tests): a fixed file list covering all four source
-  kinds, read through `FS_LoadFile` and through the loader (`Read` and `InflateWhole`),
-  checksums compared; with and without `ps2_aio_throttle_kbps 900`; main-thread reads interleaved
-  (music playing) to exercise the serialisation; the alignment asserts; chunk throughput and the
-  longest main-thread wait measured. Gate: every checksum matches in PCSX2 **and once on the
-  console from USB** (the only place the cache rule is real); no keyboard poll stalls.
+- [x] **2. `ps2::aio`, `FS_LocateFile` and a self-test, no clients.** Landed 2026-10-26
+  (`src/ps2/fs/async_io.{h,cpp}`, `async_io_c.h` for the C hook, `FS_LocateFile`/
+  `FS_ReleaseLocation`, `PS2_PkzLocate`, `MemTag::Aio`, the keyboard guard, `ps2_aio`,
+  `ps2_aio_throttle_kbps`, `src/ps2/tests/aio_test.{h,cpp}` behind `ps2_testaio`). The test reads
+  13 files through the loader and `FS_LoadFile`, compares them byte for byte with the 64-byte
+  rounding checked untouched, twice (the second pass throttled to 900 KB/s, one ticket through
+  `Wait`), times a main-thread read every frame, and checks the declined-ticket path with
+  `ps2_aio 0`. PCSX2 gate met: 24 comparisons, 0 failures, loose, pkz-stored and pkz-deflated
+  seen (a pak needs a run without the pkz), probe read 4 ms at worst, no keyboard stalls. **Still
+  owed: one run on the console from USB**, the only place the cache-line rule is real. Deviation
+  from §5.2: the loader has its own inflate stepper (`RunInflateChunk`, one input piece per
+  scheduler step) rather than a loop lifted out of pkz_pack.cpp, since the synchronous loop and a
+  resumable step don't share a shape; the self-test's byte comparison is the guard against drift.
 - [ ] **3. Cinematic read-ahead**, plus demos if their source is eligible. Gate (a USB capture):
   no refill frames; every cinematic row's Frame under 106 ms and `sndFree` never within 2400
   bytes of empty outside the dump-poisoned rows; `Cinematic` at the HDD's decode-only 10-13 ms;

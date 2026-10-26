@@ -94,6 +94,7 @@ struct ps2_pkz_s
 {
     char    path[MAX_OSPATH];
     int     fd;
+    int     readerFd;     // The background loader's descriptor on the pack (PS2_PkzLocate), or -1.
     u32     filePos;      // Where fd is: a read that continues from there skips its lseek.
     u32     fileBytes;
     int     numFiles;
@@ -364,6 +365,10 @@ void DestroyPack(ps2_pkz_t * pkz)
     ps2::heap::Free(pkz->entries, sizeof(Entry) * pkz->entryCapacity, MemTag::Pack);
     ps2::heap::Free(pkz->restarts, sizeof(u32) * pkz->restartCapacity, MemTag::Pack);
     close(pkz->fd);
+    if (pkz->readerFd >= 0)
+    {
+        close(pkz->readerFd);
+    }
     ps2::heap::Free(pkz, sizeof(ps2_pkz_t), MemTag::Pack);
 }
 
@@ -825,7 +830,8 @@ ps2_pkz_t * PS2_PkzOpen(const char * path)
 
     auto * const pkz = static_cast<ps2_pkz_t *>(ps2::heap::Alloc(sizeof(ps2_pkz_t), MemTag::Pack));
     std::memset(static_cast<void *>(pkz), 0, sizeof(*pkz));
-    pkz->fd = fd;
+    pkz->fd       = fd;
+    pkz->readerFd = -1;
 
     // Stored files reopen the pack by this name (PS2_PkzOpenStream), so it must not be cut short.
     if (std::snprintf(pkz->path, sizeof(pkz->path), "%s", path) >= static_cast<int>(sizeof(pkz->path)))
@@ -1050,6 +1056,30 @@ FILE * PS2_PkzOpenStream(ps2_pkz_t * pkz, const int index, const char * name)
     PS2_IoLogCompressedStream(file);
 #endif // PS2_QUAKE_IO_LOG
     return file;
+}
+
+int PS2_PkzLocate(ps2_pkz_t * pkz, const int index, int * fd, unsigned * offset, unsigned * compBytes,
+                  unsigned * rawBytes, int * deflated)
+{
+    Entry & e = pkz->entries[index];
+    if (!ResolveDataOffset(*pkz, e))
+    {
+        return 0;
+    }
+    if (pkz->readerFd < 0)
+    {
+        pkz->readerFd = open(pkz->path, O_RDONLY);
+        if (pkz->readerFd < 0)
+        {
+            return -1;
+        }
+    }
+    *fd        = pkz->readerFd;
+    *offset    = e.dataOffset;
+    *compBytes = e.compBytes;
+    *rawBytes  = e.rawBytes;
+    *deflated  = (e.method == pkz::kMethodDeflate) ? 1 : 0;
+    return 1;
 }
 
 void PS2_PkzClose(ps2_pkz_t * pkz)

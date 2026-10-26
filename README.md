@@ -881,6 +881,20 @@ mostly reads, so the changes are all about reading less, less often:
   file's CRC to check what they read), and whole-file loads share a 40 KB workspace. A stream
   of a deflated file holds up to 72 KB from its first read until it is closed: its 32 KB
   dictionary, an input buffer and the inflater.
+- **Background loader** ([async_io.h](src/ps2/fs/async_io.h), `ps2::aio`). Every file read
+  sleeps its caller until the IOP's file server answers, 41 ms for a 32 KB chunk on a USB
+  stick, so a read made mid-level by the main thread is a dropped frame. `FS_LocateFile`
+  resolves a file to a descriptor and a byte range without reading it (a pak's second
+  descriptor, a pkz entry's compressed range, a loose file's own stream), and a thread one
+  priority below the main one reads it in 32 KB chunks aligned to the file, or inflates a
+  deflated entry straight into the caller's buffer, re-picking the best (priority, age) request
+  after every chunk. It runs only while the main thread sleeps, which since the vsync wait
+  sleeps on the vblank interrupt is most of every frame. Destinations are 64-byte aligned SIF
+  DMA targets; the loader never allocates, prints or touches the engine, and the places that
+  free or close behind a read drain it first. The clients (the cinematic stream, sounds,
+  textures, models) arrive in stages: the design is
+  [background-loading.md](misc/docs/plans/background-loading.md), and `ps2_testaio 1` is its
+  self-test. Tag `Aio`.
 
 ### System and memory
 

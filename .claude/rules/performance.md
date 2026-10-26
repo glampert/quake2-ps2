@@ -41,7 +41,11 @@ paths:
   mean (93 against 22 µs), a single 1.3 s level-change row that the sleep run's capture charged to
   ClParse and the spin run's to no column, the kind of attribution jitter a `gamemap` row has.
   Nothing a PCSX2 capture can see should change at this stage: the gain is the idle time the EE
-  now hands to the other threads, which only shows once they have work.
+  now hands to the other threads, which only shows once they have work. **Stage 2 landed the same
+  day**: `ps2::aio` (fs/async_io.cpp), `FS_LocateFile` and the `ps2_testaio` self-test, no
+  clients yet; PCSX2 passed it (testing-pcsx2.md). From a pkz the loader landed 5.9 MB in 1.5 s
+  unthrottled, 11 MB/s inside `read()` on host files, and ran while the main thread sat in its
+  own `FS_LoadFile` calls.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

@@ -36,6 +36,7 @@
 #include "ps2/tests/map_cycle.h"
 #include "ps2/tests/perf_run.h"
 #include "ps2/tests/test_quit.h"
+#include "ps2/tests/aio_test.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -960,6 +961,10 @@ void PS2_EndFrame()
     // be reached once per frame. The save game test can't: it reads the save device,
     // under the save notice, which draws a frame of its own (see main.cpp).
     ps2::test::RunMapCycle();
+
+    // Background loader test (cvar "ps2_testaio 1"): reads a fixed file list through the loader
+    // and through FS_LoadFile and compares them. Here for the same reason as the map cycle.
+    ps2::test::RunAioTest();
 #endif // PS2_QUAKE_DEBUG
 
 #if PS2_QUAKE_PROFILE

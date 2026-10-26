@@ -11,6 +11,8 @@
  *        would inflate about as fast as USB reads, so it would become the bottleneck.
  *
  *        Only the main thread may use a pack: whole-file reads and streams share its descriptor.
+ *        The background loader (async_io.h) reads through a second one, PS2_PkzLocate's, and
+ *        never through the main thread's.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -53,7 +55,16 @@ int PS2_PkzRead(ps2_pkz_t * pkz, int index, void * dest);
    NULL if the pack is damaged there. */
 FILE * PS2_PkzOpenStream(ps2_pkz_t * pkz, int index, const char * name);
 
-/* Closes the pack. Streams still open on it keep it alive until they are closed. */
+/* Where file 'index' lies, for the background loader: the pack's reader descriptor (a second
+   one on the pack, opened here on first use and owned by the loader side), the data's offset and
+   compressed size, its inflated size, and whether it is deflated (otherwise stored: the range is
+   the file's bytes). 1 on success, 0 if the pack is damaged there, -1 if the descriptor couldn't
+   be opened (the caller loads synchronously). Reads at most a local header, on the main thread. */
+int PS2_PkzLocate(ps2_pkz_t * pkz, int index, int * fd, unsigned * offset, unsigned * compBytes,
+                  unsigned * rawBytes, int * deflated);
+
+/* Closes the pack. Streams still open on it keep it alive until they are closed. Call
+   PS2_AsyncIoDrain first: a background read may still be going through the reader descriptor. */
 void PS2_PkzClose(ps2_pkz_t * pkz);
 
 #ifdef __cplusplus

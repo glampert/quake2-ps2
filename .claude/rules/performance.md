@@ -45,7 +45,15 @@ paths:
   day**: `ps2::aio` (fs/async_io.cpp), `FS_LocateFile` and the `ps2_testaio` self-test, no
   clients yet; PCSX2 passed it (testing-pcsx2.md). From a pkz the loader landed 5.9 MB in 1.5 s
   unthrottled, 11 MB/s inside `read()` on host files, and ran while the main thread sat in its
-  own `FS_LoadFile` calls.
+  own `FS_LoadFile` calls. **Stage 3 (the cinematic read-ahead stream) landed the same day** too:
+  PCSX2 can't show its gain (host reads are instant), only that nothing broke: against the sleep
+  capture, the cinematic rows' FsIo went from 958 to 824 µs mean and p95 1418 to 1101 (the stdio
+  refills gone; what is left is the copy out of the ring), Cinematic and Frame unchanged
+  (`pcsx2-readahead-2026-10-26.flog`); with `ps2_aio_throttle_kbps 900`, a USB stick's rate, the
+  capture is the same to the row (`pcsx2-readahead-throttled-2026-10-26.flog`: the ring keeps up),
+  and at 200 KB/s, below the bitrate, playback starves as designed (every cinematic row waits in
+  FsIo, no failure). The frame log gained `aioBytes` and `aioQ`. The console USB capture is the
+  gate that matters and is still to run.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

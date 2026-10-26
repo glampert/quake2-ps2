@@ -125,6 +125,11 @@ void WaitProgress(Ticket ticket, u32 minBytes);
 // written. Nothing to do for an invalid or stale ticket.
 void Release(Ticket ticket);
 
+// Takes the request back whatever its state: a Queued one is dropped at once, a Running one is
+// waited for (one chunk at most), a finished one released. The destination is the caller's again
+// when this returns. For a stream that closes with slots still in flight.
+void Cancel(Ticket ticket);
+
 // Waits until no request is Queued or Running. Done ones keep their slots until their owners
 // Release them. Call it before freeing or closing anything a request might still touch.
 void Drain();

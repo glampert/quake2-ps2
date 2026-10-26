@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1 and 2 landed 2026-10-26 (stage 2's console run still owed). Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1-3 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -449,11 +449,17 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   from §5.2: the loader has its own inflate stepper (`RunInflateChunk`, one input piece per
   scheduler step) rather than a loop lifted out of pkz_pack.cpp, since the synchronous loop and a
   resumable step don't share a shape; the self-test's byte comparison is the guard against drift.
-- [ ] **3. Cinematic read-ahead**, plus demos if their source is eligible. Gate (a USB capture):
-  no refill frames; every cinematic row's Frame under 106 ms and `sndFree` never within 2400
-  bytes of empty outside the dump-poisoned rows; `Cinematic` at the HDD's decode-only 10-13 ms;
-  `FsIo` about 0 on cinematic rows; the demo refill rows (Server 125 ms on USB) gone if demos
-  were included; a shorter cinematic start.
+- [x] **3. Cinematic read-ahead**, landed 2026-10-26 (`src/ps2/fs/readahead_stream.{h,cpp}`,
+  the `FS_FOpenFileImpl` extension rule, `ps2_readahead_kb`, `aio::Cancel` so a close waits one
+  chunk at most, the frame log's `aioBytes`/`aioQ`). Demos get it where their source is a range
+  (pak, stored pkz entry, loose); pak0.pkz deflates `.dm2`, so they don't from it: the `pakzip`
+  store rule stays optional. PCSX2 (can't show the gain, only that nothing broke): cinematic rows'
+  FsIo 958 → 824 µs mean, p95 1418 → 1101, Cinematic and Frame unchanged; `ps2_aio_throttle_kbps
+  900` gives the same capture to the row, 200 KB/s starves as designed (`pcsx2-readahead-
+  2026-10-26.flog`, `-throttled-`). **Gate still owed on the console (a USB capture):** no refill
+  frames; every cinematic row's Frame under 106 ms and `sndFree` never within 2400 bytes of empty
+  outside the dump-poisoned rows; `Cinematic` at the HDD's decode-only 10-13 ms; `FsIo` near 0 on
+  cinematic rows; a shorter cinematic start; `aioQ` staying above 0 through ntro's peaks.
 - [ ] **4. Sounds.** Gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
   `#ready` latency 2-4 frames on USB; no dropped or doubled one-shots in a `ps2_perftest` run by
   ear; the `S_IssuePlaysound` NULL path exercised with a deliberately missing file in a debug run.

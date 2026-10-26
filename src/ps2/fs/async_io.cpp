@@ -189,11 +189,7 @@ void RunReadChunk(const int slot, Slot & s)
     s_statBytes  = s_statBytes + n;
     if (s.bytesDone == s.bytes)
     {
-        Finish(s, static_cast<int>(s.bytes));
-    }
-    else
-    {
-        s.state = State::Running;
+        Finish(s, static_cast<int>(s.bytes)); // else it stays Running for the next chunk
     }
 }
 
@@ -254,7 +250,23 @@ void RunInflateChunk(const int slot, Slot & s)
         Finish(s, kErrInflate); // bad data, longer than recorded, or truncated
         return;
     }
-    s.state = State::Running;
+    // Otherwise it stays Running for the next piece.
+}
+
+// Claims a picked request: Queued becomes Running, so Cancel can tell a request the loader has
+// not touched (dropped at once) from one it is reading (waited for). Interrupts are off across
+// the check and the store, since the main thread can preempt this thread between any two
+// instructions and Cancel's own Queued -> Free store must not be overwritten.
+bool Take(Slot & s)
+{
+    DIntr();
+    const State state = s.state;
+    if (state == State::Queued)
+    {
+        s.state = State::Running;
+    }
+    EIntr();
+    return InFlight(state);
 }
 
 // The Queued or Running request to serve next: the lowest priority value, then the oldest. A
@@ -274,6 +286,7 @@ Slot * PickBest(int & slotOut)
             continue;
         }
         CompilerBarrier(); // the fields were written before the state
+        (void)state;
         if (s.kind == Kind::InflateWhole && inflateOwner >= 0 && inflateOwner != i)
         {
             continue;
@@ -316,6 +329,10 @@ void LoaderLoop()
             if (s == nullptr)
             {
                 break;
+            }
+            if (!Take(*s))
+            {
+                continue; // cancelled between the pick and the take
             }
 
             const u32 before = s->bytesDone;
@@ -581,6 +598,29 @@ void Release(const Ticket ticket)
     }
     Slot & s = s_slots[ticket.slot];
     PS2_AssertMsg(!InFlight(s.state), "aio::Release of a request still in flight");
+    CompilerBarrier();
+    s.state = State::Free;
+}
+
+void Cancel(const Ticket ticket)
+{
+    if (!IsTicketCurrent(ticket))
+    {
+        return;
+    }
+    Slot & s = s_slots[ticket.slot];
+    // Queued -> Free is this thread's store alone: the loader claims a request under DIntr (Take),
+    // so it either saw Queued before this and is Running, or sees Free and skips it.
+    if (s.state == State::Queued)
+    {
+        CompilerBarrier();
+        s.state = State::Free;
+        return;
+    }
+    while (InFlight(s.state))
+    {
+        WaitSema(s_doneSema);
+    }
     CompilerBarrier();
     s.state = State::Free;
 }

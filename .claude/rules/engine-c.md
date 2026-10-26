@@ -88,6 +88,13 @@ paths:
   load: hooks around `FS_FOpenFile`, `FS_Read`, `FS_LoadFile` and `FS_FCloseFile`. Raw
   `fread` on a stream (the demo and cinematic readers) isn't seen. The frame log's `Cinematic`
   column (`PS2_PROF_CINEMATIC` in `SCR_RunCinematic`) times a cinematic frame's reads and decode.
+- **A `.cin` or `.dm2` opened through `FS_FOpenFile` is a read-ahead stream** since 2026-10-26
+  (`FS_FOpenFileImpl` → `PS2_WantsReadAheadStream`/`PS2_OpenReadAheadStream`, `ps2/fs/
+  readahead_stream.h`): an unbuffered `fopencookie` stream over a ring the background loader fills,
+  unless the file is a deflated pkz entry, `ps2_readahead_kb` is 0 or the ring can't be allocated,
+  when it gets the plain stdio stream as before. cl_cin.c and sv_send.c are untouched: `fread`,
+  `FS_Read`, `feof` and `fclose` work on it, and `FsIo` on a cinematic row is now a sleep for a
+  chunk the loader hasn't landed, not a refill.
 - The load trace (`PS2_LOAD_TRACE`, `ps2/debug/load_trace.h`) covers the path from
   `SCR_FinishCinematic` to the first `R_EndFrame` after registration. `PS2_QUAKE_LOAD_TRACE`
   ships as 0. To debug a load, pass `-DPS2_QUAKE_LOAD_TRACE=1` in `CONFIG_DEFS` (clear

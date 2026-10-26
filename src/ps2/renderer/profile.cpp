@@ -16,6 +16,7 @@
 #include "ps2/renderer/gs.h" // GetPresentClock
 #include "ps2/renderer/view.h"
 #include "ps2/audio/sound_hold.h" // SubmitFreeBytes, DeviceRingBytes
+#include "ps2/fs/async_io.h"       // TakeFrameStats
 
 #include <cstdio>
 
@@ -158,6 +159,10 @@ struct FrameSample
     // Once it has run dry the reading is no longer monotonic (the read cursor laps the write cursor),
     // so a Frame longer than the ring is the certain sign; this column shows the near misses.
     int sndFree;
+
+    // The background loader (fs/async_io.h): bytes it landed during the frame, and how many
+    // requests were queued or running at the capture.
+    int aioBytes, aioQ;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -308,10 +313,11 @@ void WriteBatch()
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
-                    "chainKB,chainKicks,chainDrains,sndFree\n");
+                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ\n");
         Emit("FLOG#note,timings are microseconds\n");
         Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held\n",
              ps2::audio::DeviceRingBytes());
+        Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -335,7 +341,7 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled,
                           s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
@@ -343,7 +349,7 @@ void WriteBatch()
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
-                          s.chainKB, s.chainKicks, s.chainDrains, s.sndFree);
+                          s.chainKB, s.chainKicks, s.chainDrains, s.sndFree, s.aioBytes, s.aioQ);
         }
 
         Emit("%s", line);
@@ -452,6 +458,10 @@ void FrameLogCapture()
     // The finished frame's SNDDMA_Submit (S_Update runs after SCR_UpdateScreen's rollover, so its
     // reading belongs to the row being captured here).
     s.sndFree = ps2::audio::SubmitFreeBytes();
+
+    const ps2::aio::Stats aio = ps2::aio::TakeFrameStats();
+    s.aioBytes = static_cast<int>(aio.bytesLanded);
+    s.aioQ     = static_cast<int>(aio.queueDepth);
 }
 
 void FrameLogFlush()

@@ -895,6 +895,15 @@ mostly reads, so the changes are all about reading less, less often:
   textures, models) arrive in stages: the design is
   [background-loading.md](misc/docs/plans/background-loading.md), and `ps2_testaio 1` is its
   self-test. Tag `Aio`.
+- **Cinematics and demos stream through it** ([readahead_stream.h](src/ps2/fs/readahead_stream.h)).
+  `FS_FOpenFile` on a `.cin` or `.dm2` whose source can be read by range (a pak, a stored pkz entry,
+  a loose file) returns an unbuffered `fopencookie` stream over a ring of 32 KB slots, every slot a
+  loader request from the open, so cl_cin.c's `fread`/`FS_Read`/`feof`/`fclose` and the demo
+  reader work unchanged and a frame's reads copy from memory. The 64 KB stdio buffer the main
+  thread used to refill, 93 ms a time from a USB stick, was the cinematic stutter: each refill
+  frame overran audsrv's 106 ms ring. `ps2_readahead_kb` sizes the ring (512 KB default, 256 KB
+  when memory is short, 0 = the old stream); a deflated pkz entry still gets the old stream, so a
+  `.dm2` from pak0.pkz does.
 
 ### System and memory
 

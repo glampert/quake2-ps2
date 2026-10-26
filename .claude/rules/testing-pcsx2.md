@@ -154,6 +154,12 @@ state on the way out, so restore the ini too.
   from the pkz (2026-10-26: 24 comparisons, 0 failures, loose/pkz-stored/pkz-deflated seen, the
   probe read 4 ms at worst). It needs a run on a console from USB too: PCSX2 has no data cache,
   so a destination sharing a cache line with something else only shows there.
+- **Emulating a USB stick's read rate in PCSX2:** `ps2_aio_throttle_kbps 900` in config.cfg paces
+  the background loader (not the main thread's own reads) like the user's stick: 5 ms plus the
+  transfer at 900 KB/s per 32 KB chunk. A perf capture with it shows whether the cinematic ring
+  keeps up (2026-10-26: identical to the unthrottled capture); 200 KB/s, below ntro's bitrate,
+  shows the starvation path (every cinematic row waits in FsIo). The `Read-ahead stream on ...`
+  line is a `Com_DPrintf`, so it needs `developer 1`, which the perf run turns off.
 - **The USB boot branch:** run a copy of the ELF from a directory with no `baseq2/` (e.g. the
   scratchpad), with HDD disabled. The `host:` probe misses, so the IOP inventory (PCSX2's BIOS
   leaves nothing in the way, so no reset), optional HDD probe, BDM module chain and 10 s

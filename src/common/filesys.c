@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "ps2/debug/load_trace.h"       // [PS2_QUAKE]
 #include "ps2/fs/pkz_pack.h"            // [PS2_QUAKE]
 #include "ps2/fs/async_io_c.h"          // [PS2_QUAKE]: PS2_AsyncIoDrain before a pack closes
+#include "ps2/fs/readahead_stream.h"    // [PS2_QUAKE]: cinematics and demos stream through the loader
 #include <fcntl.h>                       // [PS2_QUAKE]: open, for FS_LocateFile
 #include <unistd.h>                      // [PS2_QUAKE]: close
 #include "ps2/renderer/loading_screen.h" // [PS2_QUAKE]
@@ -438,6 +439,8 @@ static const char * FS_SourceName(const pack_t * pak)
     return pak ? (pak->pkz ? "pkz" : "pak") : "file";
 }
 
+static void FS_MakeLocation(const char * filename, int len, FILE * h, pack_t * pak, packfile_t * entry, fs_location_t * out);
+
 static int FS_FOpenFileImpl(const char * filename, FILE ** file, const char ** source)
 {
     pack_t * pak;
@@ -446,6 +449,27 @@ static int FS_FOpenFileImpl(const char * filename, FILE ** file, const char ** s
 
     file_from_pak = 0;
     *source = FS_SourceName(pak); // [PS2_QUAKE]
+
+    // [PS2_QUAKE]: a cinematic or demo streams through the background loader's read-ahead ring
+    // when its source can be read by range (not a deflated pkz entry) and the ring can be had;
+    // otherwise it gets the plain stream below, as before. A loose file's stream is the ring's
+    // then, closed with it.
+    if (len >= 0 && PS2_WantsReadAheadStream(filename))
+    {
+        fs_location_t loc;
+        FS_MakeLocation(filename, len, *file, pak, entry, &loc);
+        if (loc.fd >= 0 && loc.kind != FS_LOC_PKZ_DEFLATED)
+        {
+            FILE * const stream = PS2_OpenReadAheadStream(filename, &loc);
+            if (stream)
+            {
+                file_from_pak = (pak != NULL);
+                *source = "aio";
+                *file = stream;
+                return len;
+            }
+        }
+    }
 
     if (pak)
     {
@@ -704,9 +728,6 @@ int FS_LocateFile(const char * filename, fs_location_t * out)
     packfile_t * entry;
     int len;
 
-    memset(out, 0, sizeof(*out));
-    out->fd = -1;
-
     PS2_FrameLogNoteOpen(filename);
     PS2_ProfileBegin(PS2_PROF_FS_IO);
     len = FS_FindFile(filename, &h, &pak, &entry);
@@ -714,9 +735,19 @@ int FS_LocateFile(const char * filename, fs_location_t * out)
 
     file_from_pak = (pak != NULL);
 
+    FS_MakeLocation(filename, len, h, pak, entry, out);
+    return len;
+}
+
+// The location of what FS_FindFile found: see FS_LocateFile. A missing file (len < 0) gives fd -1.
+static void FS_MakeLocation(const char * filename, int len, FILE * h, pack_t * pak, packfile_t * entry, fs_location_t * out)
+{
+    memset(out, 0, sizeof(*out));
+    out->fd = -1;
+
     if (len < 0)
     {
-        return -1;
+        return;
     }
 
     if (pak && pak->pkz)
@@ -758,7 +789,6 @@ int FS_LocateFile(const char * filename, fs_location_t * out)
         out->bytes = (unsigned)len;
         out->rawBytes = (unsigned)len;
     }
-    return len;
 }
 
 void FS_ReleaseLocation(fs_location_t * loc)

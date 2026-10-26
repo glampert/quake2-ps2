@@ -95,6 +95,7 @@ PS2_CXX_SRC =                         \
 	ps2/save/save_notice.cpp          \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/fs/async_io.cpp               \
+	ps2/fs/readahead_stream.cpp       \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/gamma.cpp            \
 	ps2/renderer/vram.cpp             \

@@ -9,6 +9,7 @@
 #include "ps2/fs/aio_pump.h"
 #include "ps2/fs/async_io.h"
 #include "ps2/audio/sound_load.h"
+#include "ps2/renderer/texture.h"
 
 namespace ps2::aio {
 
@@ -25,6 +26,7 @@ void Pump()
     // even when the budget is spent, so nothing waits forever behind a long frame.
     const unsigned budgetCycles = static_cast<unsigned>(s_budgetUs->value) * 295u;
     audio::PumpSoundLoads(budgetCycles);
+    tex::PumpLoads(budgetCycles);
 }
 
 } // namespace ps2::aio

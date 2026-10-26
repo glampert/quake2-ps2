@@ -52,7 +52,9 @@ enum class TexFlags : u8
 {
     None      = 0,
     Builtin   = 1 << 0, // Embedded in the ELF; always available, never unloaded.
-    Mipmapped = 1 << 1  // 'pixels' carries mip levels after level 0; see MipLevels.
+    Mipmapped = 1 << 1, // 'pixels' carries mip levels after level 0; see MipLevels.
+    Loading   = 1 << 2, // The background loader is reading its file: 'pixels' is null, nothing draws it yet. See Texture::IsDrawable.
+    Failed    = 1 << 3  // Its background load failed to read or decode: never drawn (today's synchronous path would have given the placeholder).
 };
 
 constexpr TexFlags operator|(TexFlags lhs, TexFlags rhs)
@@ -131,6 +133,14 @@ struct Texture final
 
     // True if the texture is uploaded to VRAM and ready to be used by the GS.
     bool IsVramResident() const { return vramAddr != kNotResident; }
+
+    // False while the background loader still owns the texture (TexFlags::Loading) or after its
+    // load failed (TexFlags::Failed): a draw site skips what it would have drawn with it, this
+    // frame, rather than draw a placeholder. A missing file is not this: Find returns null for it.
+    bool IsDrawable() const
+    {
+        return (static_cast<u8>(flags) & (static_cast<u8>(TexFlags::Loading) | static_cast<u8>(TexFlags::Failed))) == 0;
+    }
 
     // For dynamic textures (cinematic frames/lightmaps/scrap atlas).
     // Called after rewriting 'pixels' so the next bind refreshes GS VRAM.
@@ -299,6 +309,20 @@ void FreeUnregistered(ImageType onlyType = ImageType::Null);
 // means the full path was given. Other types always give the full path.
 // Returns nullptr when the file is missing or fails to decode.
 const Texture * Find(const char * name, ImageType type);
+
+// Find, with a cache miss on a Skin, Sprite or Pic loaded in the background when the loader is up
+// and no level is registering: the texture comes back at once with TexFlags::Loading and null
+// pixels, in the cache under its name, and becomes drawable a few frames later when the pump
+// (PumpLoads) decodes what landed. A missing file is still null, synchronously. For the engine's
+// RegisterSkin/RegisterPic and a model's skins, where the caller keeps the pointer and draws
+// later; the by-name 2D draws keep Find, so menus never show a hole.
+const Texture * FindAsync(const char * name, ImageType type);
+
+// Finishes background loads that landed, oldest first, until 'budgetCycles' are spent (at least
+// one when any has landed); from aio::Pump once a frame. DrainLoads finishes all of them, waiting
+// for the loader: BeginRegistration calls it before anything may free a slot.
+void PumpLoads(unsigned budgetCycles);
+void DrainLoads();
 
 // Halve every ImageType::Sky image loaded from now on, both dimensions, and
 // keep doing it until switched back off. ref_gl's gl_skymip in the shape the

@@ -2101,6 +2101,10 @@ void DrawSpriteEntity(const entity_t & entity)
     {
         skin = &tex::DebugTexture(); // Frame's .pcx failed to load.
     }
+    if (!skin->IsDrawable())
+    {
+        return; // the frame's image is still loading in the background
+    }
 
     PS2_PROFILE_ONLY(++s_drawStats.entities);
 

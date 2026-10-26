@@ -57,7 +57,10 @@ paths:
   throttled PCSX2 perf run (`pcsx2-sounds-throttled-2026-10-26.flog`) `rg_hum.wav`'s open row lost
   its FsIo and the sound was ready five frames later (`FLOG#open,5012` / `FLOG#ready,5017`), the
   one mid-level sound the run loads. `FLOG#ready,<frame>,<name>` is new: pair it with the `#open`
-  of the same name for request-to-ready latency.
+  of the same name for request-to-ready latency. **Stage 5 (textures) the same day**: in the same
+  throttled run (`pcsx2-textures-throttled-2026-10-26.flog`) `pics/a_slugs.pcx` opened on 5012 and
+  was ready on 5018, its row's ClParse 5.6 → 0.3 ms and FsIo 2876 → 5 µs. The slugs model's row
+  (4758, model and skin, 2.8 ms FsIo) waits for stage 6.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

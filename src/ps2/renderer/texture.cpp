@@ -13,6 +13,10 @@
 #include "ps2/builtin/builtin.h"
 #include "ps2/small_pool.h"
 #include "ps2/hash.h" // HashStr64 / kFnvPrime (shared with the model cache)
+#include "ps2/fs/async_io.h"       // the background loader
+#include "ps2/system/heap.h"
+#include "ps2/debug/profile.h"     // ReadCycles
+#include "ps2/renderer/profile.h"  // FrameLogNoteReady
 
 #include <cstdio>
 #include <cstring>
@@ -368,12 +372,16 @@ class TextureCache final
 {
 public:
     void Init();
-    const Texture * Find(const char * name, const ImageType type);
+    const Texture * Find(const char * name, const ImageType type, bool async);
     const Texture & DebugTexture(int variant) const;
     const Texture & ParticleTexture() const;
 
     void BeginRegistration();
     void EndRegistration();
+
+    // Background loads: see tex::PumpLoads / tex::DrainLoads.
+    int  PumpLoads(unsigned budgetCycles);
+    void DrainLoads();
 
     void SetTouchOnly(const bool enable) { m_touchOnly = enable; }
     bool IsTouchOnly() const { return m_touchOnly; }
@@ -388,12 +396,49 @@ public:
     }
 
 private:
+    // A new slot under 'name', in the lookup, with no pixels yet: Register fills one at once,
+    // a background load when its file lands.
+    Texture & AllocSlot(const char * name, ImageType type, TexFlags flags);
+    void FillTexture(Texture & texture, const void * pixels, int width, int height,
+                     PixelFormat format, TexComponents components, TexFlags flags);
     Texture & Register(const char * name, const void * pixels, int width, int height,
                        PixelFormat format, TexComponents components,
                        ImageType type, TexFlags flags);
 
-    const Texture * LoadFromFile(const char * fullname, ImageType type);
+    // From decoded texels to a texture, the steps the synchronous and the background path share:
+    // 'into' is the pending slot to fill, or null to allocate one under 'fullname'.
+    Texture & CommitIndexed(Texture * into, const char * fullname, ImageType type, u8 * pic8,
+                            int width, int height, int mipLevels, bool transparent);
+    Texture & CommitRgba(Texture * into, const char * fullname, ImageType type, u8 * pic32,
+                         int width, int height, bool hasAlpha);
+
+    const Texture * LoadFromFile(const char * fullname, ImageType type, bool async);
     void Unload(u16 slot);
+
+    // A read in flight for a Loading slot.
+    struct PendingLoad
+    {
+        bool          active;
+        bool          tga;
+        u16           slot;
+        aio::Ticket   ticket;
+        fs_location_t loc;
+        u8 *          staging;
+        u32           stagingBytes;
+        int           length;
+    };
+    enum class AsyncStart { Missing, Queued, Declined };
+
+    AsyncStart StartAsyncLoad(const char * fullname, ImageType type, bool tga, const Texture ** out);
+    void FinishPending(PendingLoad & pending);
+
+    static constexpr int kMaxPendingLoads = 16;
+    PendingLoad m_pending[kMaxPendingLoads];
+    int         m_numPending = 0;
+
+    // Between BeginRegistration and EndRegistration: a level load, under the plaque, where every
+    // load stays synchronous.
+    bool m_registering = false;
 
     // Worst case for a full level plus UI (walls, skins, sprites, sky and
     // pics). ref_gl's MAX_GLTEXTURES was 1024, but that is a PC-era bound and
@@ -433,7 +478,7 @@ private:
 #endif // PS2_QUAKE_ASSERTS
 };
 
-const Texture * TextureCache::Find(const char * name, const ImageType type)
+const Texture * TextureCache::Find(const char * name, const ImageType type, const bool async)
 {
     PS2_Assert(name != nullptr && *name != '\0');
     PS2_Assert(type != ImageType::Null);
@@ -463,7 +508,7 @@ const Texture * TextureCache::Find(const char * name, const ImageType type)
         }
 #endif // PS2_QUAKE_ASSERTS
 
-        return LoadFromFile(fullname, type);
+        return LoadFromFile(fullname, type, async);
     }
 
     Texture & texture = m_texturePool.Slot(slot);
@@ -477,7 +522,7 @@ const Texture * TextureCache::Find(const char * name, const ImageType type)
     return &texture;
 }
 
-const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageType type)
+const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageType type, const bool async)
 {
     const char * extension = std::strrchr(fullname, '.');
     if (extension == nullptr) [[unlikely]]
@@ -486,100 +531,35 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         return nullptr;
     }
 
-    u8 * pixels   = nullptr;
-    int width     = 0;
-    int height    = 0;
-    int mipLevels = 0; // levels 'pixels' carries after level 0 (WAL walls only)
-    PixelFormat format;
-    TexComponents components;
-
-    if (std::strcmp(extension, ".pcx") == 0 || std::strcmp(extension, ".wal") == 0)
+    const bool pcx = (std::strcmp(extension, ".pcx") == 0);
+    const bool wal = (std::strcmp(extension, ".wal") == 0);
+    const bool tga = (std::strcmp(extension, ".tga") == 0);
+    if (!pcx && !wal && !tga) [[unlikely]]
     {
-        // Both are 8-bit palette indices, kept that way: they sample through
-        // the global-palette CLUT uploaded at init, at a quarter of the RGBA32
-        // footprint in RAM and VRAM.
-        u8 * pic8 = nullptr;
-        if (extension[1] == 'p')
+        Com_DPrintf("WARNING: Unsupported image format '%s'!\n", fullname);
+        return nullptr;
+    }
+
+    // A skin, sprite frame or pic first wanted while a level runs loads in the background: the
+    // read was 41 ms from the HDD and over 90 from a USB stick, in the frame that asked. Walls
+    // and sky faces only load with a level, under the plaque, and stay synchronous; so does
+    // everything during registration, and a by-name 2D draw (async false), which menus rely on.
+    if (async && !wal && !m_registering && !m_touchOnly &&
+        (type == ImageType::Skin || type == ImageType::Sprite || type == ImageType::Pic) && aio::Enabled())
+    {
+        const Texture * pending = nullptr;
+        switch (StartAsyncLoad(fullname, type, tga, &pending))
         {
-            if (!LoadPcx(fullname, &pic8, &width, &height))
-            {
-                return nullptr;
-            }
-        }
-        else
-        {
-            WalFile wal;
-            if (!LoadWal(fullname, &wal))
-            {
-                return nullptr;
-            }
-
-            // A wall's mip levels are the file's own. They go up to the power-of-two extent
-            // below along with level 0, so that is the size the count follows; a file whose
-            // chain comes up short of it loads without any.
-            if (type == ImageType::Wall && s_wallMipmaps)
-            {
-                const int wanted = MipLevelsFor(1 << tex::Log2(static_cast<u32>(wal.width)),
-                                                1 << tex::Log2(static_cast<u32>(wal.height)));
-                mipLevels = (wal.numLevels - 1 >= wanted) ? wanted : 0;
-            }
-
-            width  = wal.width;
-            height = wal.height;
-            pic8   = CopyWalLevels(wal, mipLevels);
-            FreeWal(wal);
-        }
-
-        if (type == ImageType::Sky && s_skyDownsample)
-        {
-            pic8 = DownsampleIndexed2x(pic8, &width, &height);
-        }
-
-        format = PixelFormat::Palette8;
-        pixels = pic8;
-
-        // Sky faces always sample as RGB, whatever they contain. The 3D path's
-        // alpha test cuts texels whose alpha is zero (gs::MakePixelTests),
-        // and palette entry 255 is exactly that - so a sky face that happened
-        // to use index 255 would be punched through to the clear colour
-        // instead of drawing. No stock env/ face does, but ref_gl's sky upload
-        // path skips its transparency handling for the same reason, and the
-        // sky is the one texture with nothing behind it to show through to.
-        components = (type != ImageType::Sky && HasTransparentTexels(pic8, width * height))
-                   ? TexComponents::RGBA
-                   : TexComponents::RGB;
-
-        // Small HUD/menu images go into a shared scrap rather than each holding
-        // a GS page of their own. Only Pics: world textures and sprites tile or
-        // are large enough that the page waste is negligible, and a tiling
-        // texture could not use an atlas anyway. Built-ins never reach here,
-        // which is what keeps "backtile" out - it is exactly 64x64 but
-        // Draw_TileClear addresses it in screen space and needs WRAP_REPEAT.
-        if (type == ImageType::Pic && scrap::IsPackable(width, height))
-        {
-            const Texture * atlas = nullptr;
-            int atlasX = 0;
-            int atlasY = 0;
-
-            if (scrap::TryPack(pic8, width, height, &atlas, &atlasX, &atlasY))
-            {
-                // The texels live in the atlas now; the decoded copy is dead.
-                // Register still wants a non-null 'pixels', and every assert
-                // that checks it should keep passing, so point it at the atlas -
-                // Unload knows not to free it.
-                ps2::heap::Free(pic8, static_cast<size_t>(width * height), ps2::heap::MemTag::TexImage);
-
-                Texture & packed = Register(fullname, atlas->pixels, width, height,
-                                            format, components, type, TexFlags::None);
-                packed.atlas       = atlas;
-                packed.atlasX      = static_cast<s16>(atlasX);
-                packed.atlasY      = static_cast<s16>(atlasY);
-                packed.dirtyPixels = false; // the atlas carries the dirty flag, not the view
-                return &packed;
-            }
+        case AsyncStart::Missing:  return nullptr;
+        case AsyncStart::Queued:   return pending;
+        case AsyncStart::Declined: break; // no slot, memory or ticket: synchronously, below
         }
     }
-    else if (std::strcmp(extension, ".tga") == 0)
+
+    int width  = 0;
+    int height = 0;
+
+    if (tga)
     {
         u8 * pic32 = nullptr;
         bool hasAlpha = false;
@@ -587,39 +567,72 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
         {
             return nullptr;
         }
+        return &CommitRgba(nullptr, fullname, type, pic32, width, height, hasAlpha);
+    }
 
-        format     = PixelFormat::RGBA32;
-        components = hasAlpha ? TexComponents::RGBA : TexComponents::RGB;
-        pixels     = pic32;
-
-        // True-colour images have no CLUT to carry the intensity for them, so a
-        // lit one takes the scale in its own texels here. Palettized images - which
-        // is everything the retail game ships - sample a pre-brightened CLUT
-        // instead, built once by gs::Init.
-        if (TakesIntensity(type))
+    // PCX and WAL are both 8-bit palette indices, kept that way: they sample through the
+    // global-palette CLUT uploaded at init, at a quarter of the RGBA32 footprint in RAM and VRAM.
+    u8 * pic8        = nullptr;
+    int  mipLevels   = 0; // levels 'pixels' carries after level 0 (WAL walls only)
+    bool transparent = false;
+    if (pcx)
+    {
+        u8 * fileData = nullptr;
+        const int fileLen = FS_LoadFile(fullname, reinterpret_cast<void **>(&fileData));
+        if (fileData == nullptr)
         {
-            ScaleTexelsForIntensity(pic32, width * height, s_intensityScale);
+            Com_DPrintf("WARNING: Can't load PCX file '%s'\n", fullname);
+            return nullptr;
+        }
+        const bool decoded = DecodePcx(fullname, fileData, fileLen, &pic8, &width, &height, &transparent);
+        FS_FreeFile(fileData);
+        if (!decoded)
+        {
+            return nullptr;
         }
     }
-    else [[unlikely]]
+    else
     {
-        Com_DPrintf("WARNING: Unsupported image format '%s'!\n", fullname);
-        return nullptr;
+        WalFile walFile;
+        if (!LoadWal(fullname, &walFile))
+        {
+            return nullptr;
+        }
+
+        // A wall's mip levels are the file's own. They go up to the power-of-two extent
+        // below along with level 0, so that is the size the count follows; a file whose
+        // chain comes up short of it loads without any.
+        if (type == ImageType::Wall && s_wallMipmaps)
+        {
+            const int wanted = MipLevelsFor(1 << tex::Log2(static_cast<u32>(walFile.width)),
+                                            1 << tex::Log2(static_cast<u32>(walFile.height)));
+            mipLevels = (walFile.numLevels - 1 >= wanted) ? wanted : 0;
+        }
+
+        width  = walFile.width;
+        height = walFile.height;
+        pic8   = CopyWalLevels(walFile, mipLevels);
+        FreeWal(walFile);
+        transparent = HasTransparentTexels(pic8, width * height);
     }
 
-    // World textures are the ones that tile, so they are the ones that have to
-    // be a power of two; everything else samples within [0, 1] and is served by
-    // a coordinate scale instead. Keep the size the file had: the BSP's texture
-    // coordinates normalize against it, not against what was uploaded.
+    if (type == ImageType::Sky && s_skyDownsample)
+    {
+        pic8 = DownsampleIndexed2x(pic8, &width, &height);
+    }
+
+    // World textures are the ones that tile, so they are the ones that have to be a power of two;
+    // everything else samples within [0, 1] and is served by a coordinate scale instead. Keep the
+    // size the file had: the BSP's texture coordinates normalize against it, not against what
+    // was uploaded.
     const int srcWidth  = width;
     const int srcHeight = height;
     if (type == ImageType::Wall)
     {
-        pixels = ResampleToPowerOfTwo(pixels, &width, &height, BytesPerTexel(format), mipLevels);
+        pic8 = ResampleToPowerOfTwo(pic8, &width, &height, BytesPerTexel(PixelFormat::Palette8), mipLevels);
     }
 
-    Texture & texture = Register(fullname, pixels, width, height, format, components, type,
-                                 (mipLevels > 0) ? TexFlags::Mipmapped : TexFlags::None);
+    Texture & texture = CommitIndexed(nullptr, fullname, type, pic8, width, height, mipLevels, transparent);
     texture.srcWidth  = static_cast<s16>(srcWidth);
     texture.srcHeight = static_cast<s16>(srcHeight);
 
@@ -628,10 +641,243 @@ const Texture * TextureCache::LoadFromFile(const char * fullname, const ImageTyp
     return &texture;
 }
 
+Texture & TextureCache::CommitIndexed(Texture * const into, const char * fullname, const ImageType type, u8 * pic8,
+                                      const int width, const int height, const int mipLevels, const bool transparent)
+{
+    // Sky faces always sample as RGB, whatever they contain. The 3D path's alpha test cuts texels
+    // whose alpha is zero (gs::MakePixelTests), and palette entry 255 is exactly that - so a sky
+    // face that happened to use index 255 would be punched through to the clear colour instead of
+    // drawing. No stock env/ face does, but ref_gl's sky upload path skips its transparency
+    // handling for the same reason, and the sky is the one texture with nothing behind it to
+    // show through to.
+    const TexComponents components = (type != ImageType::Sky && transparent) ? TexComponents::RGBA
+                                                                              : TexComponents::RGB;
+
+    // Small HUD/menu images go into a shared scrap rather than each holding a GS page of their
+    // own. Only Pics: world textures and sprites tile or are large enough that the page waste is
+    // negligible, and a tiling texture could not use an atlas anyway. Built-ins never reach here,
+    // which is what keeps "backtile" out - it is exactly 64x64 but Draw_TileClear addresses it
+    // in screen space and needs WRAP_REPEAT.
+    if (type == ImageType::Pic && scrap::IsPackable(width, height))
+    {
+        const Texture * atlas = nullptr;
+        int atlasX = 0;
+        int atlasY = 0;
+
+        if (scrap::TryPack(pic8, width, height, &atlas, &atlasX, &atlasY))
+        {
+            // The texels live in the atlas now; the decoded copy is dead. FillTexture still wants
+            // a non-null 'pixels', and every assert that checks it should keep passing, so point
+            // it at the atlas - Unload knows not to free it.
+            ps2::heap::Free(pic8, static_cast<size_t>(width * height), ps2::heap::MemTag::TexImage);
+
+            Texture & packed = (into != nullptr) ? *into : AllocSlot(fullname, type, TexFlags::None);
+            FillTexture(packed, atlas->pixels, width, height, PixelFormat::Palette8, components, TexFlags::None);
+            packed.atlas       = atlas;
+            packed.atlasX      = static_cast<s16>(atlasX);
+            packed.atlasY      = static_cast<s16>(atlasY);
+            packed.dirtyPixels = false; // the atlas carries the dirty flag, not the view
+            return packed;
+        }
+    }
+
+    Texture & texture = (into != nullptr) ? *into : AllocSlot(fullname, type, TexFlags::None);
+    FillTexture(texture, pic8, width, height, PixelFormat::Palette8, components,
+                (mipLevels > 0) ? TexFlags::Mipmapped : TexFlags::None);
+    return texture;
+}
+
+Texture & TextureCache::CommitRgba(Texture * const into, const char * fullname, const ImageType type, u8 * pic32,
+                                   const int width, const int height, const bool hasAlpha)
+{
+    // True-colour images have no CLUT to carry the intensity for them, so a lit one takes the
+    // scale in its own texels here. Palettized images - which is everything the retail game
+    // ships - sample a pre-brightened CLUT instead, built once by gs::Init.
+    if (TakesIntensity(type))
+    {
+        ScaleTexelsForIntensity(pic32, width * height, s_intensityScale);
+    }
+
+    Texture & texture = (into != nullptr) ? *into : AllocSlot(fullname, type, TexFlags::None);
+    FillTexture(texture, pic32, width, height, PixelFormat::RGBA32,
+                hasAlpha ? TexComponents::RGBA : TexComponents::RGB, TexFlags::None);
+    return texture;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Background loads
+// ------------------------------------------------------------------------------------------------
+
+TextureCache::AsyncStart TextureCache::StartAsyncLoad(const char * fullname, const ImageType type, const bool tga,
+                                                      const Texture ** const out)
+{
+    PendingLoad * entry = nullptr;
+    for (PendingLoad & p : m_pending)
+    {
+        if (!p.active)
+        {
+            entry = &p;
+            break;
+        }
+    }
+    if (entry == nullptr)
+    {
+        return AsyncStart::Declined;
+    }
+
+    fs_location_t loc;
+    const int length = FS_LocateFile(fullname, &loc);
+    if (length < 0)
+    {
+        return AsyncStart::Missing; // the synchronous answer, as before
+    }
+    if (length == 0 || loc.fd < 0)
+    {
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    const u32 stagingBytes = aio::RoundUp64(static_cast<u32>(length));
+    u8 * const staging = static_cast<u8 *>(ps2::heap::TryAllocAligned(ps2::heap::MemAlign(64), stagingBytes, ps2::heap::MemTag::Aio));
+    if (staging == nullptr)
+    {
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    aio::Request request;
+    request.kind      = (loc.kind == FS_LOC_PKZ_DEFLATED) ? aio::Kind::InflateWhole : aio::Kind::Read;
+    request.prio      = aio::Priority::Asset;
+    request.fd        = loc.fd;
+    request.offset    = loc.offset;
+    request.bytes     = loc.bytes;
+    request.dest      = staging;
+    request.destBytes = stagingBytes;
+    request.rawBytes  = loc.rawBytes;
+
+    const aio::Ticket ticket = aio::Submit(request);
+    if (!ticket.IsValid())
+    {
+        ps2::heap::Free(staging, stagingBytes, ps2::heap::MemTag::Aio);
+        FS_ReleaseLocation(&loc);
+        return AsyncStart::Declined;
+    }
+
+    Texture & texture = AllocSlot(fullname, type, TexFlags::Loading);
+
+    entry->active       = true;
+    entry->tga          = tga;
+    entry->slot         = static_cast<u16>(m_texturePool.IndexOf(texture));
+    entry->ticket       = ticket;
+    entry->loc          = loc;
+    entry->staging      = staging;
+    entry->stagingBytes = stagingBytes;
+    entry->length       = length;
+    ++m_numPending;
+
+    *out = &texture;
+    return AsyncStart::Queued;
+}
+
+void TextureCache::FinishPending(PendingLoad & pending)
+{
+    Texture & texture = m_texturePool.Slot(pending.slot);
+    PS2_Assert(HasFlag(texture.flags, TexFlags::Loading));
+
+    const aio::State state  = aio::Poll(pending.ticket);
+    const int        result = aio::Result(pending.ticket);
+
+    bool ok = (state == aio::State::Done && result == pending.length);
+    if (ok)
+    {
+        int width  = 0;
+        int height = 0;
+        if (pending.tga)
+        {
+            u8 * pic32 = nullptr;
+            bool hasAlpha = false;
+            ok = DecodeTga(texture.name, pending.staging, pending.length, &pic32, &width, &height, &hasAlpha);
+            if (ok)
+            {
+                CommitRgba(&texture, texture.name, texture.type, pic32, width, height, hasAlpha);
+            }
+        }
+        else
+        {
+            u8 * pic8 = nullptr;
+            bool transparent = false;
+            ok = DecodePcx(texture.name, pending.staging, pending.length, &pic8, &width, &height, &transparent);
+            if (ok)
+            {
+                CommitIndexed(&texture, texture.name, texture.type, pic8, width, height, 0, transparent);
+            }
+        }
+    }
+
+    if (!ok)
+    {
+        // Never drawn from here on; the slot stays so repeated Finds don't retry.
+        texture.flags = TexFlags::Failed;
+        Com_Printf("WARNING: '%s': background load failed (%d); not drawn.\n", texture.name, result);
+    }
+
+    aio::Release(pending.ticket);
+    ps2::heap::Free(pending.staging, pending.stagingBytes, ps2::heap::MemTag::Aio);
+    FS_ReleaseLocation(&pending.loc);
+    debug::FrameLogNoteReady(texture.name);
+
+    pending.active  = false;
+    pending.staging = nullptr;
+    --m_numPending;
+}
+
+int TextureCache::PumpLoads(const unsigned budgetCycles)
+{
+    if (m_numPending == 0)
+    {
+        return 0;
+    }
+
+    const debug::CpuCycles start = debug::ReadCycles();
+    int finished = 0;
+    for (PendingLoad & p : m_pending)
+    {
+        if (!p.active)
+        {
+            continue;
+        }
+        const aio::State state = aio::Poll(p.ticket);
+        if (state != aio::State::Done && state != aio::State::Failed)
+        {
+            continue;
+        }
+        FinishPending(p);
+        ++finished;
+        if (debug::ReadCycles() - start > budgetCycles)
+        {
+            break;
+        }
+    }
+    return finished;
+}
+
+void TextureCache::DrainLoads()
+{
+    for (PendingLoad & p : m_pending)
+    {
+        if (p.active)
+        {
+            aio::Wait(p.ticket);
+            FinishPending(p);
+        }
+    }
+}
+
 void TextureCache::Unload(u16 slot)
 {
     Texture & texture = m_texturePool.Slot(slot);
     PS2_Assert(!HasFlag(texture.flags, TexFlags::Builtin));
+    PS2_AssertMsg(!HasFlag(texture.flags, TexFlags::Loading), "Unloading a texture the background loader still owns!");
 
     gs::ReleaseTexture(texture); // return its GS VRAM to the heap (no-op when not resident)
 
@@ -641,7 +887,7 @@ void TextureCache::Unload(u16 slot)
     // there is nothing to give back. Pics are exempt from eviction anyway, which
     // makes this unreachable today; it is here so it stays correct if that
     // policy ever changes.
-    if (texture.atlas == nullptr)
+    if (texture.atlas == nullptr && texture.pixels != nullptr) // a Failed load has none
     {
         ps2::heap::Free(const_cast<void *>(texture.pixels), static_cast<size_t>(PixelBytes(texture)),
                         ps2::heap::MemTag::TexImage);
@@ -652,7 +898,10 @@ void TextureCache::Unload(u16 slot)
 
 void TextureCache::BeginRegistration()
 {
+    // Nothing of the loader's may be in flight while this cycle's sweeps free slots.
+    DrainLoads();
     ++m_regSequence;
+    m_registering = true;
 }
 
 int TextureCache::FreeUnregistered(const ImageType onlyType, const bool early)
@@ -709,6 +958,7 @@ void TextureCache::EndRegistration()
 #endif // PS2_QUAKE_ASSERTS
 
     scrap::DumpUsage();
+    m_registering = false;
 }
 
 const Texture & TextureCache::DebugTexture(int variant) const
@@ -725,21 +975,14 @@ const Texture & TextureCache::ParticleTexture() const
     return *m_particleTexture;
 }
 
-Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,
-                                 PixelFormat format, TexComponents components,
-                                 ImageType type, TexFlags flags)
+Texture & TextureCache::AllocSlot(const char * name, const ImageType type, const TexFlags flags)
 {
-    PS2_Assert(width > 0 && height > 0 && pixels != nullptr);
-    PS2_AssertMsg(width <= INT16_MAX && height <= INT16_MAX, "Texture width/height too big!");
-
     const u16 slot = m_texturePool.Alloc();
     if (slot == TexturePool::kInvalidIndex) [[unlikely]]
     {
         Sys_Error("Out of texture cache slots for '%s'! Bump tex::kMaxTextures (%u).",
                   name, kMaxTextures);
     }
-
-    const bool builtin = HasFlag(flags, TexFlags::Builtin);
 
     // Pics and sprites keep crisp texels (and their transparency cutouts
     // fringe-free); skins, walls and sky get smoothed by bilinear sampling.
@@ -751,15 +994,15 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     std::snprintf(texture.name, sizeof(texture.name), "%s", name);
 
     texture.regSequence  = m_regSequence;
-    texture.pixels       = pixels;
-    texture.width        = static_cast<s16>(width);
-    texture.height       = static_cast<s16>(height);
-    texture.srcWidth     = static_cast<s16>(width);  // LoadFromFile overrides these when it resamples
-    texture.srcHeight    = static_cast<s16>(height);
+    texture.pixels       = nullptr; // FillTexture's
+    texture.width        = 0;
+    texture.height       = 0;
+    texture.srcWidth     = 0;
+    texture.srcHeight    = 0;
     texture.type         = type;
     texture.flags        = flags;
-    texture.format       = format;
-    texture.components   = components;
+    texture.format       = PixelFormat::Palette8;
+    texture.components   = TexComponents::RGB;
     texture.function     = TexFunction::Modulate;
     texture.magFilter    = filter;
     texture.minFilter    = filter;
@@ -768,13 +1011,42 @@ Texture & TextureCache::Register(const char * name, const void * pixels, int wid
     texture.atlasX       = 0;
     texture.atlasY       = 0;
     texture.vramAddr     = Texture::kNotResident;
-    texture.dirtyPixels  = !builtin; // loader-written pixels may still sit in the dcache;
-                                     // the first upload must flush them (built-ins were
-                                     // written by the ELF loader and need no flush).
+    texture.dirtyPixels  = false;
 
     const bool inserted = m_lookup.Insert(LookupKey(texture.name, texture.type), slot);
     PS2_AssertMsg(inserted, "Duplicate texture name+type!");
 
+    return texture;
+}
+
+void TextureCache::FillTexture(Texture & texture, const void * pixels, const int width, const int height,
+                               const PixelFormat format, const TexComponents components, const TexFlags flags)
+{
+    PS2_Assert(width > 0 && height > 0 && pixels != nullptr);
+    PS2_AssertMsg(width <= INT16_MAX && height <= INT16_MAX, "Texture width/height too big!");
+
+    // Builtin is the slot's own; everything else, Loading above all, is this fill's to say.
+    const bool builtin = HasFlag(texture.flags, TexFlags::Builtin);
+
+    texture.pixels      = pixels;
+    texture.width       = static_cast<s16>(width);
+    texture.height      = static_cast<s16>(height);
+    texture.srcWidth    = static_cast<s16>(width);  // LoadFromFile overrides these when it resamples
+    texture.srcHeight   = static_cast<s16>(height);
+    texture.format      = format;
+    texture.components  = components;
+    texture.flags       = builtin ? (flags | TexFlags::Builtin) : flags;
+    texture.dirtyPixels = !builtin; // loader-written pixels may still sit in the dcache;
+                                    // the first upload must flush them (built-ins were
+                                    // written by the ELF loader and need no flush).
+}
+
+Texture & TextureCache::Register(const char * name, const void * pixels, int width, int height,
+                                 PixelFormat format, TexComponents components,
+                                 ImageType type, TexFlags flags)
+{
+    Texture & texture = AllocSlot(name, type, flags);
+    FillTexture(texture, pixels, width, height, format, components, flags);
     return texture;
 }
 
@@ -831,7 +1103,7 @@ void TextureCache::Init()
     {
         char name[16];
         std::snprintf(name, sizeof(name), "debug%d", i);
-        m_debugTextures[i] = Find(name, ImageType::Pic);
+        m_debugTextures[i] = Find(name, ImageType::Pic, /*async=*/false);
         PS2_Assert(m_debugTextures[i] != nullptr);
         m_debugTextures[i]->MarkPixelsDirty();
     }
@@ -893,7 +1165,22 @@ void FreeUnregistered(const ImageType onlyType)
 
 const Texture * Find(const char * name, const ImageType type)
 {
-    return s_cache.Find(name, type);
+    return s_cache.Find(name, type, /*async=*/false);
+}
+
+const Texture * FindAsync(const char * name, const ImageType type)
+{
+    return s_cache.Find(name, type, /*async=*/true);
+}
+
+void PumpLoads(const unsigned budgetCycles)
+{
+    s_cache.PumpLoads(budgetCycles);
+}
+
+void DrainLoads()
+{
+    s_cache.DrainLoads();
 }
 
 void SetSkyDownsample(const bool enable)

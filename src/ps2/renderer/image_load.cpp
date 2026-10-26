@@ -70,9 +70,28 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
     u8 * fileData = nullptr;
     const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
-    if (fileData == nullptr || fileLen <= static_cast<int>(sizeof(pcx_t))) [[unlikely]]
+    if (fileData == nullptr) [[unlikely]]
     {
         Com_DPrintf("WARNING: Can't load PCX file '%s'\n", filename);
+        return false;
+    }
+
+    bool transparent = false;
+    const bool ok = DecodePcx(filename, fileData, fileLen, outPic, outWidth, outHeight, &transparent);
+    FS_FreeFile(fileData);
+    return ok;
+}
+
+bool DecodePcx(const char * name, const u8 * fileData, const int fileLen, u8 ** outPic, int * outWidth, int * outHeight,
+               bool * outTransparent)
+{
+    *outPic = nullptr;
+    *outWidth = *outHeight = 0;
+    *outTransparent = false;
+
+    if (fileLen <= static_cast<int>(sizeof(pcx_t))) [[unlikely]]
+    {
+        Com_DPrintf("WARNING: Can't load PCX file '%s'\n", name);
         return false;
     }
 
@@ -87,8 +106,7 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     if (pcx->manufacturer != 0x0A || pcx->version != 5 || pcx->encoding != 1 ||
         pcx->bits_per_pixel != 8 || xmax >= 640 || ymax >= 480) [[unlikely]]
     {
-        Com_DPrintf("WARNING: Bad PCX file '%s'. Invalid header value(s)!\n", filename);
-        FS_FreeFile(fileData);
+        Com_DPrintf("WARNING: Bad PCX file '%s'. Invalid header value(s)!\n", name);
         return false;
     }
 
@@ -97,10 +115,12 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     u8 * pic = AllocPixels(width * height);
 
     // Decode the RLE packets. Runs may carry the row's padding bytes past the
-    // visible width; those are consumed but not stored.
+    // visible width; those are consumed but not stored. Index 255 is the palette's
+    // transparent entry: noted per packet, which is cheaper than a scan of the image after.
     const u8 * in  = &pcx->data;
     const u8 * end = fileData + fileLen;
-    bool malformed = false;
+    bool malformed   = false;
+    bool transparent = false;
 
     for (int y = 0; y < height && !malformed; ++y)
     {
@@ -125,6 +145,7 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
                 }
                 dataByte = *in++;
             }
+            transparent |= (dataByte == 255);
 
             while (runLength-- > 0 && x < width)
             {
@@ -133,18 +154,17 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
         }
     }
 
-    FS_FreeFile(fileData);
-
     if (malformed) [[unlikely]]
     {
-        Com_DPrintf("WARNING: Malformed PCX file '%s'\n", filename);
+        Com_DPrintf("WARNING: Malformed PCX file '%s'\n", name);
         FreePixels(pic, width * height);
         return false;
     }
 
-    *outPic    = pic;
-    *outWidth  = width;
-    *outHeight = height;
+    *outPic         = pic;
+    *outWidth       = width;
+    *outHeight      = height;
+    *outTransparent = transparent;
     return true;
 }
 
@@ -154,15 +174,33 @@ bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
 
 bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeight, bool * outHasAlpha)
 {
-    constexpr int kTgaHeaderBytes = 18;
-
     *outPic = nullptr;
     *outWidth = *outHeight = 0;
     *outHasAlpha = false;
 
     u8 * fileData = nullptr;
     const int fileLen = FS_LoadFile(filename, reinterpret_cast<void **>(&fileData));
-    if (fileData == nullptr || fileLen <= kTgaHeaderBytes) [[unlikely]]
+    if (fileData == nullptr) [[unlikely]]
+    {
+        Com_DPrintf("WARNING: Can't load TGA file '%s'\n", filename);
+        return false;
+    }
+
+    const bool ok = DecodeTga(filename, fileData, fileLen, outPic, outWidth, outHeight, outHasAlpha);
+    FS_FreeFile(fileData);
+    return ok;
+}
+
+bool DecodeTga(const char * filename, const u8 * fileData, const int fileLen, u8 ** outPic, int * outWidth, int * outHeight,
+               bool * outHasAlpha)
+{
+    constexpr int kTgaHeaderBytes = 18;
+
+    *outPic = nullptr;
+    *outWidth = *outHeight = 0;
+    *outHasAlpha = false;
+
+    if (fileLen <= kTgaHeaderBytes) [[unlikely]]
     {
         Com_DPrintf("WARNING: Can't load TGA file '%s'\n", filename);
         return false;
@@ -182,19 +220,16 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
     if (imageType != 2 && imageType != 10) [[unlikely]]
     {
         Com_DPrintf("WARNING: TGA file '%s': only types 2 and 10 supported!\n", filename);
-        FS_FreeFile(fileData);
         return false;
     }
     if (colormapType != 0 || (pixelSize != 32 && pixelSize != 24)) [[unlikely]]
     {
         Com_DPrintf("WARNING: TGA file '%s': only 32 or 24 bit images supported (no colormaps)!\n", filename);
-        FS_FreeFile(fileData);
         return false;
     }
     if (width <= 0 || height <= 0 || width > kMaxImageDim || height > kMaxImageDim || in >= end) [[unlikely]]
     {
         Com_DPrintf("WARNING: Bad TGA file '%s'. Invalid header value(s)!\n", filename);
-        FS_FreeFile(fileData);
         return false;
     }
 
@@ -285,8 +320,6 @@ bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeigh
             decoded += packetSize;
         }
     }
-
-    FS_FreeFile(fileData);
 
     if (malformed) [[unlikely]]
     {

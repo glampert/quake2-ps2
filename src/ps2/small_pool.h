@@ -108,6 +108,14 @@ public:
         return m_slots[slot];
     }
 
+    // The slot index of an item Slot() handed out.
+    u16 IndexOf(const T & item) const
+    {
+        const auto index = static_cast<u16>(&item - &m_slots[0]);
+        PS2_Assert(IsValid(index) && m_liveSlots[index] && &m_slots[index] == &item);
+        return index;
+    }
+
 private:
     u32 m_free = 0;
     u32 m_used = 0;

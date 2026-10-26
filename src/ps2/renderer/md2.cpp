@@ -819,6 +819,10 @@ void DrawAliasMD2Entity(const refdef_t & viewDef, const entity_t & entity, const
     const float backlerp = (s_lerpModels->value != 0.0f) ? entity.backlerp : 0.0f;
     const LerpConsts lc = SetUpLerp(entity, frame, oldFrame, backlerp);
     const tex::Texture & skin = SkinForEntity(entity, *model);
+    if (!skin.IsDrawable())
+    {
+        return; // the skin is still loading in the background: the entity, its shadow and shell wait a few frames
+    }
     math::Mat4 mvp = MakeAliasMatrix(entity) * viewProj;
 
     // The view weapon takes the VU path like every other model. It is the one

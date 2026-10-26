@@ -28,10 +28,18 @@ namespace ps2::tex {
 // ref_gl decoded through d_8to24table.
 bool LoadPcx(const char * filename, u8 ** outPic, int * outWidth, int * outHeight);
 
+// The decode alone, on a file image already in memory ('name' is for messages): what LoadPcx does
+// after FS_LoadFile, and what the background loader's pump calls on a landed read. *outTransparent
+// is set when any texel is index 255, the palette's transparent entry, found as the runs are
+// written (the texture cache used to scan the image again for it).
+bool DecodePcx(const char * name, const u8 * data, int len, u8 ** outPic, int * outWidth, int * outHeight,
+               bool * outTransparent);
+
 // TGA (types 2 and 10, 24/32 bpp, no colormaps - all Quake II ever shipped):
 // RGBA32 texels, 4 bytes/texel. *outHasAlpha is set when the file carried an
 // alpha channel (32 bpp source); 24 bpp texels get alpha 255.
 bool LoadTga(const char * filename, u8 ** outPic, int * outWidth, int * outHeight, bool * outHasAlpha);
+bool DecodeTga(const char * name, const u8 * data, int len, u8 ** outPic, int * outWidth, int * outHeight, bool * outHasAlpha);
 
 // WAL: 8-bit palette indices, 1 byte/texel, followed in the file by three mip levels
 // the tools that wrote it box-filtered down from it, each half the size of the one

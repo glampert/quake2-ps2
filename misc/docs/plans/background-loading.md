@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1-4 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1-5 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -468,7 +468,12 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   the latency. Console run owed with the others. Original gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
   `#ready` latency 2-4 frames on USB; no dropped or doubled one-shots in a `ps2_perftest` run by
   ear; the `S_IssuePlaysound` NULL path exercised with a deliberately missing file in a debug run.
-- [ ] **5. Textures** (skins, sprite frames, `RegisterPic` pics; the decoder split; the fused
+- [x] **5. Textures.** Landed 2026-10-26 (`TexFlags::Loading`/`Failed`, `Texture::IsDrawable`,
+  `tex::FindAsync`/`PumpLoads`/`DrainLoads`, `AllocSlot`/`FillTexture`/`CommitIndexed`/
+  `CommitRgba`, `DecodePcx`/`DecodeTga` with the transparency test folded into the PCX runs, the
+  four draw-site skips, `SmallPool::IndexOf`). PCSX2 throttled: `pics/a_slugs.pcx` opened 5012,
+  ready 5018, its row's ClParse 5.6 → 0.3 ms, FsIo gone, 0 drops, no asserts. Visual handoff on
+  the console still owed. Original: (skins, sprite frames, `RegisterPic` pics; the decoder split; the fused
   transparency scan). Visual handoff: pickups and player skins appear a few frames late, nothing
   draws the checkerboard or garbage, menus unchanged. Gate: `a_slugs.pcx`'s FsIo gone;
   `ps2_testmaps 1` unchanged.

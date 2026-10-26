@@ -111,9 +111,11 @@ static bool s_firstViewInThisFrame = false;
 
 // A missing image draws as the pink/black checkerboard instead of crashing or
 // silently vanishing - obvious on screen, and callers get sane dimensions.
-const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2::tex::ImageType type)
+// With 'async', a cache miss on a skin or pic may come back still loading in the background
+// (tex::FindAsync): the caller keeps the pointer and draws it when Texture::IsDrawable says so.
+const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2::tex::ImageType type, const bool async = false)
 {
-    const ps2::tex::Texture * texture = ps2::tex::Find(name, type);
+    const ps2::tex::Texture * texture = async ? ps2::tex::FindAsync(name, type) : ps2::tex::Find(name, type);
     if (texture == nullptr)
     {
         // A touch-only pass returns nothing for what is not cached yet, which is not missing.
@@ -760,16 +762,18 @@ struct model_s * PS2_RegisterModel(const char * name)
         reinterpret_cast<const struct model_s *>(ps2::mod::Find(name)));
 }
 
+// Both may hand back a texture still loading in the background (mid-level: a player's skin, a
+// HUD icon the server named), which no draw site draws until it lands.
 struct image_s * PS2_RegisterSkin(const char * name)
 {
     return const_cast<struct image_s*>(
-        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Skin)));
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Skin, /*async=*/true)));
 }
 
 struct image_s * PS2_RegisterPic(const char * name)
 {
     return const_cast<struct image_s*>(
-        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic)));
+        reinterpret_cast<const struct image_s *>(&FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic, /*async=*/true)));
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -789,6 +793,11 @@ void PS2_DrawGetPicSize(int * w, int * h, const char * name)
     // Callable outside Begin/EndFrame. Placeholder dimensions keep the
     // callers' centering math sane when the pic is missing.
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    if (!texture.IsDrawable())
+    {
+        *w = *h = -1; // id's answer for a pic that isn't there (yet)
+        return;
+    }
     *w = texture.width;
     *h = texture.height;
 }
@@ -798,6 +807,10 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    if (!texture.IsDrawable())
+    {
+        return; // still loading in the background (RegisterPic named it): skipped this frame
+    }
     ps2::rs::DrawTexturedRect(texture, x, y, w, h, 0, 0,
                               texture.width, texture.height, kUiBrightness);
 }
@@ -807,6 +820,10 @@ void PS2_DrawPic(int x, int y, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
+    if (!texture.IsDrawable())
+    {
+        return; // as PS2_DrawStretchPic
+    }
     ps2::rs::DrawTexturedRect(texture, x, y, texture.width, texture.height,
                               0, 0, texture.width, texture.height, kUiBrightness);
 }

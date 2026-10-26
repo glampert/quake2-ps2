@@ -33,6 +33,20 @@ The README's "Rendering" section is the architecture overview. The renderer file
   `FLOG#note,present:` line put the worst stamp-to-DISPFB gap at 1 µs, against a blanking interval
   of about 1.5 ms. On a console the gate is no tearing and that note's number. The semaphore or
   handler failing to create falls back to the spin with a console warning.
+- **A texture may be `TexFlags::Loading` or `Failed`** (texture.h, since 2026-10-26, background
+  loading stage 5): `tex::FindAsync` (what `PS2_RegisterSkin`/`PS2_RegisterPic` call) hands a skin,
+  sprite frame or pic first wanted mid-level back at once with null pixels, in the cache under its
+  name, while the loader reads its file into a staging buffer; `tex::PumpLoads` (from `aio::Pump`,
+  top of `PS2_BeginFrame`) decodes it (`DecodePcx`/`DecodeTga`, image_load.h) and fills the slot.
+  **Every draw site checks `Texture::IsDrawable()` and skips** rather than draw a placeholder:
+  `DrawAliasMD2Entity` (after `SkinForEntity`), `DrawSpriteEntity`, `PS2_DrawPic`,
+  `PS2_DrawStretchPic`; `PS2_DrawGetPicSize` answers -1,-1. The by-name `Draw_*` path keeps the
+  synchronous `Find`, so menus never show a hole. A failed decode leaves the slot `Failed`, never
+  drawn, reported once. `EnsureTextureResident`'s asserts stand: nothing binds a Loading texture.
+  `tex::BeginRegistration` drains the pending table first, and loads during registration stay
+  synchronous (`m_registering`). PCSX2, throttled to a USB rate: `pics/a_slugs.pcx` (a HUD icon
+  the server names at a pickup) opened on frame 5012 and was ready on 5018; its row's ClParse
+  went from 5.6 to 0.3 ms.
 - **With `ps2_gs_latency` on (the default), a frame reaches the screen only when the next
   `BeginFrame` runs.** A frame that nothing follows never shows. The loading plaque was one:
   `SCR_BeginLoadingPlaque` draws it once, then `cls.disable_screen` stops all drawing until

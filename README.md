@@ -533,15 +533,11 @@ src/
   client/ common/ game/ server/   id's original Quake II C code
   null/                           id's null driver stubs - none are built any more
   tools/
-    host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc,
-                                  pakzip)
-    scripts/                      Python helpers (symbolize, compile_commands.json generator,
-                                  gen_save_tables - the save games' function/animation name tables)
-                                  and make_github_release.sh
+    host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc, pakzip)
+    scripts/                      Python helpers (symbolize, compile_commands.json generator, gen_save_tables - the save games' function/animation name tables) and make_github_release.sh
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
-    vu-checker/                   check_vu_code.py, the openvcl/dvp-as output checks run by every
-                                  VU build (git submodule)
+    vu-checker/                   check_vu_code.py, the openvcl/dvp-as output checks run by every VU build (git submodule)
     miniz/                        deflate codec for the save games and the compressed packs (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
@@ -552,13 +548,11 @@ src/
     input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
-    save/                         Sys_Save* seam: save working set, slot archives, memory card,
-                                  boot drive, the save notice
+    save/                         Sys_Save* seam: save working set, slot archives, memory card, boot drive, the save notice
     fs/                           compressed game packs (pakN.pkz) for the engine's file system
     builtin/                      images baked into the ELF (font, palette, HUD tiles, id logo)
     debug/                        simple on-screen printing for fatal errors, stack trace, HW exception handling
-    tests/                        standalone bring-up scenes and tests (test cube, cinematics,
-                                  map cycle, save games, perf run)
+    tests/                        standalone bring-up scenes and tests (test cube, cinematics, map cycle, save games, perf run)
 ```
 
 Every file carries a header comment explaining what it does and *why* it does it that way.

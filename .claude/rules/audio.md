@@ -118,6 +118,15 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   wraps; a 44.1 kHz WAV looped 3 passes through the decimator; an extensible mono 22 kHz WAV
   with an oversized data length; a forced allocation failure (warning, silence, no leak); and
   `.adp` winning over a `.wav` beside it.
+- **Mid-level sound effects load in the background** (`sound_load.{h,cpp}`, 2026-10-26, stage 4 of
+  the background-loading plan): `S_LoadSound` outside registration submits the WAV to `ps2::aio`
+  at `Priority::Sound` into a 64-aligned staging buffer (tag `Aio`, 8 in flight at most), and
+  `aio::Pump` at the top of `PS2_BeginFrame` finishes it (`S_FinishLoadSound`: GetWavinfo,
+  `PS2_AudioMalloc`, `ResampleSfx`) so the same frame's `S_Update` mixes it. A playsound for a
+  sound still loading waits in the pending list, retried every 10 ms for half a second
+  (`playsound_t::deadline`), then is dropped. In the PCSX2 perf run throttled to a USB stick's
+  rate, `rg_hum.wav` (the one mid-level sound of the run) opened on frame 5012 and was ready on
+  5017, its row's FsIo gone. The level-load path and `S_EndRegistration` are unchanged.
 - Audio bring-up failure is not fatal (`ps2_disable_sound 1` turns it off on purpose). The
   libsd/audsrv IRX load is one-shot.
 

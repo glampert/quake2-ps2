@@ -723,6 +723,12 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   playback rate and is monotonic by construction, which is what `GetSoundtime()` needs, and
   it means a stall long enough to drain the queue (a level load) recovers on its own with no
   resync logic.
+- **Sounds first asked for mid-level load in the background** ([sound_load.h](src/ps2/audio/sound_load.h)):
+  `S_LoadSound` outside a level's registration hands the WAV to the loader (see
+  [File system](#file-system)) and the pump at the top of `PS2_BeginFrame` resamples it into the
+  cache once it lands, so the frame that first hears a pickup's hum no longer reads the file
+  (58 ms from the HDD, 147 ms from a USB stick). A playsound whose sound is still loading
+  waits up to half a second and plays late, or is dropped. Level loads stay synchronous.
 - [sound_hold.h](src/ps2/audio/sound_hold.h) keeps those stalls silent. audsrv's IOP thread
   plays its ~106 ms ring whether or not anything new has arrived, so a frame blocked on the
   memory card, or a level load off USB, used to loop the ring's last tenth of a second until

@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // snd_dma.c -- main control for any streaming sound output device
 
 #include "client.h"
+#include "ps2/audio/sound_load.h" // [PS2_QUAKE]: mid-level loads through the background loader
 #include "snd_loc.h"
 
 void S_Play(void);
@@ -166,6 +167,8 @@ void S_Shutdown(void)
     if (!sound_started)
         return;
 
+    PS2_SoundLoadsDrain(); // [PS2_QUAKE]: the caches freed below may still be arriving
+
     SNDDMA_Shutdown();
 
     sound_started = 0;
@@ -284,6 +287,7 @@ S_BeginRegistration
 */
 void S_BeginRegistration(void)
 {
+    PS2_SoundLoadsDrain(); // [PS2_QUAKE]: S_EndRegistration clears sfx slots a background read may still be for
     s_registration_sequence++;
     s_registering = true;
 }
@@ -537,6 +541,29 @@ void S_IssuePlaysound(playsound_t * ps)
 
     if (s_show->value)
         Com_Printf("Issue %i\n", ps->begin);
+
+    // [PS2_QUAKE]: the load comes first, before a channel is taken. id's code loaded after and
+    // dereferenced the result unchecked, a crash for any sound that failed to load. A sound still
+    // in the background loader's hands is tried again 10 ms on, until its deadline; past it, or
+    // for a sound that failed, the playsound is dropped. The requeue lands strictly after
+    // paintedtime, so S_PaintChannels' issue loop always moves on.
+    sc = S_LoadSound(ps->sfx);
+    if (!sc)
+    {
+        if (PS2_SoundLoadPending(ps->sfx) && paintedtime < ps->deadline)
+        {
+            ps->prev->next = ps->next;
+            ps->next->prev = ps->prev;
+            ps->begin = paintedtime + dma.speed / 100;
+            S_LinkPlaysound(ps);
+        }
+        else
+        {
+            S_FreePlaysound(ps);
+        }
+        return;
+    }
+
     // pick a channel to play on
     ch = S_PickChannel(ps->entnum, ps->entchannel);
     if (!ch)
@@ -560,8 +587,7 @@ void S_IssuePlaysound(playsound_t * ps)
     S_Spatialize(ch);
 
     ch->pos = 0;
-    sc = S_LoadSound(ch->sfx);
-    ch->end = paintedtime + sc->length;
+    ch->end = paintedtime + sc->length; // [PS2_QUAKE]: loaded above
 
     // free the playsound
     S_FreePlaysound(ps);
@@ -638,7 +664,7 @@ void S_StartSound(vec3_t origin, int entnum, int entchannel, sfx_t * sfx, float 
 {
     sfxcache_t * sc;
     int vol;
-    playsound_t *ps, *sort;
+    playsound_t * ps;
     int start;
 
     if (!sound_started)
@@ -652,7 +678,7 @@ void S_StartSound(vec3_t origin, int entnum, int entchannel, sfx_t * sfx, float 
 
     // make sure the sound is loaded
     sc = S_LoadSound(sfx);
-    if (!sc)
+    if (!sc && !PS2_SoundLoadPending(sfx)) // [PS2_QUAKE]: a sound still loading is queued below and plays when it lands
         return; // couldn't load the sound's data
 
     vol = fvol * 255;
@@ -697,6 +723,24 @@ void S_StartSound(vec3_t origin, int entnum, int entchannel, sfx_t * sfx, float 
         ps->begin = paintedtime;
     else
         ps->begin = start + timeofs * dma.speed;
+
+    // [PS2_QUAKE]: how long S_IssuePlaysound keeps retrying a sound still loading: half a second.
+    ps->deadline = ps->begin + dma.speed / 2;
+
+    S_LinkPlaysound(ps); // [PS2_QUAKE]: the sort, shared with S_IssuePlaysound's retry
+}
+
+/*
+==================
+S_LinkPlaysound
+
+[PS2_QUAKE]: S_StartSound's sort into the pending list, so S_IssuePlaysound can requeue a
+playsound whose sound is still loading. 'ps' must be unlinked.
+==================
+*/
+void S_LinkPlaysound(playsound_t * ps)
+{
+    playsound_t * sort;
 
     // sort into the pending sound list
     for (sort = s_pendingplays.next;

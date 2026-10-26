@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1-3 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1-4 landed 2026-10-26, their console runs still owed. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -460,7 +460,12 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   frames; every cinematic row's Frame under 106 ms and `sndFree` never within 2400 bytes of empty
   outside the dump-poisoned rows; `Cinematic` at the HDD's decode-only 10-13 ms; `FsIo` near 0 on
   cinematic rows; a shorter cinematic start; `aioQ` staying above 0 through ntro's peaks.
-- [ ] **4. Sounds.** Gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
+- [x] **4. Sounds.** Landed 2026-10-26 (`src/ps2/audio/sound_load.{h,cpp}`, `src/ps2/fs/
+  aio_pump.{h,cpp}` with `ps2_aio_pump_us`, `S_FinishLoadSound`/`S_LinkPlaysound`/
+  `playsound_t::deadline`, the drains in `S_BeginRegistration` and `S_Shutdown`, `FLOG#ready`).
+  PCSX2, throttled to 900 KB/s: `rg_hum.wav` opened on frame 5012, ready on 5017, its row's FsIo
+  gone, no warnings, the run complete. No `SndLoad` column was added: `#open`/`#ready` pairs give
+  the latency. Console run owed with the others. Original gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
   `#ready` latency 2-4 frames on USB; no dropped or doubled one-shots in a `ps2_perftest` run by
   ear; the `S_IssuePlaysound` NULL path exercised with a deliberately missing file in a debug run.
 - [ ] **5. Textures** (skins, sprite frames, `RegisterPic` pics; the decoder split; the fused

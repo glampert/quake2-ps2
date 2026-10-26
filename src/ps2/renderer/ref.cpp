@@ -37,6 +37,7 @@
 #include "ps2/tests/perf_run.h"
 #include "ps2/tests/test_quit.h"
 #include "ps2/tests/aio_test.h"
+#include "ps2/fs/aio_pump.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -929,6 +930,10 @@ void PS2_BeginFrame(float cameraSeparation)
     // rollover above and rs::BeginFrame below, which is where the draw-stat and
     // submitted-byte counters it reads get cleared.
     ps2::debug::FrameLogCapture();
+
+    // What the background loader landed during the last frame's idle time becomes sounds (and,
+    // in later stages, textures and models) here, before anything this frame draws or mixes.
+    ps2::aio::Pump();
 
     // A brightness or contrast change from the menu or the console, between frames as the CLUTs'
     // upload has to be. The picture's place goes to the GS with the next present.

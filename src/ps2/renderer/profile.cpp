@@ -180,8 +180,9 @@ constexpr int kMaxOpenNotes = 16;
 
 struct OpenNote
 {
-    u32  frameIndex;
-    char name[MAX_QPATH];
+    u32          frameIndex;
+    const char * kind; // "open" or "ready"
+    char         name[MAX_QPATH];
 };
 
 static OpenNote s_openNotes[kMaxOpenNotes];
@@ -357,7 +358,7 @@ void WriteBatch()
 
     for (int i = 0; i < s_openCount && i < kMaxOpenNotes; ++i)
     {
-        Emit("FLOG#open,%u,%s\n", s_openNotes[i].frameIndex, s_openNotes[i].name);
+        Emit("FLOG#%s,%u,%s\n", s_openNotes[i].kind, s_openNotes[i].frameIndex, s_openNotes[i].name);
     }
     if (s_openCount > kMaxOpenNotes)
     {
@@ -500,7 +501,7 @@ void FrameLogFinish()
     std::fflush(stdout);
 }
 
-void FrameLogNoteOpen(const char * fileName)
+static void NoteFile(const char * const kind, const char * const fileName)
 {
     if (!Enabled())
     {
@@ -508,13 +509,24 @@ void FrameLogNoteOpen(const char * fileName)
     }
     if (s_openCount < kMaxOpenNotes)
     {
-        // The row the open is charged to: the frame being measured now, which FrameLogCapture
+        // The row the note is charged to: the frame being measured now, which FrameLogCapture
         // will number one past the last row it wrote.
         OpenNote & note = s_openNotes[s_openCount];
         note.frameIndex = s_frameIndex + 1;
+        note.kind       = kind;
         std::snprintf(note.name, sizeof(note.name), "%s", (fileName != nullptr) ? fileName : "?");
     }
     ++s_openCount;
+}
+
+void FrameLogNoteOpen(const char * fileName)
+{
+    NoteFile("open", fileName);
+}
+
+void FrameLogNoteReady(const char * fileName)
+{
+    NoteFile("ready", fileName);
 }
 
 void FrameLogMarkMap(const char * mapName)

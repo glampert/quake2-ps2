@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "client.h"
 #include "snd_loc.h"
 #include "ps2/system/heap.h" // [PS2_QUAKE]: PS2_AudioMalloc/PS2_AudioFree
+#include "ps2/audio/sound_load.h" // [PS2_QUAKE]: mid-level loads through the background loader
 
 int cache_full_cycle;
 
@@ -114,10 +115,6 @@ sfxcache_t * S_LoadSound(sfx_t * s)
 {
     char namebuffer[MAX_QPATH];
     byte * data;
-    wavinfo_t info;
-    int len;
-    int outwidth;
-    float stepscale;
     sfxcache_t * sc;
     int size;
     char * name;
@@ -129,6 +126,11 @@ sfxcache_t * S_LoadSound(sfx_t * s)
     sc = s->cache;
     if (sc)
         return sc;
+
+    // [PS2_QUAKE]: its read is in the background loader's hands; the cache arrives through the
+    // pump (ps2/audio/sound_load.h). NULL until then, as for a sound that failed to load.
+    if (PS2_SoundLoadPending(s))
+        return NULL;
 
     //Com_Printf ("S_LoadSound: %x\n", (int)stackbuf);
     // load it in
@@ -144,6 +146,13 @@ sfxcache_t * S_LoadSound(sfx_t * s)
 
     //	Com_Printf ("loading %s\n",namebuffer);
 
+    // [PS2_QUAKE]: a sound first asked for while a level runs loads in the background: the read
+    // alone was 58 ms from the HDD and 147 ms from a USB stick in the frame that asked. Level
+    // loads (s_registering, and S_EndRegistration's pass) stay synchronous under the plaque. When
+    // the loader can't take it - off, missing file, no memory - the synchronous path below runs.
+    if (!s_registering && PS2_SoundLoadAsync(s, namebuffer))
+        return NULL;
+
     size = FS_LoadFile(namebuffer, (void **)&data);
 
     if (!data)
@@ -152,11 +161,32 @@ sfxcache_t * S_LoadSound(sfx_t * s)
         return NULL;
     }
 
+    sc = S_FinishLoadSound(s, data, size); // [PS2_QUAKE]
+    FS_FreeFile(data);
+    return sc;
+}
+
+/*
+==============
+S_FinishLoadSound
+
+[PS2_QUAKE]: the second half of S_LoadSound, on a WAV image already in memory: shared by the
+synchronous path above and by the background loader's pump, which calls it through
+PS2_SoundFinishLoad once the read has landed. 'data' stays the caller's.
+==============
+*/
+sfxcache_t * S_FinishLoadSound(sfx_t * s, byte * data, int size)
+{
+    wavinfo_t info;
+    int len;
+    int outwidth;
+    float stepscale;
+    sfxcache_t * sc;
+
     info = GetWavinfo(s->name, data, size);
     if (info.channels != 1)
     {
         Com_Printf("%s is a stereo sample\n", s->name);
-        FS_FreeFile(data);
         return NULL;
     }
 
@@ -182,7 +212,6 @@ sfxcache_t * S_LoadSound(sfx_t * s)
     sc = s->cache = PS2_AudioMalloc(len + sizeof(sfxcache_t));
     if (!sc)
     {
-        FS_FreeFile(data);
         return NULL;
     }
 
@@ -194,9 +223,13 @@ sfxcache_t * S_LoadSound(sfx_t * s)
 
     ResampleSfx(s, sc->speed, sc->width, data + info.dataofs);
 
-    FS_FreeFile(data);
-
     return sc;
+}
+
+// [PS2_QUAKE]: the pump's entry (ps2/audio/sound_load.h), with the types it can name.
+int PS2_SoundFinishLoad(struct sfx_s * sfx, unsigned char * data, int size)
+{
+    return S_FinishLoadSound(sfx, data, size) != NULL;
 }
 
 /*

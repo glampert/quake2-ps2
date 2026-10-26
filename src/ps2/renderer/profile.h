@@ -114,6 +114,10 @@ void FrameLogMarkMap(const char * mapName);
 // read then stretches the Frame of the row after (see debug/engine_profile.h).
 void FrameLogNoteOpen(const char * fileName);
 
+// Names an asset the background loader finished in the frame being measured (FLOG#ready): the
+// scripts pair it with the FLOG#open of the same name for the request-to-ready latency.
+void FrameLogNoteReady(const char * fileName);
+
 // Ends the log: writes whatever the batch still holds, rather than waiting for
 // it to fill, then an "FLOG#end" row. Call once when a run finishes - without it
 // the last partial batch is lost, and a capture cut short by a crash reads the
@@ -126,6 +130,7 @@ inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
 inline void FrameLogNoteOpen(const char *) {}
+inline void FrameLogNoteReady(const char *) {}
 inline void FrameLogFinish() {}
 #endif // PS2_QUAKE_PROFILE
 

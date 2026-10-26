@@ -100,6 +100,7 @@ bigger picture.
 | --- | --- | --- | --- | --- |
 | `ps2_aio` | `1` | `1` | | The background loader (`src/ps2/fs/async_io.cpp`): a thread one priority below the main one that reads file ranges and inflates pack entries while frames run. 0 makes every client load synchronously, the A/B switch. Read at each request. |
 | `ps2_aio_throttle_kbps` | `0` | `0` | | Loader throughput cap in KB/s, as a sleep after each 32 KB chunk (plus 5 ms per chunk for the command), so PCSX2's instant host reads pace like a drive; 900 is a USB stick's. 0 is off. |
+| `ps2_aio_pump_us` | `2000` | `2000` | | The per-frame budget, in microseconds, for turning the loader's landed reads into assets at the top of `PS2_BeginFrame` (`src/ps2/fs/aio_pump.cpp`): sounds first (GetWavinfo and the resample). At least one is finished per frame whatever the budget. |
 | `ps2_readahead_kb` | `512` | `512` | | The read-ahead ring a cinematic (`.cin`) or demo (`.dm2`) streams through (`src/ps2/fs/readahead_stream.cpp`): 32 KB chunks the loader keeps in flight ahead of the reader, 512 KB at most, 256 when memory is short. 0 reads them through a plain stdio stream on the main thread as before, the A/B switch. Read at each open; a deflated pkz entry always gets the plain stream. |
 
 ## Sound and music

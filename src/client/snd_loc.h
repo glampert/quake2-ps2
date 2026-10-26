@@ -62,6 +62,7 @@ typedef struct playsound_s
     qboolean fixed_origin; // use origin field instead of entnum's origin
     vec3_t origin;
     unsigned begin; // begin on this sample
+    unsigned deadline; // [PS2_QUAKE]: if its sound is still loading in the background at 'begin', retry until this sample, then drop it
 } playsound_t;
 
 typedef struct
@@ -146,7 +147,10 @@ extern cvar_t * s_primary;
 wavinfo_t GetWavinfo(char * name, byte * wav, int wavlength);
 void S_InitScaletable(void);
 sfxcache_t * S_LoadSound(sfx_t * s);
+sfxcache_t * S_FinishLoadSound(sfx_t * s, byte * data, int size); // [PS2_QUAKE]: S_LoadSound after the file read (ps2/audio/sound_load.h)
+extern qboolean s_registering; // [PS2_QUAKE]: snd_dma.c's, read by S_LoadSound
 void S_IssuePlaysound(playsound_t * ps);
+void S_LinkPlaysound(playsound_t * ps); // [PS2_QUAKE]: S_StartSound's sort, shared with S_IssuePlaysound's retry
 void S_PaintChannels(int endtime);
 
 // [PS2_QUAKE]: Releases a decoded sound. The cache is not zone memory - it is tagged

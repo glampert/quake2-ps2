@@ -84,6 +84,7 @@ PS2_CXX_SRC =                         \
 	ps2/audio/audsrv_device.cpp       \
 	ps2/audio/mix_ring.cpp            \
 	ps2/audio/music_stream.cpp        \
+	ps2/audio/sound_load.cpp          \
 	ps2/audio/cd_audio.cpp            \
 	ps2/save/save_api.cpp             \
 	ps2/save/working_set.cpp          \
@@ -96,6 +97,7 @@ PS2_CXX_SRC =                         \
 	ps2/fs/pkz_pack.cpp               \
 	ps2/fs/async_io.cpp               \
 	ps2/fs/readahead_stream.cpp       \
+	ps2/fs/aio_pump.cpp               \
 	ps2/renderer/gs.cpp               \
 	ps2/renderer/gamma.cpp            \
 	ps2/renderer/vram.cpp             \

@@ -46,8 +46,11 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   `audsrv_play_audio` are synchronous RPCs, and on the IOP audsrv's RPC thread shares priority 40
   with fileXio's, with no time slicing. From the HDD a read in flight on the loader or the music
   reader held them 8-44 ms in 2% of the rows with a read (console, 2026-10-28; performance.md);
-  from USB never. It never empties the ring, but costs a field. Fix designed in the
-  background-loading plan, §12.4.
+  from USB never. It never empties the ring, but costs a field. Since 2026-10-29 snd.cpp holds
+  the submit back while `aio::FileCallInFlight()` or `MusicReadPending()`, if the last submit is
+  under 30 ms old (one 50 Hz frame), on the HDD only (`ps2_sound_defer`; plan §12.4). Forced on in
+  a throttled PCSX2 run it held 38% of ntro's submits, never two in a row, and the ring's lowest
+  point matched the run without it.
 - **audsrv loops its ring through an underrun.** Its IOP play thread advances the read cursor
   whether or not anything was written (audsrv.c's `play_thread`), so a main loop that stops
   submitting for longer than the ring (10 feed blocks: 9400 bytes, ~106 ms at 22050 Hz) gets

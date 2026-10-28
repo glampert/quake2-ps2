@@ -121,6 +121,14 @@ paths:
     went from 61 and 83 ms to 49 ms each: one dropped field, not two or three.
   - The demo stream's refills are unchanged (Server 60-63 ms against 65-72: `.dm2` is deflated).
     Worst wake-to-DISPFB 10 µs over 18189 presents. `io_log.txt` empty again, for the reason above.
+- **Plan §12.3 and §12.4 in PCSX2 (2026-10-29, debug, `ps2_aio_throttle_kbps 900`,
+  `ps2_sound_defer 2`; `pcsx2-defer-cinconv-throttled-2026-10-29.flog` against
+  `pcsx2-models-throttled-2026-10-26.flog`):** `cin::DrawFrame` converting and uploading only on a
+  new picture took cinematic rows' Ui from 5.5 ms to 0.72 mean (4 µs p50, 3.0 ms on the one row in
+  four that converts) and their EE work from 9.3-9.4 to 4.0-4.2 ms. The held-back submit: 4626 of
+  ntro's 12141 rows and 324 of eou1_'s 1165, never two in a row, `sndFree` max and p99 the same as
+  without it (4700, 3760), no frame past the ring but the starts'. A first run with a 40 ms limit
+  held submits back for 67 ms in a row, hence 30. The console captures are the gate.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

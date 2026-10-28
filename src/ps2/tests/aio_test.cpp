@@ -9,8 +9,14 @@
  *  console that read queues behind the chunk in flight in the SDK's file client, and the design
  *  promises it waits one chunk at most.
  *
- *  The references come from FS_LoadFile at submit time, so both copies are compared from memory.
- *  Keep the list small enough for twice its bytes beside a running attract demo.
+ *  The reference copy is read with FS_LoadFile when a request lands, so a pass holds the list's
+ *  bytes once (about 6 MB), not twice, and starts at once instead of behind a synchronous read of
+ *  the whole list (10 s from a USB stick).
+ *
+ *  The test first kills whatever the startup left running, as the perf run does. Its first console
+ *  run (2026-10-27) started under the attract loop's idlog.cin: the cinematic's ring outranks the
+ *  test's requests, so the pass was still in flight, holding 5.6 MB, when the loop went on to load
+ *  demo1's level, and the load ran out of memory. With no server up nothing loads behind the test.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -21,6 +27,7 @@
 #include "ps2/tests/test_quit.h"
 #include "ps2/fs/async_io.h"
 #include "ps2/system/heap.h"
+#include "ps2/renderer/loading_screen.h" // loading::Shown
 
 #include <cstring>
 
@@ -61,7 +68,6 @@ struct Pending
 {
     aio::Ticket   ticket;
     fs_location_t loc;
-    void *        reference = nullptr; // FS_LoadFile's copy
     u8 *          dest      = nullptr;
     u32           destBytes = 0;
     int           length    = 0;
@@ -73,10 +79,14 @@ struct Pending
 
 enum class Phase : int
 {
-    Idle,
+    Idle,    // waiting for the loading screen to come down, then killserver
+    Killing, // waiting for the startup's server to go away
     Running,
     Done,
 };
+
+// The perf run's allowance for the same wait (perf_run.cpp).
+constexpr int kKillTimeoutMs = 10 * 1000;
 
 static Phase    s_phase        = Phase::Idle;
 static int      s_pass         = 0; // 0: as the drive is; 1: throttled
@@ -92,6 +102,7 @@ static u32      s_passChunks   = 0;
 static u32      s_passIoCycles = 0;
 static char     s_savedThrottle[32];
 static bool     s_waitedOnce   = false;
+static int      s_killIssuedMs = 0;
 
 const char * KindName(const int kind)
 {
@@ -107,11 +118,6 @@ const char * KindName(const int kind)
 
 void FreePending(Pending & p)
 {
-    if (p.reference != nullptr)
-    {
-        FS_FreeFile(p.reference);
-        p.reference = nullptr;
-    }
     if (p.dest != nullptr)
     {
         heap::Free(p.dest, p.destBytes, heap::MemTag::Aio);
@@ -124,7 +130,7 @@ void FreePending(Pending & p)
     p.active = false;
 }
 
-// Submits every item of the list. The reference copy is read first, on the main thread.
+// Submits every item of the list.
 void StartPass()
 {
     s_passStartMs = Sys_Milliseconds();
@@ -152,14 +158,6 @@ void StartPass()
             continue;
         }
         s_kindsSeen |= 1 << p.loc.kind;
-
-        if (FS_LoadFile(kItems[i].name, &p.reference) != p.length)
-        {
-            Com_Printf("AioTest:   %-36s FS_LoadFile length differs from FS_LocateFile's!\n", kItems[i].name);
-            ++s_failures;
-            FreePending(p);
-            continue;
-        }
 
         p.destBytes = aio::RoundUp64(static_cast<u32>(p.length));
         p.dest      = static_cast<u8 *>(heap::TryAllocAligned(heap::MemAlign(64), p.destBytes, heap::MemTag::Aio));
@@ -195,7 +193,8 @@ void StartPass()
     }
 }
 
-// Compares a landed request with its reference, frees both and reports the line.
+// Compares a landed request with a reference FS_LoadFile reads now, frees both and reports the
+// line. The reference read is itself a main-thread read beside the chunks still in flight.
 void FinishItem(const int i)
 {
     Pending & p = s_pending[i];
@@ -205,7 +204,20 @@ void FinishItem(const int i)
     bool ok = (result == p.length);
     if (ok)
     {
-        ok = std::memcmp(p.dest, p.reference, static_cast<size_t>(p.length)) == 0;
+        void * reference = nullptr;
+        if (FS_LoadFile(kItems[i].name, &reference) != p.length)
+        {
+            Com_Printf("AioTest:   %-36s FS_LoadFile length differs from FS_LocateFile's!\n", kItems[i].name);
+            ok = false;
+        }
+        else
+        {
+            ok = std::memcmp(p.dest, reference, static_cast<size_t>(p.length)) == 0;
+        }
+        if (reference != nullptr)
+        {
+            FS_FreeFile(reference);
+        }
     }
     // The 64-byte rounding past the file must be untouched by a Read (an inflate writes only
     // rawBytes too).
@@ -298,6 +310,13 @@ void EndPass()
         Com_Printf("AioTest: Pending() still true after the pass!\n");
         ++s_failures;
     }
+
+    // Every destination is freed by now; what is left under the tag is the loader's own (its
+    // inflate workspace from the first deflated request on). A console shows this on its
+    // out-of-memory screen, so the number is worth having next to it.
+    char aioBytes[heap::kMemUnitStrSize];
+    Com_Printf("AioTest: pass %d: tag Aio holds %s after the pass.\n", s_pass + 1,
+               heap::FormatMemoryUnit(heap::GetStatsForMemTag(heap::MemTag::Aio).totalBytes, true, aioBytes, sizeof(aioBytes)));
 }
 
 // The declined-ticket path: with ps2_aio 0 a Submit must come back invalid.
@@ -319,6 +338,12 @@ void CheckDisabledSubmit()
     Cvar_Set("ps2_aio", wasEnabled ? "1" : "0");
 }
 
+// Com_ServerState() is a server_state_t as an int; 0 is ss_dead (see perf_run.cpp).
+bool ServerIsUp()
+{
+    return Com_ServerState() != 0;
+}
+
 } // namespace
 
 void RunAioTest()
@@ -331,6 +356,13 @@ void RunAioTest()
 
     if (s_phase == Phase::Idle)
     {
+        // A plaque left up over a dead server stops the frames this test runs from, so the kill
+        // waits for the loading screen to come down (testing-pcsx2.md, scripting trap 3).
+        if (loading::Shown())
+        {
+            return;
+        }
+
         s_failures = 0;
         s_compared = 0;
         s_kindsSeen = 0;
@@ -345,6 +377,25 @@ void RunAioTest()
         }
         CheckDisabledSubmit();
         Com_sprintf(s_savedThrottle, sizeof(s_savedThrottle), "%s", Cvar_VariableString("ps2_aio_throttle_kbps"));
+
+        // Drop the attract loop (or a map forced in Qcommon_Init) before the first pass. See the
+        // banner: a level loading behind a pass ran out of memory on the console.
+        Cbuf_AddText("killserver\n");
+        s_killIssuedMs = Sys_Milliseconds();
+        s_phase        = Phase::Killing;
+        return;
+    }
+
+    if (s_phase == Phase::Killing)
+    {
+        if (ServerIsUp())
+        {
+            if ((Sys_Milliseconds() - s_killIssuedMs) < kKillTimeoutMs)
+            {
+                return;
+            }
+            Com_Printf("AioTest: the server never went down after killserver - running anyway.\n");
+        }
         s_phase = Phase::Running;
         StartPass();
         return;

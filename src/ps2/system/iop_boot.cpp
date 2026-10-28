@@ -1540,6 +1540,11 @@ int SyncGameDataDevice()
     return (s_hddSyncDevice != nullptr) ? fileXioSync(s_hddSyncDevice, 0) : 0;
 }
 
+bool GameDataOnHdd()
+{
+    return s_hddSyncDevice != nullptr;
+}
+
 int FileXioBufferBytes()
 {
     return s_fileXioBufferBytes;

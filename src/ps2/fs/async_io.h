@@ -138,6 +138,11 @@ void Drain();
 // the chunk in flight (the keyboard poll's guard, beside MusicReadPending()).
 bool Pending();
 
+// True while the loader is inside a file call (lseek or read, or the throttle standing in for
+// one): an IOP call made now may wait for it there. On the HDD that includes the audio submit's
+// audsrv RPCs (audio.md), which snd.cpp holds back for it. Unlike Pending(), not the queue depth.
+bool FileCallInFlight();
+
 // False when ps2_aio is 0 or the thread failed to start: every client loads synchronously.
 bool Enabled();
 

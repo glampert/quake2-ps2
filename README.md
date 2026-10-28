@@ -741,6 +741,11 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   music starts as the plaque comes down. A level change brings the plaque up before it
   writes the level it leaves.
 
+On the HDD, the submit's two audsrv RPCs wait on the IOP while another thread's file call is
+out there (the background loader's or the music reader's), 8-44 ms on a console. So while one
+is, the frame's submit is held back while the last one is under 30 ms old (one 50 Hz frame),
+which the ring's ~85 ms covers; `ps2_sound_defer` (0 off, 1 on the HDD, 2 always) switches it.
+
 Audio bring-up failure is not fatal: a missing IOP driver just costs sound. `ps2_disable_sound 1`
 turns it off deliberately.
 

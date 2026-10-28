@@ -108,6 +108,7 @@ bigger picture.
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
 | `ps2_disable_sound` | `0` | `0` | Arch. | Skip audio bring-up at boot and run silent. |
+| `ps2_sound_defer` | `1` | `1` | | Holds the frame's audio submit back, while the last one is under 30 ms old, while the loader or the music reader has a file call out: on the HDD the audsrv RPCs would wait for it on the IOP. 0 off, 1 when the game data is on the HDD, 2 always (to exercise it in PCSX2 with `ps2_aio_throttle_kbps`). Held-back frames log `sndFree` -2. |
 | `cd_nocd` | `0` | `0` | Arch. | Turn the streamed soundtrack off (the Options menu's "background music" toggle). |
 | `cd_volume` | `0.7` | `0.7` | Arch. | Music volume, 0-1 (the Options menu's "music volume" slider). |
 | `cd_loopcount` | `4` | `4` | | Times a map's track plays before switching to `cd_looptrack`. |

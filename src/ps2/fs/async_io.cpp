@@ -93,6 +93,9 @@ static int s_cacheSlot = -1;
 static int s_cacheFd   = -1;
 static u32 s_cachePos  = 0;
 
+// Set while the loader is inside lseek/read (or a throttle's stand-in for one). See FileCallInFlight.
+static volatile bool s_inFileCall = false;
+
 // Monotonic, loader-written; TakeFrameStats hands out the differences since its last call.
 static volatile u32 s_statBytes    = 0;
 static volatile u32 s_statChunks   = 0;
@@ -135,7 +138,10 @@ int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 
 {
     if (slot != s_cacheSlot || fd != s_cacheFd || pos != s_cachePos)
     {
-        if (lseek(fd, static_cast<off_t>(pos), SEEK_SET) != static_cast<off_t>(pos))
+        s_inFileCall = true;
+        const off_t at = lseek(fd, static_cast<off_t>(pos), SEEK_SET);
+        s_inFileCall = false;
+        if (at != static_cast<off_t>(pos))
         {
             s_cacheSlot = -1;
             return kErrSeek;
@@ -149,7 +155,9 @@ int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 
     while (left != 0)
     {
         const CpuCycles start = ReadCycles();
+        s_inFileCall = true;
         const ssize_t n = read(fd, dest, left);
+        s_inFileCall = false;
         const u32 cycles = ReadCycles() - start;
         ioCycles += cycles;
         s_statIoCycles = s_statIoCycles + cycles;
@@ -319,9 +327,12 @@ void Throttle(const u32 bytes)
         return;
     }
 
-    // A SCSI command's latency plus the transfer.
+    // A SCSI command's latency plus the transfer. The read it stands for is still out, as far as
+    // FileCallInFlight's callers are concerned.
     const float micros = 5000.0f + (static_cast<float>(bytes) * 1000.0f) / kbps;
+    s_inFileCall = true;
     DelayThread(static_cast<int>(micros));
+    s_inFileCall = false;
 }
 
 void LoaderLoop(void * const)
@@ -670,6 +681,11 @@ void Drain()
     while (PollSema(s_doneSema) >= 0)
     {
     }
+}
+
+bool FileCallInFlight()
+{
+    return s_inFileCall;
 }
 
 bool Pending()

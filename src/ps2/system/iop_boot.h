@@ -51,6 +51,10 @@ void PrintIopBootReport(void (*printer)(const char *, ...));
 // returns 0 on success or the negative driver error code on failure.
 int SyncGameDataDevice();
 
+// Whether the game data is on the HDD mount (the one SyncGameDataDevice syncs). On the HDD a
+// file call out on the IOP holds up other RPCs, the audio submit's among them (audio.md).
+bool GameDataOnHdd();
+
 // The IOP buffer fileXio serves every HDD/USB read through, in bytes, which caps how much one
 // device read asks for (see PS2_QUAKE_FILEXIO_BUFFER_KB in iop_boot.cpp). 0 on host: boots,
 // which read through the ROM's FILEIO instead.

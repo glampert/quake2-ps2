@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1-6 landed 2026-10-26 and met their console gates in the USB capture of 2026-10-27 (stage 2's console self-test still owed, stage 6's MapCycle too); 7 deferred on those numbers; 8 half done (the USB capture). Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below, §12 the researched follow-ups (2026-10-28); stages 1-6 landed 2026-10-26 and met their console gates in the USB capture of 2026-10-27 (stage 2's console self-test still owed, stage 6's MapCycle too); 7 deferred on those numbers; 8 half done (the USB capture). Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -549,6 +549,187 @@ the Makefile (`PS2_CXX_SRC`, `SIZE_OPT_CXX_SRC` for the test and the stream), CV
 - `S_RegisterSexedSound`'s existence probe through `FS_LoadFile(name, NULL)` (a length query)
   instead of an open and close, saving one IOP round trip per first use.
 - The CD music reader migrating onto `ps2::aio` as a `Stream`-priority client: one thread fewer,
-  and its reads would obey the chunk rule.
+  and its reads would obey the chunk rule. Worked out in §12.1.
 - The GS FINISH spin (`GsWait`, ~3.5 ms a frame) becoming an INTC_GS wait, giving the loader that
   time too.
+- The cinematic ring's size and chunk size against the console numbers, and the start's cost:
+  §12.2. `cin::DrawFrame`'s per-frame conversion and upload: §12.3.
+
+## 12. Follow-ups, researched 2026-10-28 (no code yet)
+
+Three items from §11 read against the code as it stands after stages 1-6 and the console USB
+capture of 2026-10-27. Each is sized for one commit; none changes a format or a save.
+
+### 12.1 The music reader as a loader client
+
+**What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
+stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in
+turn (`Empty → Pending → Ready`), `RotateThreadReadyQueue` yields after every `RequestNext` and
+in `Decode`, and `WaitForReads` for `Close`. A buffer is 8 KB for ADPCM (two 4 KB chunk groups,
+~325 ms of 22 kHz stereo) and 8-64 KB for WAV (~3/8 s), both from `TryAllocAligned(64,
+MemTag::Music)` at `Open`, freed at `Close`. The file is a loose `open()` descriptor; the header
+reads (`ReadScratch`, 64 bytes) happen synchronously in `Open`, which also waits for the first
+buffer so the track starts on the next frame. `ReadPending()` feeds `MusicReadPending()`, whose
+only user is keyboard.cpp's poll guard (now `MusicReadPending() || aio::Pending()`).
+`cd_audio.cpp` calls `Decode` from `PumpMusic` once a frame (`CDAudio_Update`, after `S_Update`)
+and inside `HoldMusic`'s fade loop; nothing else touches the stream's I/O.
+
+**What changes.** `Buffer` gains an `aio::Ticket` and loses `state`/`resultBytes`; the thread,
+both semaphores, `s_readerStack`, `ReaderEntry/ReaderLoop`, `YieldToReader`, `m_readerIndex`,
+`m_readerFilePos`, `m_priority` and `m_threadId` go. The buffer's state is read from the ticket:
+`aio::Poll` Queued/Running is today's Pending, Done is Ready, Failed is a failed read, and Free
+(after `Release`) is Empty, so `BufferState` can stay as a derived accessor rather than a stored
+field.
+
+- `RequestNext(i)`: fills a `Request{Kind::Read, Priority::Stream, m_fd, m_payloadStart +
+  offset, requestBytes, buffer.data, RoundUp64(requestBytes)}` and `Submit`s it. A declined
+  ticket (loader off, 32 slots busy) marks the buffer as a synchronous read: `Decode` then reads
+  it on the main thread when it needs it, as the pre-thread code did, so `ps2_aio 0` still plays
+  music. The buffer memory is already 64-aligned with a 64-multiple stride; `destBytes` is the
+  stride.
+- `AcquireBuffer`: `Poll(ticket)`; Done with `Result == requestBytes` is today's Ready path;
+  Failed or a short result keeps today's warning and `m_finished/m_failed`.
+- `ReleaseBuffer`: `aio::Release(ticket)` then `RequestNext`. No yield: the loader runs when the
+  main thread next sleeps (the vsync wait, any RPC), which is within the frame.
+- `Decode`'s trailing yield loop goes.
+- `Open`: after `RequestNext` on both buffers, `aio::Wait(buffer[0].ticket)` replaces the
+  `m_doneSema` loop (same behaviour: the first buffer lands before the track starts).
+- `Close`/`WaitForReads`: `aio::Cancel` on every ticket (a Queued one drops at once, a Running one
+  waits one chunk), then `close(m_fd)` and `FreeBuffers`, in that order: the descriptor and the
+  buffers may not go while a request holds them (§5's rule).
+- `ReadPending()` becomes "any ticket Queued or Running"; `MusicReadPending()` then duplicates
+  `aio::Pending()` and the keyboard guard simplifies to the latter. Keep the function one
+  release for the audio rule's cross-reference, or delete it with the thread.
+- `StartReaderThread` goes; `Open`'s `Unusable` path for a failed thread becomes the loader's
+  `Enabled()` false → synchronous reads, not silence.
+
+**Chunking.** An 8 KB ADPCM request never crosses a 32 KB boundary of the file only if the payload
+offsets are 8 KB-aligned from a 32 KB-aligned start; `music_file::kHeaderBytes` is 2 KB, so they
+aren't, and about one request in four straddles a chunk boundary and costs two `read()`s. Two
+options: (a) accept it (one extra USB command per 1.3 s of music); (b) size requests to whole
+chunks: `m_readBytes` = the bytes up to the next 32 KB boundary of the file for the first request,
+then 32 KB (eight ADPCM groups, ~1.3 s), the buffers growing to 2 × 32 KB (64 KB of `Music`, from
+16 KB; a WAV CD rip already uses 2 × 64 KB). (b) halves the command count and keeps every read one
+cluster command; the 48 KB is held only while a track plays, never across a load. Prefer (b),
+with `kAdpcmReadBytes` becoming the chunk size and a first-request trim in `RequestNext`.
+
+**The loader's seek cache** (`ReadRange`: `s_cacheSlot/s_cacheFd/s_cachePos`) is keyed by slot,
+so two consecutive music requests from different slots re-`lseek` though the file position is
+already right. Drop the slot from the key: the cache is "where this fd's position is", which is
+true whatever slot moved it, and invalidated by any failed call as now. One IOP round trip saved
+per music request and per read-ahead slot.
+
+**Priority and latency.** `Priority::Stream` puts music level with the cinematic ring; they never
+coexist (`SCR_PlayCinematic` stops the music, `PumpMusic` returns while `cl.cinematictime > 0`).
+Against a pickup's `Asset` or `Sound` requests the music chunk goes first, which is right: a 1.3 s
+buffer in flight 325 ms ahead of need is still the one with a deadline. The loader runs a priority
+below main, so a music chunk is issued at main's next sleep (≤ one frame), against the reader's
+immediate yield today; with ~650 ms of music buffered (a), or ~1.3 s (b), that is nothing. A
+main-thread file call behind a music chunk waits ≤ 41 ms on USB (today ≤ 8 KB's ~15 ms): the
+keyboard poll already guards, and the save paths run under a hold; nothing else reads per frame.
+
+**Memory.** The 8 KB static stack returns to .bss's free; `Music` grows from 16 to 64 KB while a
+track plays under (b). The 32 request slots: the ring takes up to 16, the music 2, sounds 8,
+textures and models 16 each at most; `Submit` declines past 32 and the music then reads
+synchronously for that buffer, so no new failure path.
+
+**Gates.** The target hash test in audio.md (ADPCM wraps, the 3-pass 44.1 kHz WAV, the extensible
+mono WAV, the forced allocation failure, `.adp` over `.wav`) bit-exact as before; a PCSX2 perf
+capture with `Music` and `SndMix` unchanged against `menu-gamma.flog`; `ps2_aio 0` plays music;
+a console USB run with `in_keyboard 1` showing no Input stalls (the 2026-10-10 hitch class), and
+the music chunks visible in `aioBytes` at ~1 per 1.3 s.
+
+### 12.2 The cinematic ring: size, chunk size, and the start
+
+**Measured (USB, 2026-10-27).** The ring is 16 × 32 KB; `aioQ` (requests Queued or Running) read
+0-7 through ntro, mode 1-2, so 9-16 slots sat landed and unread at any time: the ring ran 290-510
+KB ahead of the reader at ntro's 384 KB/s mean. Its waits were nil (FsIo max 1.2 ms). On the HDD
+the same ring would sit full nearly always.
+
+- **Ring size.** The 512 KB default (`ps2_readahead_kb`) was sized for the stick's 0.5 s read
+  stall after a write during a 700 KB/s peak (a ~270 KB deficit, §6.3); the capture confirms it
+  was never breached, with 200+ KB to spare at the mode. 256 KB would have covered the mode but
+  not the worst case the frame-log dumps provoke; a shipping build makes no such writes, but an
+  autosave or `config.cfg` write before a cinematic does. Keep 512 KB for USB; the ring is
+  heap-held only while a cinematic plays (between levels, the lowest-memory moment), so the
+  256 KB it could save buys nothing a level needs. The `kMinSlots` fallback (8) stays for a
+  cinematic that starts with less free. No change recommended; record the depth numbers in
+  readahead_stream.cpp's banner.
+- **Chunk size.** 32 KB is one cluster command on the user's stick, and FatFs ends every read at a
+  cluster anyway, so a 64 KB chunk on USB is two commands with no saving; on the HDD a 64 KB chunk
+  is one fileXio piece (PFS reads contiguous zones up to the piece size), halving RPCs for the same
+  bytes. Against it: the main thread's worst wait behind a chunk doubles (82 ms USB), and the
+  ring's granularity with it. The HDD's refills were never the stutter (its two speeds, 9.6-54 ms,
+  stayed inside a field), so the gain there is RPC count, not a frame. Keep 32 KB. If a 64 KB
+  cluster stick turns up, `kChunkBytes` could follow the volume's cluster size at boot (FatFs
+  exposes it through `f_getfree`/`csize`; bdmfs_fatfs doesn't surface it to the EE today), which
+  is the only version of this worth doing.
+- **The copy out of the ring** is what FsIo now measures on a cinematic row: 0.4-0.6 ms a frame
+  for ~27 KB (ntro's mean frame) through `fread` → `StreamRead` → `memcpy`, plus the frame's
+  `Z_Malloc`/`Z_Free` of its 76 KB output. Handing cl_cin.c a pointer into the ring instead would
+  save it, but needs the reader to see slot boundaries (a frame can straddle two) and changes
+  cl_cin.c; at half a millisecond on a 20 ms field it is not worth either. Leave it.
+- **The start.** eou1_'s open row fell 2.8 → 1.0 s, ntro's held at 1.7 s, and the frame log
+  charges neither to FsIo or Cinematic (`SCR_PlayCinematic`'s reads are raw `fread`s, not
+  `FS_Read`). What is in it: `pics/loading.pcx` (0.3 s measured earlier), `FS_FOpenFile`'s open
+  of a loose 80 MB file (FatFs directory walk, then stdio's `fseek(SEEK_END)` for the length,
+  which without `FF_USE_FASTSEEK` walks the FAT chain: 2560 clusters for ntro, mostly from BDM's
+  cache), `FS_LocateFile`'s second open for the ring (the same walk again), the first chunk's
+  wait (41 ms), the 64 KB Huffman table (256 `fread`s of 256 bytes, each a ring copy), and
+  `CL_RegisterSounds` for the 11 kHz cinematics (fixed, up-only). Unmeasured: put the open under
+  the profiler (`PS2_PROF_FS_IO` around `FS_FOpenFile` in `SCR_PlayCinematic`, one `[PS2_QUAKE]`
+  pair) before touching anything. The likely saving is the second open: `FS_FOpenFileImpl` has the
+  stream it just opened, and `FS_MakeLocation` could take its `fileno` instead of opening again
+  (the loose branch holds `looseFile` already). Half the walk for a one-line change, once the
+  measurement says the walk is where the second is.
+
+### 12.3 `cin::DrawFrame`: convert and upload only when the picture changed
+
+**What exists.** `SCR_DrawCinematic` calls `re.DrawStretchRaw` every client frame (50 Hz) with
+`cin.pic`, which `SCR_RunCinematic` replaces at 14 fps (`cin.pic = cin.pic_pending`, a fresh
+`Z_Malloc` from `Huff1Decompress` each time). `cin::DrawFrame` then, every call: expands
+`cols × trows` (320 × 240 for the stock films) through `s_palette` into the 256 × 256 RGBA5551
+`s_frameBuffer` with the 16.16 column resample (unpacking each palette entry to r, g, b, a and
+repacking per pixel), copies a guard row, `MarkPixelsDirty()`, and draws. The bind then takes
+`EnsureTextureResident`'s dirty path: `vram::Touch`, no fence (the texture was bound last frame,
+not this one), `gs::UploadTexture`: `SyncDCache` over 128 KB, `cmdbuf::WaitIdle`, a synchronous
+128 KB PATH3 transfer. The console charges all of it to `Ui`: 3.68 ms on every cinematic row, 2.6
+of every 3.6 calls redoing an unchanged picture.
+
+**What changes.**
+
+- cl_cin.c, one `[PS2_QUAKE]` line in `SCR_RunCinematic` after `cin.pic = cin.pic_pending;`:
+  `PS2_CinematicFrameChanged();` (declared in q_common.h beside the other PS2 hooks). The pointer
+  can't be the signal: `Z_Free` then `Z_Malloc` of the same size hands the same block back.
+- cinematic.cpp: `static u32 s_frameGeneration` bumped by that hook, `s_convertedGeneration`,
+  `s_convertedPaletteGeneration`. `DrawFrame` converts, copies the guard row and marks dirty only
+  when `s_convertedGeneration != s_frameGeneration` or the palette generation moved
+  (`gamma::Generation()` through `CurvePalette`, or a `SetPalette` with a new table: bump the
+  palette generation there too, since a `command == 1` frame changes the palette without a
+  gamma change); otherwise it goes straight to `rs::DrawTexturedRect`. An eviction between frames
+  is already handled: `EnsureTextureResident` re-uploads a non-resident texture from
+  `s_frameBuffer` whether or not it is dirty, and `SetPalette(nullptr)` (stop, or the menu
+  blanking the screen) frees the buffer and must reset `s_convertedGeneration` so the next frame
+  converts again. The `cols/rows` arguments can change between films only; fold them into the
+  check (a static of the last `cols`, `rows`).
+- The conversion itself, for the 14 frames a second that remain: a `u16 s_palette16[256]`
+  prepacked by `CurvePalette` (RGBA5551 with the alpha bit), so the inner loop is a lookup and a
+  store, about half the instructions of the unpack-repack. The 16.16 column step and the row
+  skip stay.
+- `SCR_DrawCinematic` is unchanged: the quad is still drawn every frame (`BeginFrame` clears),
+  from the resident texture.
+
+**Not this round.** An 8-bit PSMT8 frame texture with the cinematic palette as a CLUT would drop
+the conversion and halve the upload (64 KB), but the four CLUTs live at fixed VRAM and change only
+through `gs::UpdateCluts` between frames (gs-renderer.md); a fifth slot and a mid-film palette
+change path is a renderer change out of proportion to 14 conversions a second. Moving the
+remaining conversion to the loader is stage 7's `Decode` kind.
+
+**Expected.** `Ui` on cinematic rows from 3.7 ms every frame to ~0.1 ms on 36 of 50 and ~2 ms (the
+prepacked convert plus the upload) on the 14 that change: about 2.6 ms a frame on the console,
+which takes ntro's decode rows (EE work 10-28 ms, 54-74% over a field) down by that much, the
+largest single cut available short of stage 7. **Gate:** a PCSX2 capture of the perf run's two
+cinematics with `Ui` down on cinematic rows and `Cinematic`, `FsIo` and `Frame` unchanged; the
+`screenshot` recipe (testing-recipes.md) on a cinematic frame identical before and after (the
+texels are the same bytes); a palette-change film (`command == 1` frames: ntro has them) showing
+no stale colours; the menu over a cinematic and back; then the console capture's `Ui` column.

@@ -94,6 +94,33 @@ paths:
   - `sndFree` reads 7520 or 8460 (of 9400) on isolated single rows every 1-3 s in every segment of
     both captures, at normal 20 ms frames: a sampling artefact of the ring report, not an
     underrun. Judge underruns by `Frame` over the ring.
+- **The HDD capture with the loader (2026-10-28)**: the same console, `quake2_profile_aio_2026-10-28.elf`
+  launched from the HDD; `console-hdd-aio-2026-10-28.flog`, raw `frame_log_hdd_aio_2026-10-28.txt`,
+  against `console-hdd-2026-10-26.flog` by `FLOG#map` segment. The user opened the menu in base2
+  (rows 229-518: its pics load synchronously by design, 60-64 ms of FsIo each).
+  - **Cinematics: the main thread no longer reads.** FsIo on cinematic rows p95 9.6 ms → 0.46
+    (eou1_) and 9.7 → 0.63 ms (ntro), max 716 and 55 ms → 1.2 ms; ntro's 1237 refills had cost the
+    main thread 13.8 s. Rows over 30 ms: eou1_ 20.8 → 15.3%, ntro 26.2 → 21.6%. What is left is
+    decode (p50 9.9 and 12.7 ms) plus `cin::DrawFrame`'s 3.7 ms of Ui, over a field on its own
+    for the heavy ntro frames. eou1_'s start (map marker to first picture) 2.46 → 1.71 s, ntro's
+    2.55 → 2.65 s.
+  - **New on HDD: a background read stalls the audio submit.** 54 ntro rows and 3 eou1_ rows had
+    `SndMix` of 8-44 ms (1.37 s in all on ntro), every one a row where a loader chunk landed: 2.2%
+    of the 2455 chunk rows, whose SndMix p99 is 24 ms against 0.6 ms on the others. The USB capture
+    has none (p99 1.3 ms on chunk rows). Gameplay rows show the same stall with no loader request
+    (aioQ 0): 7 rows in the 10-26 HDD capture, 9 now, which fits the music reader's reads (the
+    10-26 note's "audsrv submit RPC that waited 42 ms on the IOP"). The likely mechanism, from the
+    SDK sources: on the IOP audsrv's RPC thread and fileXio's both run at priority 40, with no time
+    slicing, and the HDD path holds the CPU in places (dev9's DMA busy-waits by design,
+    `ps2dev9.c`: "thread switching hurts throughput greatly"), so `audsrv_available` and
+    `audsrv_play_audio` wait out part of the read. Where the time goes wasn't measured. At ≤44 ms
+    it never empties the 106 ms ring; it costs a field. Plan §12.4 has the fix.
+  - **Pickups:** the slugs model and skin row ClParse 42.9 → 0.48 ms, the model ready 2 frames
+    after its request and the skin 2; `a_slugs.pcx` plus `rg_hum.wav` 61.0 → 0.44 ms, ready 3-4
+    frames later. But the next frame's submit waited 29 and 27 ms behind those reads, so the frames
+    went from 61 and 83 ms to 49 ms each: one dropped field, not two or three.
+  - The demo stream's refills are unchanged (Server 60-63 ms against 65-72: `.dm2` is deflated).
+    Worst wake-to-DISPFB 10 µs over 18189 presents. `io_log.txt` empty again, for the reason above.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

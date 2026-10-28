@@ -42,6 +42,12 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   main thread the same way. PCSX2's `host:` reads are too quick to show it. In PCSX2 a
   per-frame poll cost ~86 µs; with the idle polling the Input column averages 27 µs, against
   20 µs for the pad alone.
+- **On the HDD, the submit waits out another thread's read.** `audsrv_available` and
+  `audsrv_play_audio` are synchronous RPCs, and on the IOP audsrv's RPC thread shares priority 40
+  with fileXio's, with no time slicing. From the HDD a read in flight on the loader or the music
+  reader held them 8-44 ms in 2% of the rows with a read (console, 2026-10-28; performance.md);
+  from USB never. It never empties the ring, but costs a field. Fix designed in the
+  background-loading plan, §12.4.
 - **audsrv loops its ring through an underrun.** Its IOP play thread advances the read cursor
   whether or not anything was written (audsrv.c's `play_thread`), so a main loop that stops
   submitting for longer than the ring (10 feed blocks: 9400 bytes, ~106 ms at 22050 Hz) gets

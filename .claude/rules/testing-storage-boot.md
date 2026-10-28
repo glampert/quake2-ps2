@@ -25,7 +25,9 @@ card) are there; the driver traps are in [ps2-platform.md](ps2-platform.md).
   something else only shows there. **Its first console run (2026-10-27) died of out-of-memory**
   because it ran under the attract loop: the idlog.cin ring's requests outrank the test's, so a
   pass holding its 6 MB of destinations (12 MB then, with the references read up front) was still
-  in flight when the loop loaded demo1's level. Hence the kill and the late reference read.
+  in flight when the loop loaded demo1's level. Hence the kill and the late reference read. The
+  fixed build passed on the console from USB (2026-10-28, `quake2_dbg_aio_2026-10-28.elf`, read off
+  the screen: with `ps2_logfile` off a passing run leaves no log, so set it for the numbers).
 - **Emulating a USB stick's read rate in PCSX2:** `ps2_aio_throttle_kbps 900` in config.cfg paces
   the background loader (not the main thread's own reads) like the user's stick: 5 ms plus the
   transfer at 900 KB/s per 32 KB chunk. A perf capture with it shows whether the cinematic ring

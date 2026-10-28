@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below, §12 the researched follow-ups (2026-10-28); stages 1-6 landed 2026-10-26 and met their console gates in the USB capture of 2026-10-27 (stage 2's console self-test still owed, stage 6's MapCycle too); 7 deferred on those numbers; 8 half done (the USB capture). Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below, §12 the researched follow-ups (2026-10-28); stages 1-6 landed 2026-10-26 and met their console gates in the USB capture of 2026-10-27 and the HDD capture and console self-test of 2026-10-28 (the HDD showed a new audio-submit stall, §12.4); 7 deferred on those numbers; 8 done but for the by-eye handoffs. Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -445,7 +445,8 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   `Wait`), times a main-thread read every frame, and checks the declined-ticket path with
   `ps2_aio 0`. PCSX2 gate met: 24 comparisons, 0 failures, loose, pkz-stored and pkz-deflated
   seen (a pak needs a run without the pkz), probe read 4 ms at worst, no keyboard stalls. **Still
-  owed: one run on the console from USB**, the only place the cache-line rule is real. The first
+  owed: one run on the console from USB**, the only place the cache-line rule is real; **passed
+  2026-10-28** (`quake2_dbg_aio_2026-10-28.elf`, on screen, no log kept). The first
   try (2026-10-27) ran out of memory: the test started under the attract loop's idlog.cin, whose
   ring outranks the test's requests, so the pass (5.6 MB of destinations) was still in flight
   when the loop loaded demo1's level. Since 2026-10-28 the test kills the startup server first,
@@ -514,9 +515,12 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   `Z_Malloc`, `cin.hnodes1` read-only, `SCR_ReadNextFrame` handing the block to a job: cl_cin.c
   changes, so last). Gate: EE work on the affected rows down by the decode's cost, the other
   columns within ~2% cache noise.
-- [ ] **8. Measure and record.** The USB capture is done (2026-10-27, `performance.md`), README
-  and CVARS.md carry the cvars, `memory-budget.md` has the MapCycle line (2026-10-28). Still owed:
-  a console HDD capture and the console self-test (stage 2).
+- [x] **8. Measure and record.** The USB capture (2026-10-27) and the HDD capture (2026-10-28) are
+  in `performance.md`, README and CVARS.md carry the cvars, `memory-budget.md` has the MapCycle
+  line (2026-10-28), the console self-test passed. From the HDD the main thread's cinematic reads
+  are gone (ntro's 13.8 s of refills; rows over 30 ms 26.2 → 21.6%) and the pickups' ClParse
+  42.9/61.0 → 0.5 ms, but a read in flight can hold the next audio submit 8-44 ms on the IOP
+  (§12.4). Still owed: the by-eye and by-ear handoffs of stages 4-6.
 
 ## 9. Risks
 
@@ -525,6 +529,7 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
 | Loader throughput lost to re-issue latency (lower priority: the main thread must sleep first) | Measured by the stage-2 self-test; the ring is sized for it; if it matters, a `Submit` from the pump at frame start keeps the queue deep |
 | Cache-line sharing invisible in PCSX2 | Asserts in `Submit`, 64-rounded allocations, the stage-2 console run |
 | A main-thread file call waits behind a chunk | 32 KB cluster-aligned chunks (≤41 ms USB); saves and config writes already run under a sound hold |
+| The audio submit waits on the IOP behind an HDD read (seen 2026-10-28: 8-44 ms in 2% of chunk rows) | §12.4: hold the submit back up to 40 ms while a read is in flight, on the HDD only |
 | D-cache pollution from loader CPU work raises the main thread's EE time | Stage 7 is conditional and gated on a capture |
 | Paks or the pkz closed, or caches swept, with reads in flight | The five drain sites; asserts that nothing is pending at `Unload` and `FreeUnregistered` |
 | A deflated `.cin` or `.dm2` in the pkz gets no read-ahead | `pakzip` stores them, or pak and loose sources only |
@@ -558,7 +563,7 @@ the Makefile (`PS2_CXX_SRC`, `SIZE_OPT_CXX_SRC` for the test and the stream), CV
 ## 12. Follow-ups, researched 2026-10-28 (no code yet)
 
 Three items from §11 read against the code as it stands after stages 1-6 and the console USB
-capture of 2026-10-27. Each is sized for one commit; none changes a format or a save.
+capture of 2026-10-27, and a fourth (§12.4) from the HDD capture of 2026-10-28. Each is sized for one commit; none changes a format or a save.
 
 ### 12.1 The music reader as a loader client
 
@@ -733,3 +738,43 @@ cinematics with `Ui` down on cinematic rows and `Cinematic`, `FsIo` and `Frame` 
 `screenshot` recipe (testing-recipes.md) on a cinematic frame identical before and after (the
 texels are the same bytes); a palette-change film (`command == 1` frames: ntro has them) showing
 no stale colours; the menu over a cinematic and back; then the console capture's `Ui` column.
+
+### 12.4 The HDD audio submit waiting behind a background read (added after the HDD capture)
+
+**What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
+the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed
+(2.2% of them), and 9 gameplay rows had the same with no loader request, which fits the music
+reader's reads (the 10-26 HDD capture had 7). The two pickups' following frames lost 27-29 ms
+there, so on the HDD they still drop a field. From USB, never. It never empties the 106 ms ring.
+
+**Why.** `AudsrvDevice::FreeBytes` (`audsrv_available`) and `Enqueue` (`audsrv_play_audio`) are
+synchronous RPCs, every frame. On the IOP, audsrv's RPC thread and fileXio's both run at
+priority 40 (SDK `rpc_server.c`, `fileXio_iop.c`), with no time slicing, so the audsrv request
+waits until fileXio's thread blocks; on the HDD path it holds the CPU in places (dev9's DMA spins
+by design), on the USB path it doesn't. Exactly where the IOP time goes wasn't measured. Raising
+audsrv's IOP priority means patching SDK modules: out.
+
+**Fix: hold the submit back while a background read is in flight, briefly, on the HDD.** Before
+`FreeBytes`, `SNDDMA_Submit`'s path asks whether the loader is inside `read()` (a new volatile
+`aio::ReadInFlight()`, set by the loader around its `lseek`/`read`, not the queue depth) or the
+music reader has one out (`MusicReadPending()`), and if so, and the last submit was under
+`kMaxSubmitDelayMs` = 40 ms ago, sends nothing this frame. That is a short hold without the
+silence flush: the mixer's submit cursor stops, the ring drains at most 40 ms from the ~85 ms it
+holds at a submit, and the next frame tops it up as usual. Only when the game data device is
+the HDD (`iop_boot` knows it), so USB runs stay as captured. No race with the main thread: the
+loader and the reader only run while main sleeps, so a read can't start between the check and
+the RPC, and one that starts while main waits in the RPC queues behind it on the IOP. A skipped
+frame logs `sndFree` -2 (held stays -1) so the capture counts them.
+
+**If that leaves stalls** (reads past 40 ms, or IOP work the EE doesn't know of): send the play
+RPC with `SIF_RPC_M_NOWAIT` through our own binding to audsrv's server, from a 64-aligned static
+send buffer, and read its reply at the next submit, with the free space tracked locally from the
+replies. More code, and it replaces the SDK client (whose wrapper advances by the size asked,
+not sent, the trap `audsrv_device.cpp` documents), so only on evidence.
+
+**Gates.** PCSX2 can't show it (host reads are instant): there the gate is correctness, with the
+HDD check forced on and `ps2_aio_throttle_kbps 900` so reads overlap the submit: music, sound
+effects and both cinematics' audio intact, `sndFree` -2 rows present, no `Frame` over the ring.
+On the console from the HDD: `SndMix` p99 on chunk rows close to the other rows' (0.6 ms), the
+pickups' following frames back to ~20 ms, the -2 rows never two in a row past 40 ms; from USB a
+capture matching `console-usb-aio-2026-10-27.flog`.

@@ -496,7 +496,9 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   PCSX2 throttled: slugs model opened 4758, ready 4760, its skin 4761; row ClParse 4.8 → 0.4 ms,
   FsIo 2.8 ms → 4 µs; 0 drops; no asserts. Console (USB, 2026-10-27): the slugs model ready 9
   frames (180 ms) after its request and its skin 11, the row's ClParse 90.7 → 0.5 ms and its
-  Frame 99.9 → 19.9 ms. Visual handoff by eye and the MapCycle PEAK still owed. Original:
+  Frame 99.9 → 19.9 ms. MapCycle (PCSX2, 2026-10-28): all 39 maps, worst moment 30.33 → 30.41 MB,
+  the 40 KB inflate workspace plus the stages' code (memory-budget.md). Visual handoff by eye still
+  owed. Original:
   (MD2 in two phases, SP2 in one read, the loader split). Handoff: weapon and
   ammo pickups, a weapon switch, the player-setup menu, a DM join (the 278 KB loose model). Gate:
   the slugs row's ClParse near 0; `#ready` 3-4 frames on USB for a pickup model; a throttled
@@ -513,8 +515,8 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   changes, so last). Gate: EE work on the affected rows down by the decode's cost, the other
   columns within ~2% cache noise.
 - [ ] **8. Measure and record.** The USB capture is done (2026-10-27, `performance.md`), README
-  and CVARS.md carry the cvars. Still owed: a console HDD capture, `memory-budget.md`'s MapCycle
-  line, the console self-test (stage 2).
+  and CVARS.md carry the cvars, `memory-budget.md` has the MapCycle line (2026-10-28). Still owed:
+  a console HDD capture and the console self-test (stage 2).
 
 ## 9. Risks
 

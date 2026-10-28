@@ -79,8 +79,12 @@ paths:
   heap from the first deflated request on, a 256-512 KB ring while a cinematic plays (in place of
   the 64 KB stdio buffer), and file-sized staging for each sound, texture or model in flight
   (models over 768 KB load synchronously). Every drain site runs before a level's sweeps, so
-  nothing of it survives into a load; a MapCycle, which has no mid-level loads, should show the
-  worst moment unchanged. Not yet re-measured.
+  nothing of it survives into a load. **MapCycle 2026-10-28** (`mapcycle-aio`, debug, pkz, against
+  `mapcycle-menu-gamma`): all 39 maps load; every map's live total and load peak are +0.04 MB
+  through mine4 and +0.08-0.09 MB from fact2 on, the worst moment 30.33 → **30.41 MB** (city3),
+  the lowest free point 1.30 → 1.20 MB. The first step is the code and statics of stages 1-6, the
+  second the 40 KB inflate workspace, allocated by the first deflated mid-level request of the run
+  (a dwell's sound or skin) and kept. Nothing else of the loader shows in a load.
 - `pics/*` are never freed. A stray key press that opens a menu shows up as extra Tex in a
   cycle (e.g. `pics/inventory.pcx`, 48 KB).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which saves ~9 KB of
@@ -90,4 +94,5 @@ Reference summaries live in `build/baselines/` (local, untracked): `mapcycle-fbl
 free-before-load), `mapcycle-fbl1`, `mapcycle-mip0`/`mip1`, `mapcycle-vwep`,
 `mapcycle-cdmusic`, `mapcycle-cdmusic2` (ADPCM, 512 KB chain halves), `mapcycle-cdwav` (WAV only),
 `mapcycle-chain768` (ADPCM, 768 KB halves), `mapcycle-sdk-986ff32` and `mapcycle-sdk-329e2bb`
-(pkz, the 2026-10-19 code on the old and new SDK), `mapcycle-menu-gamma` (the 2026-10-24 code).
+(pkz, the 2026-10-19 code on the old and new SDK), `mapcycle-menu-gamma` (the 2026-10-24 code),
+`mapcycle-aio` (the background loader, 2026-10-28).

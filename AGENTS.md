@@ -92,7 +92,11 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 
 | File | Loaded for | Covers |
 | --- | --- | --- |
-| [testing-pcsx2.md](.claude/rules/testing-pcsx2.md) | always | PCSX2 setup and logs, scripted sessions, built-in tests, crash triage, the known TLB flake, host harnesses |
+| [testing-pcsx2.md](.claude/rules/testing-pcsx2.md) | always | PCSX2 setup and logs, scripting a session and its traps, built-in tests, the known TLB flake; points to the four below |
+| [testing-recipes.md](.claude/rules/testing-recipes.md) | `src/ps2/tests`, debug menu, menu.c | scripted screenshot sessions, driving menus without keys, building an older commit beside the tree |
+| [testing-storage-boot.md](.claude/rules/testing-storage-boot.md) | iop_boot, `src/ps2/fs`, log_file, make_usb_image.py | USB/HDD boot in PCSX2, launcher states, the loader test, boot and log harnesses |
+| [crash-triage.md](.claude/rules/crash-triage.md) | `src/ps2/debug` | the pipeline hang report, VU1 dump forensics, the exception handler and testing it |
+| [host-harnesses.md](.claude/rules/host-harnesses.md) | renderer, input, fs, audio, math | fake-header recipes per subsystem, ASan tricks, seeded mutants |
 | [backend-cpp.md](.claude/rules/backend-cpp.md) | `src/ps2`, host tools | naming, types, file style, passing the strict `-Werror` set |
 | [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card |
 | [gs-renderer.md](.claude/rules/gs-renderer.md) | `src/ps2/renderer` | GS/libdraw facts, frame model, CLUTs, VRAM blocks, mipmaps, ST scaling |

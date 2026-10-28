@@ -85,8 +85,8 @@ static u32  s_nextSequence = 1;
 static Workspace * s_workspace       = nullptr;
 static bool        s_workspaceFailed = false;
 
-static const cvar_t * s_aioCvar      = nullptr; // ps2_aio
-static const cvar_t * s_throttleCvar = nullptr; // ps2_aio_throttle_kbps
+static const cvar_t * s_aioEnabled   = nullptr; // ps2_aio
+static const cvar_t * s_throttleKbps = nullptr; // ps2_aio_throttle_kbps
 
 // Loader-only: where the last read left its descriptor, and which slot made it.
 static int s_cacheSlot = -1;
@@ -100,19 +100,21 @@ static volatile u32 s_statIoCycles = 0;
 
 // The compiler may not move a slot's field writes past its state write, nor hoist a field read
 // above the state read. The CPU is in order and the threads never overlap, so this is enough.
-inline void CompilerBarrier()
+Q_ALWAYS_INLINE void CompilerBarrier()
 {
-    __asm__ __volatile__("" ::: "memory");
+    asm volatile("" ::: "memory");
 }
 
-inline bool InFlight(const State state)
+Q_ALWAYS_INLINE bool InFlight(const State state)
 {
     return state == State::Queued || state == State::Running;
 }
 
-inline bool IsTicketCurrent(const Ticket & ticket)
+Q_ALWAYS_INLINE bool IsTicketCurrent(const Ticket & ticket)
 {
-    return ticket.slot >= 0 && ticket.slot < kNumSlots && s_slots[ticket.slot].sequence == ticket.sequence &&
+    return ticket.slot >= 0 &&
+           ticket.slot < kNumSlots &&
+           s_slots[ticket.slot].sequence == ticket.sequence &&
            s_slots[ticket.slot].state != State::Free;
 }
 
@@ -146,9 +148,9 @@ int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 
     u32 left = bytes;
     while (left != 0)
     {
-        const debug::CpuCycles start = debug::ReadCycles();
+        const CpuCycles start = ReadCycles();
         const ssize_t n = read(fd, dest, left);
-        const u32 cycles = debug::ReadCycles() - start;
+        const u32 cycles = ReadCycles() - start;
         ioCycles += cycles;
         s_statIoCycles = s_statIoCycles + cycles;
         s_statChunks   = s_statChunks + 1u;
@@ -232,8 +234,9 @@ void RunInflateChunk(const int slot, Slot & s)
     const tinfl_status status =
         tinfl_decompress(&ws.inflator, ws.input + ws.inPos, &inSize, s.dest, s.dest + ws.outPos, &outSize,
                          static_cast<mz_uint32>(TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF | (moreInput ? TINFL_FLAG_HAS_MORE_INPUT : 0)));
-    ws.inPos  += static_cast<u32>(inSize);
-    ws.outPos += static_cast<u32>(outSize);
+
+    ws.inPos   += static_cast<u32>(inSize);
+    ws.outPos  += static_cast<u32>(outSize);
     s.bytesDone = ws.outPos;
     s_statBytes = s_statBytes + static_cast<u32>(outSize);
 
@@ -244,7 +247,7 @@ void RunInflateChunk(const int slot, Slot & s)
         return;
     }
     if (status < TINFL_STATUS_DONE || status == TINFL_STATUS_HAS_MORE_OUTPUT ||
-        (status == TINFL_STATUS_NEEDS_MORE_INPUT && !moreInput))
+       (status == TINFL_STATUS_NEEDS_MORE_INPUT && !moreInput))
     {
         ws.owner = -1;
         Finish(s, kErrInflate); // bad data, longer than recorded, or truncated
@@ -285,18 +288,22 @@ Slot * PickBest(int & slotOut)
         {
             continue;
         }
+
         CompilerBarrier(); // the fields were written before the state
         (void)state;
+
         if (s.kind == Kind::InflateWhole && inflateOwner >= 0 && inflateOwner != i)
         {
             continue;
         }
+
         if (best == nullptr || s.prio < best->prio || (s.prio == best->prio && s.sequence < best->sequence))
         {
             best     = &s;
             bestSlot = i;
         }
     }
+
     slotOut = bestSlot;
     return best;
 }
@@ -306,17 +313,18 @@ Slot * PickBest(int & slotOut)
 // the loader reads of it (it never calls into the cvar system).
 void Throttle(const u32 bytes)
 {
-    const float kbps = (s_throttleCvar != nullptr) ? s_throttleCvar->value : 0.0f;
+    const float kbps = (s_throttleKbps != nullptr) ? s_throttleKbps->value : 0.0f;
     if (kbps <= 0.0f)
     {
         return;
     }
+
     // A SCSI command's latency plus the transfer.
     const float micros = 5000.0f + (static_cast<float>(bytes) * 1000.0f) / kbps;
     DelayThread(static_cast<int>(micros));
 }
 
-void LoaderLoop()
+void LoaderLoop(void * const)
 {
     for (;;)
     {
@@ -344,15 +352,11 @@ void LoaderLoop()
             {
                 RunInflateChunk(slot, *s);
             }
+
             SignalSema(s_doneSema);
             Throttle(s->bytesDone - before);
         }
     }
-}
-
-void LoaderEntry(void * const)
-{
-    LoaderLoop();
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -361,10 +365,10 @@ void LoaderEntry(void * const)
 
 void RegisterCvars()
 {
-    if (s_aioCvar == nullptr)
+    if (s_aioEnabled == nullptr)
     {
-        s_aioCvar      = Cvar_Get("ps2_aio", "1", 0);
-        s_throttleCvar = Cvar_Get("ps2_aio_throttle_kbps", "0", 0);
+        s_aioEnabled   = Cvar_Get("ps2_aio", "1", 0);
+        s_throttleKbps = Cvar_Get("ps2_aio_throttle_kbps", "0", 0);
     }
 }
 
@@ -384,7 +388,7 @@ bool EnsureThread()
     // One priority below the main thread (a higher number): it only runs while the main thread
     // sleeps, and the main thread takes the CPU back at once when an interrupt readies it.
     ee_thread_status_t mainStatus = {};
-    if (ReferThreadStatus(GetThreadId(), &mainStatus) < 0)
+    if (ReferThreadStatus(GetThreadId(), &mainStatus) < 0) [[unlikely]]
     {
         Com_Printf("WARNING: aio: can't read the main thread's priority; loading synchronously.\n");
         return false;
@@ -397,7 +401,7 @@ bool EnsureThread()
     s_doneSema      = CreateSema(&sema);
 
     ee_thread_t thread      = {};
-    thread.func             = reinterpret_cast<void *>(&LoaderEntry);
+    thread.func             = reinterpret_cast<void *>(&LoaderLoop);
     thread.stack            = s_stack;
     thread.stack_size       = kStackBytes;
     thread.gp_reg           = &_gp;
@@ -407,7 +411,8 @@ bool EnsureThread()
     {
         s_threadId = CreateThread(&thread);
     }
-    if (s_threadId < 0 || StartThread(s_threadId, nullptr) < 0)
+
+    if (s_threadId < 0 || StartThread(s_threadId, nullptr) < 0) [[unlikely]]
     {
         Com_Printf("WARNING: aio: can't start the loader thread; loading synchronously.\n");
         if (s_threadId >= 0)
@@ -443,15 +448,18 @@ bool EnsureWorkspace()
     {
         return false;
     }
+
     s_workspace = static_cast<Workspace *>(
         heap::TryAllocAligned(heap::MemAlign(64), sizeof(Workspace), heap::MemTag::Aio));
-    if (s_workspace == nullptr)
+
+    if (s_workspace == nullptr) [[unlikely]]
     {
         s_workspaceFailed = true; // reported once; deflated entries load synchronously from here
         Com_Printf("WARNING: aio: no memory for the inflate workspace (%u bytes); deflated files load synchronously.\n",
                    static_cast<unsigned>(sizeof(Workspace)));
         return false;
     }
+
     s_workspace->owner = -1;
     return true;
 }
@@ -465,7 +473,7 @@ bool EnsureWorkspace()
 bool Enabled()
 {
     RegisterCvars();
-    return s_aioCvar->value != 0.0f && !s_threadFailed;
+    return s_aioEnabled->value != 0.0f && !s_threadFailed;
 }
 
 Ticket Submit(const Request & request)
@@ -513,15 +521,19 @@ Ticket Submit(const Request & request)
         s.bytesDone = 0;
         s.result    = 0;
         s.ioCycles  = 0;
-        if (s_nextSequence == 0)
+
+        if (s_nextSequence == 0) // wrap around guard.
         {
             s_nextSequence = 1;
         }
+
         CompilerBarrier();
         s.state = State::Queued;
         SignalSema(s_workSema);
+
         return Ticket{ i, s.sequence };
     }
+
     return {}; // every slot taken
 }
 
@@ -535,9 +547,11 @@ State Poll(const Ticket ticket, u32 * const bytesDone)
         }
         return State::Free;
     }
+
     const Slot & s = s_slots[ticket.slot];
     const State state = s.state;
     CompilerBarrier();
+
     if (bytesDone != nullptr)
     {
         *bytesDone = s.bytesDone;
@@ -551,9 +565,11 @@ int Result(const Ticket ticket)
     {
         return kErrNoThread;
     }
+
     const Slot & s = s_slots[ticket.slot];
     const State state = s.state;
     CompilerBarrier();
+
     return InFlight(state) ? 0 : s.result;
 }
 
@@ -568,9 +584,11 @@ void Wait(const Ticket ticket)
     {
         return;
     }
+
     const Slot & s = s_slots[ticket.slot];
-    // The done semaphore counts every chunk any request landed, so a wake may be another's, or
-    // stale: each one re-checks.
+
+    // The done semaphore counts every chunk any request landed, so a wake
+    // may be another's, or stale: each one re-checks.
     while (InFlight(s.state))
     {
         WaitSema(s_doneSema);
@@ -583,7 +601,9 @@ void WaitProgress(const Ticket ticket, const u32 minBytes)
     {
         return;
     }
+
     const Slot & s = s_slots[ticket.slot];
+
     while (InFlight(s.state) && s.bytesDone < minBytes)
     {
         WaitSema(s_doneSema);
@@ -596,8 +616,10 @@ void Release(const Ticket ticket)
     {
         return;
     }
+
     Slot & s = s_slots[ticket.slot];
     PS2_AssertMsg(!InFlight(s.state), "aio::Release of a request still in flight");
+
     CompilerBarrier();
     s.state = State::Free;
 }
@@ -608,7 +630,9 @@ void Cancel(const Ticket ticket)
     {
         return;
     }
+
     Slot & s = s_slots[ticket.slot];
+
     // Queued -> Free is this thread's store alone: the loader claims a request under DIntr (Take),
     // so it either saw Queued before this and is Running, or sees Free and skips it.
     if (s.state == State::Queued)
@@ -617,10 +641,12 @@ void Cancel(const Ticket ticket)
         s.state = State::Free;
         return;
     }
+
     while (InFlight(s.state))
     {
         WaitSema(s_doneSema);
     }
+
     CompilerBarrier();
     s.state = State::Free;
 }
@@ -631,6 +657,7 @@ void Drain()
     {
         return;
     }
+
     for (const Slot & s : s_slots)
     {
         while (InFlight(s.state))
@@ -638,6 +665,7 @@ void Drain()
             WaitSema(s_doneSema);
         }
     }
+
     // Stale chunk signals, so the next Wait sleeps rather than spinning through them.
     while (PollSema(s_doneSema) >= 0)
     {
@@ -650,6 +678,7 @@ bool Pending()
     {
         return false;
     }
+
     for (const Slot & s : s_slots)
     {
         if (InFlight(s.state))
@@ -657,6 +686,7 @@ bool Pending()
             return true;
         }
     }
+
     return false;
 }
 
@@ -675,6 +705,7 @@ Stats TakeFrameStats()
     stats.chunks      = chunks - s_lastChunks;
     stats.ioCycles    = ioCycles - s_lastIoCycles;
     stats.queueDepth  = 0;
+
     for (const Slot & s : s_slots)
     {
         if (InFlight(s.state))

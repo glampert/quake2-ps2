@@ -380,7 +380,7 @@ public:
     void EndRegistration();
 
     // Background loads: see tex::PumpLoads / tex::DrainLoads.
-    int  PumpLoads(unsigned budgetCycles);
+    int  PumpLoads(u32 budgetCycles);
     void DrainLoads();
 
     void SetTouchOnly(const bool enable) { m_touchOnly = enable; }
@@ -814,7 +814,7 @@ void TextureCache::FinishPending(PendingLoad & pending)
         }
     }
 
-    if (!ok)
+    if (!ok) [[unlikely]]
     {
         // Never drawn from here on; the slot stays so repeated Finds don't retry.
         texture.flags = TexFlags::Failed;
@@ -828,17 +828,19 @@ void TextureCache::FinishPending(PendingLoad & pending)
 
     pending.active  = false;
     pending.staging = nullptr;
+
+    PS2_Assert(m_numPending > 0);
     --m_numPending;
 }
 
-int TextureCache::PumpLoads(const unsigned budgetCycles)
+int TextureCache::PumpLoads(const u32 budgetCycles)
 {
     if (m_numPending == 0)
     {
         return 0;
     }
 
-    const debug::CpuCycles start = debug::ReadCycles();
+    const CpuCycles start = ReadCycles();
     int finished = 0;
     for (PendingLoad & p : m_pending)
     {
@@ -853,7 +855,7 @@ int TextureCache::PumpLoads(const unsigned budgetCycles)
         }
         FinishPending(p);
         ++finished;
-        if (debug::ReadCycles() - start > budgetCycles)
+        if (ReadCycles() - start > budgetCycles)
         {
             break;
         }
@@ -1173,7 +1175,7 @@ const Texture * FindAsync(const char * name, const ImageType type)
     return s_cache.Find(name, type, /*async=*/true);
 }
 
-void PumpLoads(const unsigned budgetCycles)
+void PumpLoads(const u32 budgetCycles)
 {
     s_cache.PumpLoads(budgetCycles);
 }

@@ -27,6 +27,7 @@
 #include "ps2/fs/readahead_stream.h"
 #include "ps2/fs/async_io.h"
 #include "ps2/system/heap.h"
+#include "ps2/debug/io_log.h"
 
 #include <cstdio>
 #include <cstring>
@@ -66,7 +67,7 @@ struct Stream
     char          name[MAX_QPATH];
 };
 
-static const cvar_t * s_ringKbCvar = nullptr; // ps2_readahead_kb
+static const cvar_t * s_readaheadKb = nullptr; // ps2_readahead_kb
 
 u8 * SlotBuffer(const Stream & s, const int slot)
 {
@@ -151,7 +152,7 @@ void RestartAt(Stream & s, const u32 at)
     FillRing(s);
 }
 
-void Fail(Stream & s, const char * const what, const int code)
+Q_COLD_FUNC void Fail(Stream & s, const char * const what, const int code)
 {
     if (!s.failed)
     {
@@ -179,7 +180,7 @@ ssize_t StreamRead(void * cookie, char * dest, const size_t bytes)
             // Every slot was declined (the loader went off, or its ring filled up): read what is
             // left through the ring synchronously by resubmitting; if that fails too, give up.
             FillRing(s);
-            if (s.inFlight == 0)
+            if (s.inFlight == 0) [[unlikely]]
             {
                 Fail(s, "the loader declined the next chunk", 0);
                 return -1;
@@ -196,7 +197,7 @@ ssize_t StreamRead(void * cookie, char * dest, const size_t bytes)
             aio::Wait(sl.ticket);
             state = aio::Poll(sl.ticket);
         }
-        if (state != aio::State::Done)
+        if (state != aio::State::Done) [[unlikely]]
         {
             Fail(s, "a chunk failed", aio::Result(sl.ticket));
             return -1;
@@ -287,11 +288,11 @@ int StreamClose(void * cookie)
 
 extern "C" int PS2_WantsReadAheadStream(const char * const filename)
 {
-    if (ps2::fs::s_ringKbCvar == nullptr)
+    if (ps2::fs::s_readaheadKb == nullptr)
     {
-        ps2::fs::s_ringKbCvar = Cvar_Get("ps2_readahead_kb", "512", 0);
+        ps2::fs::s_readaheadKb = Cvar_Get("ps2_readahead_kb", "512", 0);
     }
-    if (ps2::fs::s_ringKbCvar->value <= 0.0f)
+    if (ps2::fs::s_readaheadKb->value <= 0.0f)
     {
         return 0;
     }
@@ -310,7 +311,7 @@ extern "C" FILE * PS2_OpenReadAheadStream(const char * const filename, const str
     }
 
     // The ring: ps2_readahead_kb's worth of slots, 512 KB at most; half that if memory is short.
-    int numSlots = static_cast<int>(s_ringKbCvar->value) / static_cast<int>(kSlotBytes / 1024u);
+    int numSlots = static_cast<int>(s_readaheadKb->value) / static_cast<int>(kSlotBytes / 1024u);
     numSlots     = (numSlots > kMaxSlots) ? kMaxSlots : (numSlots < 1) ? 1 : numSlots;
 
     u8 * ring = nullptr;
@@ -322,18 +323,20 @@ extern "C" FILE * PS2_OpenReadAheadStream(const char * const filename, const str
             numSlots = (numSlots > kMinSlots) ? kMinSlots : (numSlots / 2);
         }
     }
-    if (ring == nullptr)
+
+    if (ring == nullptr) [[unlikely]]
     {
         Com_Printf("WARNING: no memory for %s's read-ahead ring; streaming it from the drive.\n", filename);
         return nullptr;
     }
 
     auto * const s = static_cast<Stream *>(heap::TryAlloc(sizeof(Stream), heap::MemTag::Aio));
-    if (s == nullptr)
+    if (s == nullptr) [[unlikely]]
     {
         heap::Free(ring, static_cast<u32>(numSlots) * kSlotBytes, heap::MemTag::Aio);
         return nullptr;
     }
+
     std::memset(static_cast<void *>(s), 0, sizeof(*s));
     s->loc       = *loc;
     s->ring      = ring;
@@ -347,12 +350,13 @@ extern "C" FILE * PS2_OpenReadAheadStream(const char * const filename, const str
     io.close = &StreamClose;
 
     FILE * const file = fopencookie(s, "rb", io);
-    if (file == nullptr)
+    if (file == nullptr) [[unlikely]]
     {
         heap::Free(ring, s->ringBytes, heap::MemTag::Aio);
         heap::Free(s, sizeof(Stream), heap::MemTag::Aio);
         return nullptr;
     }
+
     // Unbuffered: newlib then reads straight into the caller's memory, one callback per fread,
     // and the ring is the buffer.
     std::setvbuf(file, nullptr, _IONBF, 0);
@@ -360,6 +364,10 @@ extern "C" FILE * PS2_OpenReadAheadStream(const char * const filename, const str
     // Every slot in flight from the open: the first fread waits for one chunk, the rest stream
     // behind it.
     FillRing(*s);
+
+#if PS2_QUAKE_IO_LOG
     Com_DPrintf("Read-ahead stream on %s: %d KB ring, %d chunks in flight.\n", filename, numSlots * 32, s->inFlight);
+#endif // PS2_QUAKE_IO_LOG
+
     return file;
 }

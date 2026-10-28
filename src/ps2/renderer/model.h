@@ -351,7 +351,7 @@ struct ModelInstance final
     ModelType type;
 
     // Ready (0, what a zeroed slot reads) once loaded; Loading while the background loader reads
-    // its file, with no hunk yet, which every draw skips (see IsDrawable); Failed when that load
+    // its file, with no hunk yet, which every draw skips (see IsLoaded); Failed when that load
     // could not be used, never drawn. Sits in the byte 'type' left before numFrames.
     LoadState state;
 
@@ -388,7 +388,7 @@ struct ModelInstance final
     // False while the background loader still owns the model or after its load failed: the
     // entity is skipped this frame, not drawn as the null model (that is for a missing file, which
     // Find still answers with nullptr).
-    Q_ALWAYS_INLINE bool IsDrawable() const { return state == LoadState::Ready; }
+    Q_ALWAYS_INLINE bool IsLoaded() const { return state == LoadState::Ready; }
 };
 
 // Asserted rather than commented because the model cache holds 544 of these (320
@@ -468,7 +468,7 @@ const ModelInstance * Find(const char * name);
 // level runs (a pickup, a weapon switch, a player's model) comes back from Find at once with
 // LoadState::Loading, in the cache under its name, and is drawable once its file has been read
 // and converted here; its skins load the same way (tex::FindAsync).
-void PumpLoads(unsigned budgetCycles);
+void PumpLoads(u32 budgetCycles);
 
 // Frees the resident world model, unless it is already 'fullName' (a "maps/*.bsp"
 // path; null or empty releases unconditionally). BeginRegistration does this

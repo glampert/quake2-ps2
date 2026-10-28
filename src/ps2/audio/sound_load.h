@@ -17,6 +17,8 @@
 #ifndef PS2_AUDIO_SOUND_LOAD_H
 #define PS2_AUDIO_SOUND_LOAD_H
 
+#include <tamtypes.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
@@ -48,7 +50,7 @@ namespace ps2::audio {
 /* Finishes the reads that landed, oldest first, until 'budgetCycles' of ReadCycles() are spent
    (at least one when any has landed). Returns how many were finished. Main thread, once a frame,
    from aio::Pump. */
-int PumpSoundLoads(unsigned budgetCycles);
+int PumpLoads(u32 budgetCycles);
 
 } // namespace ps2::audio
 #endif /* __cplusplus */

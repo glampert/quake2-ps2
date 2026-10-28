@@ -65,7 +65,7 @@ public:
     int FreeUnregistered(bool early);
 
     // Background loads: see mod::PumpLoads. DrainLoads finishes every one, waiting for the loader.
-    int  PumpLoads(unsigned budgetCycles);
+    int  PumpLoads(u32 budgetCycles);
     void DrainLoads();
 
 private:
@@ -337,7 +337,7 @@ void ModelCache::FinishPending(PendingLoad & pending)
                                              : LoadAliasMD2ModelFromMemory(mdl, pending.staging, pending.length);
     }
 
-    if (ok)
+    if (ok) [[likely]]
     {
         mdl.state = LoadState::Ready;
     }
@@ -362,17 +362,19 @@ void ModelCache::FinishPending(PendingLoad & pending)
 
     pending.active  = false;
     pending.staging = nullptr;
+
+    PS2_Assert(m_numPending > 0);
     --m_numPending;
 }
 
-int ModelCache::PumpLoads(const unsigned budgetCycles)
+int ModelCache::PumpLoads(const u32 budgetCycles)
 {
     if (m_numPending == 0)
     {
         return 0;
     }
 
-    const debug::CpuCycles start = debug::ReadCycles();
+    const CpuCycles start = ReadCycles();
     int finished = 0;
     for (PendingLoad & p : m_pending)
     {
@@ -387,7 +389,7 @@ int ModelCache::PumpLoads(const unsigned budgetCycles)
         }
         FinishPending(p);
         ++finished;
-        if (debug::ReadCycles() - start > budgetCycles)
+        if (ReadCycles() - start > budgetCycles)
         {
             break;
         }
@@ -862,7 +864,7 @@ const ModelInstance * Find(const char * name)
     return s_cache.Find(name);
 }
 
-void PumpLoads(const unsigned budgetCycles)
+void PumpLoads(const u32 budgetCycles)
 {
     s_cache.PumpLoads(budgetCycles);
 }

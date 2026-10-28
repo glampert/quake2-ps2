@@ -5,7 +5,6 @@
  *        drive. The stdio stream SCR_ReadNextFrame used to fread from refilled its 64 KB buffer on
  *        the main thread, 93 ms a time from a USB stick, and every refill frame overran audsrv's
  *        106 ms ring, which is the audible stutter.
- *        NOTE: Shared header between C and C++.
  *
  *        The stream is an fopencookie FILE*, unbuffered, so cl_cin.c's fread/FS_Read/feof/fclose
  *        and sv_send.c's fread work unchanged (the pkz deflated-stream pattern). Behind it a ring of
@@ -14,6 +13,8 @@
  *        A read copies from the head slot and sleeps only when it has not landed yet, which on a USB
  *        stick means the loader fell more than the ring behind: 512 KB covers a 0.5 s stall during
  *        ntro's 700 KB/s peak, which is the worst the data has.
+ * 
+ *        NOTE: Shared header between C and C++.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

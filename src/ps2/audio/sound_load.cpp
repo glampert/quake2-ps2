@@ -46,7 +46,7 @@ void Finish(PendingSound & p)
     const aio::State state  = aio::Poll(p.ticket);
     const int        result = aio::Result(p.ticket);
 
-    if (state == aio::State::Done && result == p.length)
+    if (state == aio::State::Done && result == p.length) [[likely]]
     {
         PS2_SoundFinishLoad(p.sfx, p.staging, p.length); // reports a bad WAV itself
     }
@@ -62,19 +62,21 @@ void Finish(PendingSound & p)
 
     p.sfx     = nullptr;
     p.staging = nullptr;
+
+    PS2_Assert(s_numPending > 0);
     --s_numPending;
 }
 
 } // namespace
 
-int PumpSoundLoads(const unsigned budgetCycles)
+int PumpLoads(const u32 budgetCycles)
 {
     if (s_numPending == 0)
     {
         return 0;
     }
 
-    const debug::CpuCycles start = debug::ReadCycles();
+    const CpuCycles start = ReadCycles();
     int finished = 0;
     for (PendingSound & p : s_pending)
     {
@@ -89,7 +91,7 @@ int PumpSoundLoads(const unsigned budgetCycles)
         }
         Finish(p);
         ++finished;
-        if (debug::ReadCycles() - start > budgetCycles)
+        if (ReadCycles() - start > budgetCycles)
         {
             break;
         }

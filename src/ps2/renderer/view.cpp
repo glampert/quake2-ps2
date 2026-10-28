@@ -2101,9 +2101,9 @@ void DrawSpriteEntity(const entity_t & entity)
     {
         skin = &tex::DebugTexture(); // Frame's .pcx failed to load.
     }
-    if (!skin->IsDrawable())
+    if (!skin->IsLoaded())
     {
-        return; // the frame's image is still loading in the background
+        return; // the frame's image is still loading in the background.
     }
 
     PS2_PROFILE_ONLY(++s_drawStats.entities);
@@ -2479,9 +2479,9 @@ void RenderEntities(const refdef_t & viewDef, const bool isTranslucentPass)
             DrawNullModelEntity(viewDef, entity);
             continue;
         }
-        if (!model->IsDrawable())
+        if (!model->IsLoaded())
         {
-            continue; // still loading in the background (or failed): skipped, never a placeholder
+            continue; // still loading in the background (or failed): skipped, never a placeholder.
         }
 
         switch (model->type)

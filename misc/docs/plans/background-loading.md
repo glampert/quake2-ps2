@@ -347,7 +347,7 @@ void FS_ReleaseLocation(fs_location_t * loc);
 
 ### 6.5 Textures (`texture.{h,cpp}`, `image_load.{h,cpp}`, `ref.cpp`, `md2.cpp`, `view.cpp`)
 
-- `TexFlags::Loading` and `TexFlags::Failed`; `Texture::IsDrawable()` is neither.
+- `TexFlags::Loading` and `TexFlags::Failed`; `Texture::IsLoaded()` is neither.
 - **Decoder split:** `LoadPcx` and `LoadTga` become `FS_LoadFile` plus `DecodePcx` and
   `DecodeTga(const u8 *, int len, ...)`, shared by the synchronous path and the pump. The
   transparency test folds into the PCX run loop (one compare per run), which helps level loads
@@ -362,7 +362,7 @@ void FS_ReleaseLocation(fs_location_t * loc);
   fields (`Register`'s body factored into `FillTexture`), clear Loading, free the staging,
   `FLOG#ready`. A decode failure sets Failed with one console line; the slot stays, so repeated
   `Find`s don't retry.
-- **Draw sites check `IsDrawable()`:** `md2::SkinForEntity` (skip the entity; shadows and shells
+- **Draw sites check `IsLoaded()`:** `md2::SkinForEntity` (skip the entity; shadows and shells
   follow), `DrawSpriteEntity` (skip), `PS2_DrawPic` and `PS2_DrawStretchPic` (skip the draw),
   `PS2_DrawGetPicSize` (-1, -1, id's "missing" answer). `EnsureTextureResident` keeps its
   asserts: it is never reached for a Loading texture. `Unload` of a slot with null pixels frees
@@ -374,7 +374,7 @@ void FS_ReleaseLocation(fs_location_t * loc);
 ### 6.6 Models (`model.{h,cpp}`, `model_load.{h,cpp}`, `view.cpp`)
 
 - `ModelInstance::state : u8 {Ready, Loading, Failed}` in the padding byte at offset 69, and
-  `IsDrawable()`; the 224-byte assert holds.
+  `IsLoaded()`; the 224-byte assert holds.
 - **`ModelCache::LoadModel`**, when `aio::Enabled() && !IsRegistering()` and the extension is
   `.md2` or `.sp2` (the type comes from the extension; the header's id validates it when it
   lands; `.bsp` never goes async): `FS_LocateFile` (missing → nullptr, so `CL_LoadClientinfo`'s
@@ -390,7 +390,7 @@ void FS_ReleaseLocation(fs_location_t * loc);
 - **SP2:** one request of the whole file into the 64-aligned hunk; on landing validate the
   version and frame count, `tex::Find(Sprite)` per frame, Ready.
 - **Draw:** `RenderEntities` keeps the octahedron for a NULL model and `continue`s on
-  `!model->IsDrawable()` before the type switch. `ReferenceAllTextures` already skips null skins.
+  `!model->IsLoaded()` before the type switch. `ReferenceAllTextures` already skips null skins.
 - **Failure:** a bad header or a short read → Failed, the hunk freed, the slot kept, one console
   line.
 
@@ -468,7 +468,7 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   the latency. Console run owed with the others. Original gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
   `#ready` latency 2-4 frames on USB; no dropped or doubled one-shots in a `ps2_perftest` run by
   ear; the `S_IssuePlaysound` NULL path exercised with a deliberately missing file in a debug run.
-- [x] **5. Textures.** Landed 2026-10-26 (`TexFlags::Loading`/`Failed`, `Texture::IsDrawable`,
+- [x] **5. Textures.** Landed 2026-10-26 (`TexFlags::Loading`/`Failed`, `Texture::IsLoaded`,
   `tex::FindAsync`/`PumpLoads`/`DrainLoads`, `AllocSlot`/`FillTexture`/`CommitIndexed`/
   `CommitRgba`, `DecodePcx`/`DecodeTga` with the transparency test folded into the PCX runs, the
   four draw-site skips, `SmallPool::IndexOf`). PCSX2 throttled: `pics/a_slugs.pcx` opened 5012,
@@ -477,7 +477,7 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   transparency scan). Visual handoff: pickups and player skins appear a few frames late, nothing
   draws the checkerboard or garbage, menus unchanged. Gate: `a_slugs.pcx`'s FsIo gone;
   `ps2_testmaps 1` unchanged.
-- [x] **6. Models.** Landed 2026-10-26 (`LoadState` in `ModelInstance::state`, `IsDrawable`,
+- [x] **6. Models.** Landed 2026-10-26 (`LoadState` in `ModelInstance::state`, `IsLoaded`,
   `mod::PumpLoads`, `LoadAliasMD2ModelFromMemory`/`LoadSpriteModelFromMemory` sharing
   `LayOutAliasHunk`/`ClampAliasNormals`/`ValidateSpriteHeader`/`ResolveSpriteFrames` with the
   streamed loaders, the `RenderEntities` skip). **Deviation from §6.6:** the file is read or

@@ -78,23 +78,23 @@ unsigned PS2_IoLogTicks(void);
 }
 #endif /* __cplusplus */
 
-#define PS2_IO_LOG_LOAD_BEGIN()                 PS2_IoLogLoadBegin()
-#define PS2_IO_LOG_LOAD_END()                   PS2_IoLogLoadEnd()
-#define PS2_IO_LOG_CALL_BEGIN()                 PS2_IoLogCallBegin()
-#define PS2_IO_LOG_LOAD_FILE_END(n, len, src)   PS2_IoLogLoadFileEnd((n), (len), (src))
+#define PS2_IO_LOG_LOAD_BEGIN()                    PS2_IoLogLoadBegin()
+#define PS2_IO_LOG_LOAD_END()                      PS2_IoLogLoadEnd()
+#define PS2_IO_LOG_CALL_BEGIN()                    PS2_IoLogCallBegin()
+#define PS2_IO_LOG_LOAD_FILE_END(n, len, src)      PS2_IoLogLoadFileEnd((n), (len), (src))
 #define PS2_IO_LOG_STREAM_OPEN_END(n, f, len, src) PS2_IoLogStreamOpenEnd((n), (f), (len), (src))
-#define PS2_IO_LOG_STREAM_READ_END(f, bytes)    PS2_IoLogStreamReadEnd((f), (bytes))
-#define PS2_IO_LOG_STREAM_CLOSE_END(f)          PS2_IoLogStreamCloseEnd((f))
+#define PS2_IO_LOG_STREAM_READ_END(f, bytes)       PS2_IoLogStreamReadEnd((f), (bytes))
+#define PS2_IO_LOG_STREAM_CLOSE_END(f)             PS2_IoLogStreamCloseEnd((f))
 
 #else /* PS2_QUAKE_IO_LOG */
 
-#define PS2_IO_LOG_LOAD_BEGIN()                 ((void)0)
-#define PS2_IO_LOG_LOAD_END()                   ((void)0)
-#define PS2_IO_LOG_CALL_BEGIN()                 ((void)0)
-#define PS2_IO_LOG_LOAD_FILE_END(n, len, src)   ((void)0)
+#define PS2_IO_LOG_LOAD_BEGIN()                    ((void)0)
+#define PS2_IO_LOG_LOAD_END()                      ((void)0)
+#define PS2_IO_LOG_CALL_BEGIN()                    ((void)0)
+#define PS2_IO_LOG_LOAD_FILE_END(n, len, src)      ((void)0)
 #define PS2_IO_LOG_STREAM_OPEN_END(n, f, len, src) ((void)0)
-#define PS2_IO_LOG_STREAM_READ_END(f, bytes)    ((void)0)
-#define PS2_IO_LOG_STREAM_CLOSE_END(f)          ((void)0)
+#define PS2_IO_LOG_STREAM_READ_END(f, bytes)       ((void)0)
+#define PS2_IO_LOG_STREAM_CLOSE_END(f)             ((void)0)
 
 #endif /* PS2_QUAKE_IO_LOG */
 #endif /* PS2_DEBUG_IO_LOG_H */

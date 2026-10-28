@@ -53,7 +53,7 @@ enum class TexFlags : u8
     None      = 0,
     Builtin   = 1 << 0, // Embedded in the ELF; always available, never unloaded.
     Mipmapped = 1 << 1, // 'pixels' carries mip levels after level 0; see MipLevels.
-    Loading   = 1 << 2, // The background loader is reading its file: 'pixels' is null, nothing draws it yet. See Texture::IsDrawable.
+    Loading   = 1 << 2, // The background loader is reading its file: 'pixels' is null, nothing draws it yet. See Texture::IsLoaded.
     Failed    = 1 << 3  // Its background load failed to read or decode: never drawn (today's synchronous path would have given the placeholder).
 };
 
@@ -137,7 +137,7 @@ struct Texture final
     // False while the background loader still owns the texture (TexFlags::Loading) or after its
     // load failed (TexFlags::Failed): a draw site skips what it would have drawn with it, this
     // frame, rather than draw a placeholder. A missing file is not this: Find returns null for it.
-    bool IsDrawable() const
+    bool IsLoaded() const
     {
         return (static_cast<u8>(flags) & (static_cast<u8>(TexFlags::Loading) | static_cast<u8>(TexFlags::Failed))) == 0;
     }
@@ -321,7 +321,7 @@ const Texture * FindAsync(const char * name, ImageType type);
 // Finishes background loads that landed, oldest first, until 'budgetCycles' are spent (at least
 // one when any has landed); from aio::Pump once a frame. DrainLoads finishes all of them, waiting
 // for the loader: BeginRegistration calls it before anything may free a slot.
-void PumpLoads(unsigned budgetCycles);
+void PumpLoads(u32 budgetCycles);
 void DrainLoads();
 
 // Halve every ImageType::Sky image loaded from now on, both dimensions, and

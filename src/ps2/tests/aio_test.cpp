@@ -37,7 +37,7 @@ struct Item
     aio::Priority prio;
 };
 
-const Item kItems[] = {
+constexpr Item kItems[] = {
     { "pics/colormap.pcx",                  aio::Priority::Asset  },
     { "default.cfg",                        aio::Priority::Asset  },
     { "sound/world/ric1.wav",               aio::Priority::Sound  },

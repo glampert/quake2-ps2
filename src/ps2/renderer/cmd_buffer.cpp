@@ -511,7 +511,7 @@ constexpr u32 kDmaChcrStr = 1u << 8;
 // tens of microseconds and the whole frame is 16ms, so a second is four orders of magnitude past
 // anything legitimate - and well inside the ~14.5s the 32-bit COP0 Count takes to wrap, of which
 // the unsigned subtraction below tolerates exactly one.
-constexpr debug::CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
+constexpr CpuCycles kHangTimeoutCycles = 294912000; // ~1s at 294.912MHz
 
 // Nothing on this side of the fence explains a stall. It is nearly always a microprogram that did
 // not end or a GS packet that never reached EOP, and neither is visible without the VIF, GIF and
@@ -585,11 +585,11 @@ template<typename ReadyFn>
 Q_ALWAYS_INLINE void SpinUntilReady(ReadyFn && ready, const char * const what)
 {
 #if PS2_QUAKE_DEBUG
-    const debug::CpuCycles start = debug::ReadCycles();
+    const CpuCycles start = ReadCycles();
 
     while (!ready())
     {
-        if ((debug::ReadCycles() - start) > kHangTimeoutCycles)
+        if ((ReadCycles() - start) > kHangTimeoutCycles)
         {
             ReportPipelineHang(what);
             return; // Sys_Error is not marked noreturn, so do not spin on it.

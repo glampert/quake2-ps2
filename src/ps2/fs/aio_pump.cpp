@@ -25,8 +25,8 @@ void Pump()
 
     // 294.912 MHz: cycles per microsecond, rounded. A client finishes at least one landed request
     // even when the budget is spent, so nothing waits forever behind a long frame.
-    const unsigned budgetCycles = static_cast<unsigned>(s_budgetUs->value) * 295u;
-    audio::PumpSoundLoads(budgetCycles);
+    const u32 budgetCycles = static_cast<u32>(s_budgetUs->value) * 295u;
+    audio::PumpLoads(budgetCycles);
     tex::PumpLoads(budgetCycles);
     mod::PumpLoads(budgetCycles);
 }

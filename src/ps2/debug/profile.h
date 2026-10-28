@@ -13,18 +13,7 @@
 #include <tamtypes.h>
 #include <mipscopaccess.h> // get_mips_cop_reg / COP0_REG_Count
 
-namespace ps2::debug {
-
-// Nominal EE core clock. ProfileCalibrate() replaces this with a measured value.
-constexpr u32 kNominalCyclesPerMillisec = 294912;
-
-enum ProfileFlags : u8
-{
-    kProfileFlagsNone = 0,
-
-    // Adds profile event to the on-screen profile overlay.
-    kScreenOverlay = 1 << 0,
-};
+namespace ps2 {
 
 // ------------------------------------------------------------------------------------------------
 // Cycle counter
@@ -50,10 +39,29 @@ enum ProfileFlags : u8
 // anything you would put a scope timer around.
 using CpuCycles = u32;
 
-inline CpuCycles ReadCycles()
+// Nominal EE core clock. ProfileCalibrate() replaces this with a measured value.
+constexpr u32 kNominalCyclesPerMillisec = 294912;
+
+Q_ALWAYS_INLINE CpuCycles ReadCycles()
 {
     return get_mips_cop_reg(0, static_cast<u32>(COP0_REG_Count));
 }
+
+} // namespace ps2
+
+// ------------------------------------------------------------------------------------------------
+// Simple EE CPU Profiler
+// ------------------------------------------------------------------------------------------------
+
+namespace ps2::debug {
+
+enum ProfileFlags : u8
+{
+    kProfileFlagsNone = 0,
+
+    // Adds profile event to the on-screen profile overlay.
+    kScreenOverlay = 1 << 0,
+};
 
 #if PS2_QUAKE_PROFILE
 

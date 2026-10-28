@@ -38,7 +38,7 @@ The README's "Rendering" section is the architecture overview. The renderer file
   sprite frame or pic first wanted mid-level back at once with null pixels, in the cache under its
   name, while the loader reads its file into a staging buffer; `tex::PumpLoads` (from `aio::Pump`,
   top of `PS2_BeginFrame`) decodes it (`DecodePcx`/`DecodeTga`, image_load.h) and fills the slot.
-  **Every draw site checks `Texture::IsDrawable()` and skips** rather than draw a placeholder:
+  **Every draw site checks `Texture::IsLoaded()` and skips** rather than draw a placeholder:
   `DrawAliasMD2Entity` (after `SkinForEntity`), `DrawSpriteEntity`, `PS2_DrawPic`,
   `PS2_DrawStretchPic`; `PS2_DrawGetPicSize` answers -1,-1. The by-name `Draw_*` path keeps the
   synchronous `Find`, so menus never show a hole. A failed decode leaves the slot `Failed`, never
@@ -55,7 +55,7 @@ The README's "Rendering" section is the architecture overview. The renderer file
   `ValidateMD2Header`, `LayOutAliasHunk`, `ExpandGLCmdsToTriangles` and `ClampAliasNormals` with the
   streamed loaders, and look its skins or frames up with `tex::FindAsync`. Whole-file staging rather
   than the plan's read-in-place phases because a pkz entry is deflated and has no ranges; files over
-  768 KB load synchronously instead. `RenderEntities` skips a non-drawable model (`IsDrawable`),
+  768 KB load synchronously instead. `RenderEntities` skips a non-drawable model (`IsLoaded`),
   never the octahedron, which stays for a missing file (Find's nullptr, which `CL_LoadClientinfo`
   relies on). `mod::BeginRegistration` drains first. PCSX2 throttled to a USB rate:
   `models/items/ammo/slugs/medium/tris.md2` opened on frame 4758 and was ready on 4760, its skin on

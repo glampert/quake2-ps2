@@ -112,7 +112,7 @@ static bool s_firstViewInThisFrame = false;
 // A missing image draws as the pink/black checkerboard instead of crashing or
 // silently vanishing - obvious on screen, and callers get sane dimensions.
 // With 'async', a cache miss on a skin or pic may come back still loading in the background
-// (tex::FindAsync): the caller keeps the pointer and draws it when Texture::IsDrawable says so.
+// (tex::FindAsync): the caller keeps the pointer and draws it when Texture::IsLoaded says so.
 const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2::tex::ImageType type, const bool async = false)
 {
     const ps2::tex::Texture * texture = async ? ps2::tex::FindAsync(name, type) : ps2::tex::Find(name, type);
@@ -793,7 +793,7 @@ void PS2_DrawGetPicSize(int * w, int * h, const char * name)
     // Callable outside Begin/EndFrame. Placeholder dimensions keep the
     // callers' centering math sane when the pic is missing.
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    if (!texture.IsDrawable())
+    if (!texture.IsLoaded())
     {
         *w = *h = -1; // id's answer for a pic that isn't there (yet)
         return;
@@ -807,7 +807,7 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    if (!texture.IsDrawable())
+    if (!texture.IsLoaded())
     {
         return; // still loading in the background (RegisterPic named it): skipped this frame
     }
@@ -820,7 +820,7 @@ void PS2_DrawPic(int x, int y, const char * name)
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
 
     const ps2::tex::Texture & texture = FindTextureOrPlaceholder(name, ps2::tex::ImageType::Pic);
-    if (!texture.IsDrawable())
+    if (!texture.IsLoaded())
     {
         return; // as PS2_DrawStretchPic
     }

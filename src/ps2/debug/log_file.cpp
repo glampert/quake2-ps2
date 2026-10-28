@@ -54,6 +54,7 @@ enum class State
 
 static State s_state = State::Off;
 static char  s_path[MAX_OSPATH];
+static char  s_header[MAX_OSPATH + 96]; // the first line; kept for a fatal report with the log off
 static const cvar_t * s_logEnabled = nullptr;
 
 // Serializes writers: the music stream's reader thread prints too. The owner is what lets a
@@ -168,10 +169,10 @@ void Unlock()
     }
 }
 
-// The caller holds the lock.
-void WriteLocked(const char * text)
+// The caller holds the lock. A fatal report writes whether or not ps2_logfile is on.
+void WriteLocked(const char * text, const bool fatal = false)
 {
-    if (s_state == State::Off || !LogEnabled() || IsBlank(text))
+    if (s_state == State::Off || (!fatal && !LogEnabled()) || IsBlank(text))
     {
         return;
     }
@@ -206,10 +207,9 @@ void LogFileOpen(const char * basePath)
 
     s_state = State::Pending;
 
-    char header[MAX_OSPATH + 96];
-    std::snprintf(header, sizeof(header), "Quake II %s for PS2 (%s build), game data on %s\n",
+    std::snprintf(s_header, sizeof(s_header), "Quake II %s for PS2 (%s build), game data on %s\n",
                   PS2_LOG_STRINGIFY(VERSION), PS2_QUAKE_DEBUG ? "debug" : "release", basePath);
-    LogFileWrite(header);
+    LogFileWrite(s_header);
 
     if (s_state == State::Open)
     {
@@ -237,7 +237,10 @@ void LogFileWrite(const char * text)
 
 void LogFileWriteFatal(const char * text)
 {
-    if (s_state == State::Off || text == nullptr || !LogEnabled())
+    // Not gated on ps2_logfile: a fatal error is the one report a console run can't do without,
+    // and the 2026-10-27 out-of-memory screen left nothing behind because the log was off. With
+    // the log off the file holds the header and the report alone.
+    if (s_state == State::Off || text == nullptr)
     {
         return;
     }
@@ -250,12 +253,16 @@ void LogFileWriteFatal(const char * text)
         Lock();
     }
 
+    if (s_state == State::Pending)
+    {
+        WriteLocked(s_header, true); // nothing written yet: the report should say which build it is
+    }
     if (!s_atLineStart)
     {
         Put('\n');
         s_atLineStart = true;
     }
-    WriteLocked(text);
+    WriteLocked(text, true);
 
     if (!ownWriteInterrupted)
     {

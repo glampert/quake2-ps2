@@ -8,6 +8,12 @@
  *  dynamic-texture pipeline (MarkPixelsDirty + bind re-uploads it) and its VRAM returns
  *  to the heap when playback ends.
  *
+ *  The engine draws every client frame (50/60 Hz) but decodes at 14 fps, so the conversion
+ *  and the 128 KB upload run only when something they depend on changed: the frame
+ *  (PS2_CinematicFrameChanged, or a different pointer), the palette or brightness curve, the
+ *  size, or a fresh buffer. In between, the resident texture is drawn again. On the console
+ *  this was 3.7 ms of Ui on every cinematic frame.
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
@@ -38,11 +44,23 @@ constexpr size_t kFrameBufferBytes = kFrameDim * kFrameDim * sizeof(u16);
 static u16 * s_frameBuffer = nullptr;
 
 // The palette frames are expanded with: SetPalette's, kept as it came, and
-// through the brightness curve, rebuilt when the curve changes. Only 1 KB each,
-// and SetPalette can arrive before the first frame does, so these stay static.
+// through the brightness curve as packed RGBA5551 texels, rebuilt when the curve
+// changes. Small, and SetPalette can arrive before the first frame does, so these
+// stay static.
 alignas(16) static u32 s_sourcePalette[256];
-alignas(16) static u32 s_palette[256];
-static u32 s_paletteGeneration = 0; // gamma::Generation() when s_palette was made
+alignas(16) static u16 s_palette16[256];
+static u32 s_paletteGeneration = 0; // gamma::Generation() when s_palette16 was made
+
+// What the texture in s_frameBuffer was converted from. DrawFrame converts again when any of
+// it moved; s_converted false (a new buffer) forces it.
+static u32        s_frameVersion     = 0; // bumped by PS2_CinematicFrameChanged
+static u32        s_paletteVersion   = 0; // bumped by every CurvePalette
+static bool       s_converted        = false;
+static const u8 * s_convertedData    = nullptr; // compared, never read: the engine may have freed it
+static u32        s_convertedFrame   = 0;
+static u32        s_convertedPalette = 0;
+static int        s_convertedCols    = 0;
+static int        s_convertedRows    = 0;
 
 // The frame texture, drawn through the regular 2D texture path. Linear
 // filtering smooths the stretch to screen size (the GS does the upscale).
@@ -85,16 +103,25 @@ void EnsureFrameBuffer()
 
     s_frameBuffer         = static_cast<u16 *>(mem);
     s_frameTexture.pixels = s_frameBuffer;
+    s_converted           = false;
 }
 
-// Makes s_palette from s_sourcePalette, as the curve stands.
+// Makes s_palette16 from s_sourcePalette, as the curve stands: RGBA5551, of which only the
+// alpha MSB survives (always set, since SetPalette forces alpha opaque).
 void CurvePalette()
 {
     for (int i = 0; i < 256; ++i)
     {
-        s_palette[i] = gamma::CurveColor(s_sourcePalette[i]);
+        const u32 color = gamma::CurveColor(s_sourcePalette[i]);
+        const u32 r = color         & 0xFF;
+        const u32 g = (color >>  8) & 0xFF;
+        const u32 b = (color >> 16) & 0xFF;
+        const u32 a = (color >> 24) & 0xFF;
+
+        s_palette16[i] = static_cast<u16>(((a & 0x1) << 15) | ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3));
     }
     s_paletteGeneration = gamma::Generation();
+    ++s_paletteVersion;
 }
 
 // Drops the frame buffer at end of playback. Safe to call when nothing is
@@ -110,6 +137,61 @@ void ReleaseFrameBuffer()
     ps2::heap::Free(s_frameBuffer, kFrameBufferBytes, ps2::heap::MemTag::Renderer);
     s_frameBuffer         = nullptr;
     s_frameTexture.pixels = nullptr;
+    s_converted           = false;
+}
+
+// Whether the texture no longer shows what DrawFrame was handed.
+bool NeedsConversion(const u8 * data, const int cols, const int rows)
+{
+    return !s_converted ||
+           data != s_convertedData ||
+           s_frameVersion != s_convertedFrame ||
+           s_paletteVersion != s_convertedPalette ||
+           cols != s_convertedCols ||
+           rows != s_convertedRows;
+}
+
+// Expands indices through the palette into RGBA5551, resampling columns with a 16.16
+// fixed-point step (the original Quake ref_gl upsample algorithm) and rows by skipping.
+void ConvertFrame(const u8 * data, const int cols, const int rows, const int trows, const float hscale)
+{
+    const int fracStep = cols * 0x10000 / kFrameDim;
+    for (int i = 0; i < trows; ++i)
+    {
+        const int row = static_cast<int>(static_cast<float>(i) * hscale);
+        if (row >= rows)
+        {
+            break;
+        }
+
+        const u8 * source = data + (cols * row);
+        u16 *      dest   = &s_frameBuffer[i * kFrameDim];
+
+        int frac = fracStep >> 1;
+        for (int j = 0; j < kFrameDim; ++j)
+        {
+            dest[j] = s_palette16[source[frac >> 16]];
+            frac += fracStep;
+        }
+    }
+
+    // Guard row: the quad samples v up to trows, and bilinear filtering at
+    // that edge reads texel row trows - duplicate the last valid row so the
+    // bottom of the picture doesn't blend into black.
+    if (trows < kFrameDim)
+    {
+        std::memcpy(&s_frameBuffer[trows * kFrameDim],
+                    &s_frameBuffer[(trows - 1) * kFrameDim],
+                    kFrameDim * sizeof(u16));
+    }
+
+    s_converted        = true;
+    s_convertedData    = data;
+    s_convertedFrame   = s_frameVersion;
+    s_convertedPalette = s_paletteVersion;
+    s_convertedCols    = cols;
+    s_convertedRows    = rows;
+    s_frameTexture.MarkPixelsDirty();
 }
 
 } // namespace
@@ -132,7 +214,7 @@ void SetPalette(const u8 * palette)
     }
 
     // 768-byte RGB triplets -> RGBA u32 entries, alpha forced opaque (only the
-    // alpha MSB survives the RGBA5551 packing below).
+    // alpha MSB survives CurvePalette's RGBA5551 packing).
     u8 * dest = reinterpret_cast<u8 *>(s_sourcePalette);
     for (int i = 0; i < 256; ++i)
     {
@@ -172,51 +254,21 @@ void DrawFrame(int x, int y, int w, int h, int cols, int rows, const u8 * data)
         trows  = kFrameDim;
     }
 
-    // Expand indices through the palette into RGBA5551, resampling columns
-    // with a 16.16 fixed-point step (the original Quake ref_gl upsample algorithm).
-    const int fracStep = cols * 0x10000 / kFrameDim;
-    for (int i = 0; i < trows; ++i)
+    if (NeedsConversion(data, cols, rows))
     {
-        const int row = static_cast<int>(static_cast<float>(i) * hscale);
-        if (row >= rows)
-        {
-            break;
-        }
-
-        const u8 * source = data + (cols * row);
-        u16 *      dest   = &s_frameBuffer[i * kFrameDim];
-
-        int frac = fracStep >> 1;
-        for (int j = 0; j < kFrameDim; ++j)
-        {
-            const u32 color = s_palette[source[frac >> 16]];
-            const u32 r = color         & 0xFF;
-            const u32 g = (color >>  8) & 0xFF;
-            const u32 b = (color >> 16) & 0xFF;
-            const u32 a = (color >> 24) & 0xFF;
-
-            dest[j] = static_cast<u16>(((a & 0x1) << 15) | ((b >> 3) << 10) | ((g >> 3) << 5) | (r >> 3));
-            frac += fracStep;
-        }
-    }
-
-    // Guard row: the quad samples v up to trows, and bilinear filtering at
-    // that edge reads texel row trows - duplicate the last valid row so the
-    // bottom of the picture doesn't blend into black.
-    if (trows < kFrameDim)
-    {
-        std::memcpy(&s_frameBuffer[trows * kFrameDim],
-                    &s_frameBuffer[(trows - 1) * kFrameDim],
-                    kFrameDim * sizeof(u16));
+        ConvertFrame(data, cols, rows, trows, hscale);
     }
 
     // Drawn stretched over the caller's rect (the engine passes the full screen). v stops at
     // trows, because rows past the source are not part of the picture - sampling the full 256
     // puts a black band along the bottom.
-    s_frameTexture.MarkPixelsDirty();
-
     constexpr u8 kUiBrightness[3] = { 128, 128, 128 };
     rs::DrawTexturedRect(s_frameTexture, x, y, w, h, 0, 0, kFrameDim, trows, kUiBrightness);
 }
 
 } // namespace ps2::cin
+
+void PS2_CinematicFrameChanged()
+{
+    ++ps2::cin::s_frameVersion;
+}

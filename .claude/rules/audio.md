@@ -126,7 +126,9 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   sound still loading waits in the pending list, retried every 10 ms for half a second
   (`playsound_t::deadline`), then is dropped. In the PCSX2 perf run throttled to a USB stick's
   rate, `rg_hum.wav` (the one mid-level sound of the run) opened on frame 5012 and was ready on
-  5017, its row's FsIo gone. The level-load path and `S_EndRegistration` are unchanged.
+  5017, its row's FsIo gone. On the console from USB (2026-10-27) the same sound was ready 5
+  frames after its request, its row 146.8 → 0.5 ms of ClParse. The level-load path and
+  `S_EndRegistration` are unchanged.
 - Audio bring-up failure is not fatal (`ps2_disable_sound 1` turns it off on purpose). The
   libsd/audsrv IRX load is one-shot.
 

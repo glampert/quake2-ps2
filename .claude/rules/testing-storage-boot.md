@@ -14,13 +14,18 @@ card) are there; the driver traps are in [ps2-platform.md](ps2-platform.md).
 
 ## The background loader test
 
-- `ps2_testaio 1`: the background loader (fs/async_io.h) reads 13 files through the loader and
-  through `FS_LoadFile` and compares them, twice (the second pass throttled to 900 KB/s), timing a
-  main-thread read of `pics/conchars.pcx` every frame meanwhile; prints each file's source kind and
-  request-to-landed time, the loader's read throughput and `AioTest: PASS`/`FAIL`. ~15 s in PCSX2
-  from the pkz (2026-10-26: 24 comparisons, 0 failures, loose/pkz-stored/pkz-deflated seen, the
-  probe read 4 ms at worst). It needs a run on a console from USB too: PCSX2 has no data cache,
-  so a destination sharing a cache line with something else only shows there.
+- `ps2_testaio 1`: the background loader (fs/async_io.h) kills the startup server (the attract
+  loop) as the perf run does, then reads 13 files through the loader and compares each with an
+  `FS_LoadFile` of it made when the request lands, twice (the second pass throttled to 900 KB/s),
+  timing a main-thread read of `pics/conchars.pcx` every frame meanwhile; prints each file's source
+  kind and request-to-landed time, the loader's read throughput, the `Aio` tag's bytes after each
+  pass and `AioTest: PASS`/`FAIL`. ~15 s in PCSX2 from the pkz (2026-10-26: 24 comparisons, 0
+  failures, loose/pkz-stored/pkz-deflated seen, the probe read 4 ms at worst). It needs a run on a
+  console from USB too: PCSX2 has no data cache, so a destination sharing a cache line with
+  something else only shows there. **Its first console run (2026-10-27) died of out-of-memory**
+  because it ran under the attract loop: the idlog.cin ring's requests outrank the test's, so a
+  pass holding its 6 MB of destinations (12 MB then, with the references read up front) was still
+  in flight when the loop loaded demo1's level. Hence the kill and the late reference read.
 - **Emulating a USB stick's read rate in PCSX2:** `ps2_aio_throttle_kbps 900` in config.cfg paces
   the background loader (not the main thread's own reads) like the user's stick: 5 ms plus the
   transfer at 900 KB/s per 32 KB chunk. A perf capture with it shows whether the cinematic ring

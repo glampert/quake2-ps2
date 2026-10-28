@@ -1,6 +1,6 @@
 # Background loading: one loader thread for mid-level assets and cinematic streaming
 
-*Active, 2026-10-26. Stages 1-8 below; stages 1-6 landed 2026-10-26, their console runs still owed; 7 waits on those measurements. Replaces the plan parked on 2026-10-14,
+*Active, 2026-10-26. Stages 1-8 below; stages 1-6 landed 2026-10-26 and met their console gates in the USB capture of 2026-10-27 (stage 2's console self-test still owed, stage 6's MapCycle too); 7 deferred on those numbers; 8 half done (the USB capture). Replaces the plan parked on 2026-10-14,
 which covered mid-level models and skins only and reasoned from PCSX2 numbers. The console
 captures of 2026-10-26 (`build/baselines/console-hdd-2026-10-26.flog`,
 `console-usb-2026-10-26.flog`; the numbers are in `.claude/rules/performance.md`) changed what
@@ -434,8 +434,8 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   against `-spin-` (same build, `ps2_vsync_spin 1`) within noise on every column, 0 drops both
   ways, 19111 against 19112 presents; the wake-to-write gap is measured instead of a FIELD
   counter: `PresentClock::worstWriteTicks`, printed as the frame log's closing `FLOG#note,present:`
-  line, read 1 µs (the blanking interval is ~1500 µs). Still owed on the console: no tearing by
-  eye and that note's number from a USB run.
+  line, read 1 µs (the blanking interval is ~1500 µs). Console (USB, 2026-10-27): 3 µs over
+  18261 presents, the run complete; no tearing was reported.
 - [x] **2. `ps2::aio`, `FS_LocateFile` and a self-test, no clients.** Landed 2026-10-26
   (`src/ps2/fs/async_io.{h,cpp}`, `async_io_c.h` for the C hook, `FS_LocateFile`/
   `FS_ReleaseLocation`, `PS2_PkzLocate`, `MemTag::Aio`, the keyboard guard, `ps2_aio`,
@@ -445,7 +445,11 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   `Wait`), times a main-thread read every frame, and checks the declined-ticket path with
   `ps2_aio 0`. PCSX2 gate met: 24 comparisons, 0 failures, loose, pkz-stored and pkz-deflated
   seen (a pak needs a run without the pkz), probe read 4 ms at worst, no keyboard stalls. **Still
-  owed: one run on the console from USB**, the only place the cache-line rule is real. Deviation
+  owed: one run on the console from USB**, the only place the cache-line rule is real. The first
+  try (2026-10-27) ran out of memory: the test started under the attract loop's idlog.cin, whose
+  ring outranks the test's requests, so the pass (5.6 MB of destinations) was still in flight
+  when the loop loaded demo1's level. Since 2026-10-28 the test kills the startup server first,
+  as the perf run does, and reads each reference copy when its request lands (6 MB held, not 12). Deviation
   from §5.2: the loader has its own inflate stepper (`RunInflateChunk`, one input piece per
   scheduler step) rather than a loop lifted out of pkz_pack.cpp, since the synchronous loop and a
   resumable step don't share a shape; the self-test's byte comparison is the guard against drift.
@@ -456,24 +460,29 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   store rule stays optional. PCSX2 (can't show the gain, only that nothing broke): cinematic rows'
   FsIo 958 → 824 µs mean, p95 1418 → 1101, Cinematic and Frame unchanged; `ps2_aio_throttle_kbps
   900` gives the same capture to the row, 200 KB/s starves as designed (`pcsx2-readahead-
-  2026-10-26.flog`, `-throttled-`). **Gate still owed on the console (a USB capture):** no refill
-  frames; every cinematic row's Frame under 106 ms and `sndFree` never within 2400 bytes of empty
-  outside the dump-poisoned rows; `Cinematic` at the HDD's decode-only 10-13 ms; `FsIo` near 0 on
-  cinematic rows; a shorter cinematic start; `aioQ` staying above 0 through ntro's peaks.
+  2026-10-26.flog`, `-throttled-`). **Console gate met (USB, 2026-10-27,
+  `console-usb-aio-2026-10-27.flog`):** rows over the 106 ms ring 86 → 1 on eou1_ and 1235 → 1 on
+  ntro (the opens); FsIo on cinematic rows p95 0.6 ms and max 1.2 ms (from 93 ms and 1.8 s);
+  `aioQ` 1-7 through ntro with 80 MB landed; `Cinematic` at the HDD's 10-13 ms. The decode rows
+  still take 25-35 ms of wall time (decode plus the 3.7 ms re-upload), as before, which is stage
+  7's territory and never reaches the ring. The cinematic starts shrank less than predicted (eou1_
+  2.8 → 1.0 s, ntro 1.7 s both times); the open and the table read aren't instrumented.
 - [x] **4. Sounds.** Landed 2026-10-26 (`src/ps2/audio/sound_load.{h,cpp}`, `src/ps2/fs/
   aio_pump.{h,cpp}` with `ps2_aio_pump_us`, `S_FinishLoadSound`/`S_LinkPlaysound`/
   `playsound_t::deadline`, the drains in `S_BeginRegistration` and `S_Shutdown`, `FLOG#ready`).
   PCSX2, throttled to 900 KB/s: `rg_hum.wav` opened on frame 5012, ready on 5017, its row's FsIo
   gone, no warnings, the run complete. No `SndLoad` column was added: `#open`/`#ready` pairs give
-  the latency. Console run owed with the others. Original gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
+  the latency. Console (USB, 2026-10-27): `rg_hum.wav` ready 5 frames after its request, its row's
+  ClParse 146.8 → 0.5 ms. Still owed: the by-ear check and the missing-file NULL path. Original gate: the `rg_hum.wav` row loses its FsIo; `SndLoad` moves to later rows;
   `#ready` latency 2-4 frames on USB; no dropped or doubled one-shots in a `ps2_perftest` run by
   ear; the `S_IssuePlaysound` NULL path exercised with a deliberately missing file in a debug run.
 - [x] **5. Textures.** Landed 2026-10-26 (`TexFlags::Loading`/`Failed`, `Texture::IsLoaded`,
   `tex::FindAsync`/`PumpLoads`/`DrainLoads`, `AllocSlot`/`FillTexture`/`CommitIndexed`/
   `CommitRgba`, `DecodePcx`/`DecodeTga` with the transparency test folded into the PCX runs, the
   four draw-site skips, `SmallPool::IndexOf`). PCSX2 throttled: `pics/a_slugs.pcx` opened 5012,
-  ready 5018, its row's ClParse 5.6 → 0.3 ms, FsIo gone, 0 drops, no asserts. Visual handoff on
-  the console still owed. Original: (skins, sprite frames, `RegisterPic` pics; the decoder split; the fused
+  ready 5018, its row's ClParse 5.6 → 0.3 ms, FsIo gone, 0 drops, no asserts. Console (USB,
+  2026-10-27): `a_slugs.pcx` ready 5 frames after its request, its row off the frame; the visual
+  handoff by eye still owed. Original: (skins, sprite frames, `RegisterPic` pics; the decoder split; the fused
   transparency scan). Visual handoff: pickups and player skins appear a few frames late, nothing
   draws the checkerboard or garbage, menus unchanged. Gate: `a_slugs.pcx`'s FsIo gone;
   `ps2_testmaps 1` unchanged.
@@ -485,19 +494,27 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
   a pkz entry is deflated, so it has no ranges to read, and pak0.pkz is what a USB stick carries.
   Files over 768 KB load synchronously, so the staging copy never doubles a level's largest model.
   PCSX2 throttled: slugs model opened 4758, ready 4760, its skin 4761; row ClParse 4.8 → 0.4 ms,
-  FsIo 2.8 ms → 4 µs; 0 drops; no asserts. Console handoff and MapCycle PEAK still owed. Original:
+  FsIo 2.8 ms → 4 µs; 0 drops; no asserts. Console (USB, 2026-10-27): the slugs model ready 9
+  frames (180 ms) after its request and its skin 11, the row's ClParse 90.7 → 0.5 ms and its
+  Frame 99.9 → 19.9 ms. Visual handoff by eye and the MapCycle PEAK still owed. Original:
   (MD2 in two phases, SP2 in one read, the loader split). Handoff: weapon and
   ammo pickups, a weapon switch, the player-setup menu, a DM join (the 278 KB loose model). Gate:
   the slugs row's ClParse near 0; `#ready` 3-4 frames on USB for a pickup model; a throttled
   PCSX2 run with 0 drops; `ps2_testmaps 1` PEAK unchanged.
-- [ ] **7. Decode on the loader, conditional.** A `Decode` job kind, pure CPU over main-allocated
+- [ ] **7. Decode on the loader, deferred (2026-10-27).** The USB capture shows what it would
+  buy: the cinematic decode rows cost 15 ms (eou1_) to 10-28 ms (ntro) of EE work and span two
+  fields in 54-74% of cases, unchanged by the loader, and the pump's finishing frame for a pic plus
+  a sound was 27.6 ms. None of it reaches the audio ring, and a 14 fps picture doesn't show a
+  two-field frame, so this stays undone unless a visible symptom appears. If taken up: a `Decode`
+  job kind, pure CPU over main-allocated
   buffers, in order of measured need: the MD2 finish for large models (if the pump overruns), PCX
   decode, then `Huff1Decompress` (a preallocated output double buffer in place of the per-frame
   `Z_Malloc`, `cin.hnodes1` read-only, `SCR_ReadNextFrame` handing the block to a job: cl_cin.c
   changes, so last). Gate: EE work on the affected rows down by the decode's cost, the other
   columns within ~2% cache noise.
-- [ ] **8. Measure and record.** New console HDD and USB captures; the numbers in
-  `performance.md`; README and CVARS.md for the new cvars; `memory-budget.md`'s MapCycle line.
+- [ ] **8. Measure and record.** The USB capture is done (2026-10-27, `performance.md`), README
+  and CVARS.md carry the cvars. Still owed: a console HDD capture, `memory-budget.md`'s MapCycle
+  line, the console self-test (stage 2).
 
 ## 9. Risks
 

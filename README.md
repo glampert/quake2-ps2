@@ -1022,7 +1022,10 @@ everything the console prints, plus `Sys_Error` and the reports printed on the w
 log a console run leaves. Every line is stamped with the seconds since `main()` began, and every write
 opens, appends and closes the file. On a FAT drive that close is the only flush: bdmfs_fatfs
 has no sync, so a log kept open could come back empty after a power cycle. A run that hangs or
-crashes still leaves its log up to the last line. On HDD, each close is followed by
+crashes still leaves its log up to the last line. A `Sys_Error` and the reports printed on the
+way to it are written even with the cvar off (since 2026-10-28; the 2026-10-27 out-of-memory
+screen on a console left no log because it was off), so a crash leaves at least the header line
+and the report. On HDD, each close is followed by
 the storage boot layer's `SyncGameDataDevice()`, which uses `fileXioSync` on the selected
 `pfsN:` mount to flush cached inode/directory metadata.
 Host and USB logs skip that sync. A write, close or sync failure disables logging and prints

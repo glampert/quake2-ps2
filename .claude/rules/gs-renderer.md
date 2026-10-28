@@ -31,8 +31,9 @@ The README's "Rendering" section is the architecture overview. The renderer file
   `ps2_vsync_spin 1` (same build, `pcsx2-vsync-{sleep,spin}-2026-10-26.flog`) moved no column by
   more than 0.4% (SndMix, which wanders), 0 drops both ways, and the frame log's closing
   `FLOG#note,present:` line put the worst stamp-to-DISPFB gap at 1 µs, against a blanking interval
-  of about 1.5 ms. On a console the gate is no tearing and that note's number. The semaphore or
-  handler failing to create falls back to the spin with a console warning.
+  of about 1.5 ms. The console USB capture of 2026-10-27 read 3 µs over 18261 presents, with no
+  tearing reported. The semaphore or handler failing to create falls back to the spin with a
+  console warning.
 - **A texture may be `TexFlags::Loading` or `Failed`** (texture.h, since 2026-10-26, background
   loading stage 5): `tex::FindAsync` (what `PS2_RegisterSkin`/`PS2_RegisterPic` call) hands a skin,
   sprite frame or pic first wanted mid-level back at once with null pixels, in the cache under its

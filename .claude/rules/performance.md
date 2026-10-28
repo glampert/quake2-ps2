@@ -63,7 +63,37 @@ paths:
   (`pcsx2-models-throttled-2026-10-26.flog`): the slugs model's row 4758 went from 4.8 ms ClParse
   and 2.8 ms FsIo to 0.4 ms and 4 µs, the model ready on 4760 and its skin on 4761. With that,
   every mid-level load the perf run makes (model, skin, HUD pic, sound) is off the frame in
-  PCSX2; the console captures (stage 8) are what remains.
+  PCSX2.
+- **The USB capture with the loader (2026-10-27)**: the same console and stick, the profiling
+  release of stages 1-6 with the IOP reset (`quake2_profile_aio_2026-10-26.elf`), wLaunchELF
+  `mass:` launch; `console-usb-aio-2026-10-27.flog`, raw `frame_log_usb_aio_2026-10-27.txt` and
+  the analysis against `console-usb-2026-10-26.flog` by `FLOG#map` segment (the user opened the
+  menu again during demo1, rows 3093-3284, and its config write is row 3700's 1.55 s).
+  - **Cinematics: every refill frame is gone.** Rows over the 106 ms audsrv ring went from 86 of
+    817 (eou1_) and 1235 of 7387 (ntro) to one each, the cinematic's open. FsIo on cinematic
+    rows: p95 93 ms → 0.45-0.63 ms (the copy out of the ring), max 1.8 s → 1.2 ms. The loader
+    ran 1-7 requests deep through ntro (`aioQ`), landed 80 MB, and the ring never waited. The
+    decode rows are unchanged: 15 ms of EE work on eou1_ and 10-28 ms on ntro (the Huffman
+    decode plus `cin::DrawFrame`'s 3.7 ms re-upload), 25-35 ms of wall time in both captures,
+    so 54-74% of them span two fields either way. That is what stage 7 would move off the frame;
+    it never reaches the ring, and a 14 fps picture doesn't show it, so stage 7 stays deferred.
+    The cinematic starts cost what they did (eou1_ 2.8 → 1.0 s for the open and table, ntro
+    1.7 s both times); they are the "4-6 s per cinematic" item, not the stutter.
+  - **Pickups:** the slugs model and skin row went from 90.7 ms of ClParse and a 99.9 ms frame to
+    0.5 ms and 19.9 ms, the model ready 9 frames (180 ms) after its request and the skin 11;
+    `a_slugs.pcx` plus `rg_hum.wav` from 146.8 ms and a 163 ms frame to 0.5 ms and 19.8 ms, both
+    ready 5 frames later, the frame that finished them 27.6 ms. Steady demo frames dropped 0.24%
+    against 0.21%; the demo stream's own refills are as before (Server 172 and 333 ms against 125
+    and 346: the pkz deflates `.dm2`, so it gets no read-ahead).
+  - **The sleeping vsync:** worst wake-to-DISPFB 3 µs over 18261 presents.
+  - **`io_log.txt` was empty (three loads, 0 files), as in the 10-26 HDD and reset runs:** the perf
+    run issues its loads on a disconnected client, so no plaque goes up and the I/O log, which
+    is the plaque's lifetime, sees nothing. The frozen 10-26 run caught its load only because the
+    client was still connected when `demomap` ran. Measure loads from the menu, as the A/B
+    recipe below says.
+  - `sndFree` reads 7520 or 8460 (of 9400) on isolated single rows every 1-3 s in every segment of
+    both captures, at normal 20 ms frames: a sampling artefact of the ring report, not an
+    underrun. Judge underruns by `Frame` over the ring.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

@@ -7,7 +7,8 @@ paths:
 # Crash triage: the hang report, VU1 forensics, the exception handler
 
 Companion to [testing-pcsx2.md](testing-pcsx2.md), which has the short form: `quake2.log` is
-the only report on a console, how to symbolize an address, and the known `_request_end` flake.
+the only report on a console (a fatal report is written even with `ps2_logfile 0`, since
+2026-10-28), how to symbolize an address, and the known `_request_end` flake.
 
 ## The pipeline hang report
 

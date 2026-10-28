@@ -142,7 +142,8 @@ draws), or `ps2_skip_entities 1` to drop every entity model from the draw.
 
 - **On a console, `quake2.log` is the only report.** Fatal reports (pipeline hang dump, stack
   traces, out-of-memory stats) go through `ps2::debug::DumpPrintf` (log_file.h), to stdout and
-  the log. Anything new printed on a fatal path must use it, not `printf`. Any new fatal-path
+  the log, and they are written even with `ps2_logfile 0` (since 2026-10-28), so a crash always
+  leaves the file with its header and the report. Anything new printed on a fatal path must use it, not `printf`. Any new fatal-path
   screen must go through `ScrInit`. The hang report, VU1 dump forensics and the exception
   handler are in [crash-triage.md](crash-triage.md).
 - **`quake2.log` stamps count from `main()`** (`Sys_Milliseconds` is first called there). The

@@ -129,6 +129,25 @@ paths:
   ntro's 12141 rows and 324 of eou1_'s 1165, never two in a row, `sndFree` max and p99 the same as
   without it (4700, 3760), no frame past the ring but the starts'. A first run with a 40 ms limit
   held submits back for 67 ms in a row, hence 30. The console captures are the gate.
+- **The console captures of §12.3 and §12.4 (2026-10-29)**: `quake2_profile_aio_2026-10-29.elf`
+  from the HDD and from USB (`console-{hdd,usb}-aio-2026-10-29.flog`, raw
+  `frame_log_{hdd,usb}_aio_2026-10-29.txt`), against `console-hdd-aio-2026-10-28.flog` and
+  `console-usb-aio-2026-10-27.flog` by segment, no menu detour in either.
+  - **Cinematic Ui 3.68 ms → 0.67 mean (13 µs p50)**, on both devices; EE work on cinematic rows
+    7.1 → 4.7 ms (eou1_) and 8.4-8.5 → 5.6 ms (ntro). ntro's mean frame went from 21.1-21.2 to
+    19.9 ms, the 50 Hz cadence; eou1_ was there already (19.5-19.8). A decode row still runs ~30 ms
+    and the next ~10 (the GS latency pipeline catching up), so rows over 30 ms stay at ~20%, but
+    the pairs no longer lose a field.
+  - **HDD submit stalls (SndMix > 8 ms): 66 → 38**, gameplay 9 → 2, ntro 54 → 32 (max 44 → 37 ms),
+    chunk rows' SndMix p99 24 → 18 ms. 882 submits were held back, never two in a row; 849 of them
+    (96%) were followed by a clean submit. 30 of the 38 left came right after a hold, a read still
+    out 20 ms later (HDD reads past ~40 ms, the drive's slow path); the other 8 followed a frame
+    over 30 ms, when the rule doesn't hold back, or the cinematic's start. `sndFree` max on the
+    gameplay segments 8460 → 6580: the ring came no nearer empty.
+  - **The pickups no longer drop a field on HDD**: the slugs model's frames 30.5 + 9.8 ms (from 49
+    + 12), `a_slugs.pcx` plus `rg_hum.wav` 28.9 + 17.0 ms (from 49 + 12); ready 2-3 frames after the
+    request. On USB both pickups' frames are ~20 ms; no submit held back there (`ps2_sound_defer` 1).
+  - Worst wake-to-DISPFB 5 µs (HDD) and 3 µs (USB).
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

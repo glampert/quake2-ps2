@@ -50,7 +50,10 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   the submit back while `aio::FileCallInFlight()` or `MusicReadPending()`, if the last submit is
   under 30 ms old (one 50 Hz frame), on the HDD only (`ps2_sound_defer`; plan §12.4). Forced on in
   a throttled PCSX2 run it held 38% of ntro's submits, never two in a row, and the ring's lowest
-  point matched the run without it.
+  point matched the run without it. On the console from the HDD (2026-10-29) the stalls went from
+  66 to 38 over the perf run (gameplay 9 → 2), 96% of the holds were enough, and the pickups no
+  longer drop a field; what is left is reads longer than the hold. The fallback, a `NOWAIT` play
+  RPC through our own binding (plan §12.4), is only worth it if those become visible.
 - **audsrv loops its ring through an underrun.** Its IOP play thread advances the read cursor
   whether or not anything was written (audsrv.c's `play_thread`), so a main loop that stops
   submitting for longer than the ring (10 feed blocks: 9400 bytes, ~106 ms at 22050 Hz) gets

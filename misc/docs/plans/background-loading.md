@@ -693,7 +693,9 @@ the same ring would sit full nearly always.
 **Implemented 2026-10-29** as below: `PS2_CinematicFrameChanged` (cinematic.h, now shared with C)
 called after `cin.pic = cin.pic_pending` in `SCR_RunCinematic` and in `CinematicTest_RunFrame`;
 `NeedsConversion` compares the frame and palette versions, the pointer, `cols`/`rows` and whether
-the buffer is new; `CurvePalette` builds `s_palette16`. Console capture pending.
+the buffer is new; `CurvePalette` builds `s_palette16`. **Console gate met (2026-10-29, HDD and
+USB):** cinematic Ui 3.68 → 0.67 ms mean, EE work on cinematic rows down 2.4-2.9 ms, ntro's mean
+frame 21.1 → 19.9 ms (performance.md).
 
 **What exists.** `SCR_DrawCinematic` calls `re.DrawStretchRaw` every client frame (50 Hz) with
 `cin.pic`, which `SCR_RunCinematic` replaces at 14 fps (`cin.pic = cin.pic_pending`, a fresh
@@ -750,8 +752,10 @@ no stale colours; the menu over a cinematic and back; then the console capture's
 throttle's sleep, so PCSX2 can exercise it), `sys::GameDataOnHdd`, `DeferSubmit` in snd.cpp, and
 the `ps2_sound_defer` cvar (0 off, 1 the HDD, the default, 2 always). The limit became 30 ms, not
 40: the test runs at a submit, so the gap reaches the limit plus a frame (a PCSX2 run at 40 ms
-held submits back for 67 ms in a row), and 30 ms holds back one 50 Hz frame at most. Console
-capture pending.
+held submits back for 67 ms in a row), and 30 ms holds back one 50 Hz frame at most. **Console
+(2026-10-29):** HDD stalls 66 → 38 (gameplay 9 → 2), 96% of holds enough, the pickups' dropped
+field gone, USB unchanged; the stalls left are reads still out after the one-frame hold. The
+NOWAIT fallback below stays unbuilt unless those show.
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
 the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed

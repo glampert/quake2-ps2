@@ -148,6 +148,16 @@ paths:
     + 12), `a_slugs.pcx` plus `rg_hum.wav` 28.9 + 17.0 ms (from 49 + 12); ready 2-3 frames after the
     request. On USB both pickups' frames are ~20 ms; no submit held back there (`ps2_sound_defer` 1).
   - Worst wake-to-DISPFB 5 µs (HDD) and 3 µs (USB).
+  - **Open: the submit costs more on cinematic rows since this build.** `Sound` (SNDDMA_Submit's
+    two audsrv RPCs) on cinematic rows went from ~0.40 ms mean (0.39 p50) to 0.92-1.00 ms (1.0 p50)
+    on both devices; gameplay rows are unchanged (~0.41). It eats ~0.6 ms of §12.3's 3 ms. PCSX2
+    shows the same step (227 → 429-564 µs). Not understood: the frames are shorter since §12.3, and
+    the wait is on the IOP's side of the RPC; `ps2_sound_defer` is off on USB, so it isn't the hold.
+- **The music on the loader (plan §12.1), PCSX2 (2026-10-29, debug, `ps2_aio_throttle_kbps 900`;
+  `pcsx2-music-aio-throttled-2026-10-29.flog` against `pcsx2-models-throttled-2026-10-26.flog`):**
+  on the demo segments Music 138 µs mean (unchanged), SndMix 415-418 (416-419), Input 27 (27),
+  no frame over the ring; the music's requests land ~26 KB/s through the loader, one 32 KB request
+  every ~1.25 s, each in two reads (the stereo groups sit 2 KB off the chunk boundary).
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

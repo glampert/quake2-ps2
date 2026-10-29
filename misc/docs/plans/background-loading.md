@@ -567,6 +567,30 @@ capture of 2026-10-27, and a fourth (§12.4) from the HDD capture of 2026-10-28.
 
 ### 12.1 The music reader as a loader client
 
+**Implemented 2026-10-29**, with these deviations from the text below:
+- `BufferState` stays a stored field (Empty, Queued, Deferred, Ready), set from the ticket by
+  `Collect`; a Deferred buffer (declined by the loader) is read by `ReadNow` when decode needs
+  it, after waiting out the other buffer's loader read on the same descriptor.
+- **Chunking (b) can't keep every read one cluster command for stereo ADPCM**: the 2 KB header
+  leaves every 4 KB chunk group 2 KB off a 4 KB boundary, so no group-aligned request starts on a
+  32 KB one. Requests are 32 KB of whole groups anyway, and the loader splits each at the boundary
+  it crosses: two reads per 1.3 s against five for 8 KB requests. A carry of the partial group
+  into the next buffer would fix it, at a cost in the decoder not worth one USB command a second.
+- **The seek cache keeps its slot key**; a new `Request::sequential` lets a client say its
+  requests follow one another on a descriptor nothing else moves, and then any slot's cached
+  position counts. Dropping the slot outright would trust the cache across a descriptor number
+  reused after a close, or a file the main thread read before handing it over (the music's own
+  header reads). The music sets it except after `Open` and a `ReadNow`; the read-ahead ring sets
+  it after its first request. A failed call now clears the cached descriptor too.
+- `MusicReadPending()` is gone: the keyboard guard is `aio::Pending()` alone, and snd.cpp's HDD
+  hold `aio::FileCallInFlight()` alone.
+
+PCSX2 gates met: the hash test (audio.md: all 12 pass hashes of four synthetic tracks equal to
+HEAD's, with the loader and with `ps2_aio 0`); a throttled perf capture with Music, SndMix and
+Input unchanged on the demo segments and the music landing as one 32 KB request every ~1.25 s;
+the MapCycle (memory-budget.md: `Mus` 64 KB, worst moment 30.40 MB). **Still owed: a console USB
+run with `in_keyboard 1`** showing no Input stalls.
+
 **What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
 stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in
 turn (`Empty → Pending → Ready`), `RotateThreadReadyQueue` yields after every `RequestNext` and

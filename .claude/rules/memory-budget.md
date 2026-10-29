@@ -85,6 +85,10 @@ paths:
   the lowest free point 1.30 → 1.20 MB. The first step is the code and statics of stages 1-6, the
   second the 40 KB inflate workspace, allocated by the first deflated mid-level request of the run
   (a dwell's sound or skin) and kept. Nothing else of the loader shows in a load.
+  **MapCycle 2026-10-29** (`mapcycle-music-aio`, the music on the loader, plan §12.1): `Mus`
+  16 → 64 KB on every level (two 32 KB ADPCM buffers while a track plays), so live totals
+  +0.03-0.05 MB; load peaks -0.01 to +0.04 MB (the music opens while the plaque is still up, so a
+  peak late in a load can include it); worst moment 30.41 → 30.40 MB, lowest free 1.20 → 1.19 MB.
 - `pics/*` are never freed. A stray key press that opens a menu shows up as extra Tex in a
   cycle (e.g. `pics/inventory.pcx`, 48 KB).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which saves ~9 KB of

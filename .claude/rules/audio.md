@@ -20,21 +20,28 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   buggy: it re-reads the header as ADPCM, `DeleteThread`s itself at EOF, and doesn't loop. And
   audsrv owns SPU2 core 1 and zeroes core 0's MVOL. A hardware-voice path means a custom IRX,
   which is deferred.
-- **Mechanics:** a reader thread at the main thread's priority (1, so it never preempts),
-  two read buffers from `TryAllocAligned(64)` under `MemTag::Music`, allocated when a track
-  opens and freed when it closes (the loading plaque stops music, so they are never held
-  across a level load). The main thread yields with `RotateThreadReadyQueue` after
-  queueing. Decode tops `s_rawsamples` up to `paintedtime + 7680` in `CDAudio_Update` (after
+- **Mechanics:** two read buffers from `TryAllocAligned(64)` under `MemTag::Music`, allocated
+  when a track opens and freed when it closes (the loading plaque stops music, so they are never
+  held across a level load), each filled by a background-loader request (fs/async_io.h) at
+  `Priority::Stream`, submitted the moment the decode side releases it and polled when decode
+  comes back round (plan §12.1, 2026-10-29; a reader thread of its own at the main thread's
+  priority before). ADPCM requests are 32 KB, one loader chunk, ~1.3 s: the 2 KB header leaves
+  every stereo group 2 KB off a 4 KB boundary, so each request crosses one 32 KB boundary of the
+  file and takes two reads, against five per 32 KB for the old 8 KB requests. Requests are
+  marked `sequential`, so the loader skips the lseek between them. A request the loader declines
+  (`ps2_aio 0`, every slot taken) is read on the main thread when decode needs it. Decode tops `s_rawsamples` up to `paintedtime + 7680` in `CDAudio_Update` (after
   `S_Update`), through the cinematics' raw-sample channel, so it costs no extra SIF bandwidth.
   The loop to the ambient track uses stream pass counts, and the wraps are seamless (verified
   bit-exact on target by hash). Behaviour follows id's `cd_win.c` (`cd_loopcount`,
   `cd_looptrack`).
 - **A main-thread file call waits out a music read.** The SDK file client and the IOP's file
   server take one request at a time. So anything the main thread reads or writes while the
-  reader has a read out waits for it, and on a console USB drive that took ~300 ms. The USB
+  music's read is out waits for it, and on a console USB drive that took ~300 ms (the reader
+  thread's 8 KB reads, 2026-10-10). The USB
   keyboard poll is a `read()` on `usbkbd:dev` every frame. A 2026-10-10 console capture showed
   it stalling a frame every 640 ms: 83 s of 171 s of gameplay. It now skips while
-  `audio::MusicReadPending()`, and the driver keeps the keys queued until then. A console run
+  `aio::Pending()` (the music's reads are loader requests since 2026-10-29; `MusicReadPending()`
+  covered them before), and the driver keeps the keys queued until then. A console run
   with the keyboard off confirmed the cause, and one with it on and these fixes confirmed the
   cure: no stalls either way. It also polls
   only four times a second unless a key arrived in the last 10 s or is held (keyboard.h), and
@@ -45,9 +52,9 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
 - **On the HDD, the submit waits out another thread's read.** `audsrv_available` and
   `audsrv_play_audio` are synchronous RPCs, and on the IOP audsrv's RPC thread shares priority 40
   with fileXio's, with no time slicing. From the HDD a read in flight on the loader or the music
-  reader held them 8-44 ms in 2% of the rows with a read (console, 2026-10-28; performance.md);
+  reader (now a loader client too) held them 8-44 ms in 2% of the rows with a read (console, 2026-10-28; performance.md);
   from USB never. It never empties the ring, but costs a field. Since 2026-10-29 snd.cpp holds
-  the submit back while `aio::FileCallInFlight()` or `MusicReadPending()`, if the last submit is
+  the submit back while `aio::FileCallInFlight()` (`|| MusicReadPending()` until §12.1), if the last submit is
   under 30 ms old (one 50 Hz frame), on the HDD only (`ps2_sound_defer`; plan §12.4). Forced on in
   a throttled PCSX2 run it held 38% of ntro's submits, never two in a row, and the ring's lowest
   point matched the run without it. On the console from the HDD (2026-10-29) the stalls went from
@@ -123,13 +130,20 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   came from keeping the ADPCM history in locals (to dodge `-fno-strict-aliasing` spills) and
   unrolling per byte. A 44.1 kHz WAV about 274 µs mean (348 µs p50), the decimator being most
   of it. SndMix dropped by 60 µs when music arrived (it copies the ring instead of a memset).
-  0 dropped frames either way. Static footprint ~12 KB (the 8 KB reader stack is a static
-  member, so it stays in .bss; as an object member the constant-initialized stream put it in
-  .data).
+  0 dropped frames either way. Moving the reads to the loader (2026-10-29) took 8 KB off .bss
+  (the reader's static stack) and 272 bytes off .text; the stream object is 384 bytes of .data.
 - **Verified on target by hash** (scripted, no map needed: music plays at the console): ADPCM
   wraps; a 44.1 kHz WAV looped 3 passes through the decimator; an extensible mono 22 kHz WAV
   with an oversized data length; a forced allocation failure (warning, silence, no leak); and
-  `.adp` winning over a `.wav` beside it.
+  `.adp` winning over a `.wav` beside it. Re-run for the loader move (2026-10-29), against HEAD built
+  beside the tree: a temporary patch to cd_audio.cpp wrapped the three `s_stream.Decode` calls in
+  an FNV-1a hash of every frame, printed at each multiple of `FrameCount()`, and walked tracks
+  90-93 itself from `CDAudio_Update` (3 passes each with `cd_loopcount 3`, `alias d1 ""`, then
+  `quit`); synthetic files from a Python sine-plus-noise WAV writer and `musenc` (a 5.37 s stereo
+  `.adp` ending in a part request, a 3.13 s 44.1 kHz stereo WAV, a 2.71 s extensible mono WAV
+  with a LIST chunk and an oversized data length, a `.adp` beside a `.wav`). All 12 pass hashes
+  matched HEAD, with the loader and with `ps2_aio 0`. Run such an ELF from a short path (under
+  `build/`): from the scratchpad's long one PCSX2 died in the kernel before `main`.
 - **Mid-level sound effects load in the background** (`sound_load.{h,cpp}`, 2026-10-26, stage 4 of
   the background-loading plan): `S_LoadSound` outside registration submits the WAV to `ps2::aio`
   at `Priority::Sound` into a 64-aligned staging buffer (tag `Aio`, 8 in flight at most), and

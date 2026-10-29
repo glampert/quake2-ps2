@@ -8,12 +8,15 @@
  *  in-order CPU, so that is all the ordering the handoff needs (the kernel switches threads, it
  *  never runs them at once). Nothing here locks.
  *
- *  Only the loader reads the drive. It keeps where each descriptor is after its last read, so the
- *  chunks of one request skip their lseek: on USB every call to the IOP's file server costs a
- *  SCSI command's latency, and a 32 KB chunk is one command when it starts on a cluster. A
- *  request always seeks for its first chunk, since a descriptor can be shared by several
- *  requests (every pak file comes through one) and the main thread's streams may move the pak's
- *  stdio handle, which is a different descriptor anyway.
+ *  Only the loader reads the drive. It keeps where the descriptor it last read is, so the chunks
+ *  of one request skip their lseek: on USB every call to the IOP's file server costs a SCSI
+ *  command's latency, and a 32 KB chunk is one command when it starts on a cluster. A request's
+ *  first chunk seeks unless the client marked it sequential (Request::sequential: the music and
+ *  the read-ahead ring, whose requests follow one another on a descriptor only the loader
+ *  moves), and then only when the cache says the position is elsewhere - another request on the
+ *  same pak descriptor came between, or the stream wrapped. Unmarked, a request always seeks:
+ *  a descriptor number can come back from a close as a different file, and the main thread may
+ *  have read a file before handing it over.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -55,6 +58,7 @@ struct Slot
     u32            rawBytes  = 0;
     u8 *           dest      = nullptr;
     u32            destBytes = 0;
+    bool           sequential = false;
     volatile u32   bytesDone = 0; // loader writes, main reads
     volatile int   result    = 0; // loader writes, main reads
     volatile u32   ioCycles  = 0; // loader writes, main reads
@@ -133,10 +137,12 @@ u32 ChunkEnd(const u32 pos, const u32 rangeEnd)
     return (boundary < rangeEnd) ? boundary : rangeEnd;
 }
 
-// Reads [pos, pos + bytes) of fd into dest, for slot 'slot'. 0, or a kErr code.
-int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 bytes, volatile u32 & ioCycles)
+// Reads [pos, pos + bytes) of fd into dest, for slot 'slot'. The cached position stands for the
+// slot's own earlier chunks, and for any slot's when the request is sequential. 0, or a kErr code.
+int ReadRange(const int slot, const bool sequential, const int fd, const u32 pos, u8 * dest, const u32 bytes,
+              volatile u32 & ioCycles)
 {
-    if (slot != s_cacheSlot || fd != s_cacheFd || pos != s_cachePos)
+    if ((slot != s_cacheSlot && !sequential) || fd != s_cacheFd || pos != s_cachePos)
     {
         s_inFileCall = true;
         const off_t at = lseek(fd, static_cast<off_t>(pos), SEEK_SET);
@@ -144,12 +150,13 @@ int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 
         if (at != static_cast<off_t>(pos))
         {
             s_cacheSlot = -1;
+            s_cacheFd   = -1; // where a failed call left it is anyone's guess
             return kErrSeek;
         }
-        s_cacheSlot = slot;
-        s_cacheFd   = fd;
-        s_cachePos  = pos;
+        s_cacheFd  = fd;
+        s_cachePos = pos;
     }
+    s_cacheSlot = slot; // a sequential request's chunks may have skipped the seek above
 
     u32 left = bytes;
     while (left != 0)
@@ -165,6 +172,7 @@ int ReadRange(const int slot, const int fd, const u32 pos, u8 * dest, const u32 
         if (n <= 0)
         {
             s_cacheSlot = -1;
+            s_cacheFd   = -1; // where a failed call left it is anyone's guess
             return kErrRead;
         }
         dest       += n;
@@ -188,7 +196,7 @@ void RunReadChunk(const int slot, Slot & s)
     const u32 pos  = s.offset + done;
     const u32 n    = ChunkEnd(pos, s.offset + s.bytes) - pos;
 
-    const int err = ReadRange(slot, s.fd, pos, s.dest + done, n, s.ioCycles);
+    const int err = ReadRange(slot, s.sequential, s.fd, pos, s.dest + done, n, s.ioCycles);
     if (err != 0)
     {
         Finish(s, err);
@@ -226,7 +234,7 @@ void RunInflateChunk(const int slot, Slot & s)
         ws.inBytes    = ChunkEnd(pos, s.offset + s.bytes) - pos;
         ws.inPos      = 0;
 
-        const int err = ReadRange(slot, s.fd, pos, ws.input, ws.inBytes, s.ioCycles);
+        const int err = ReadRange(slot, false, s.fd, pos, ws.input, ws.inBytes, s.ioCycles);
         if (err != 0)
         {
             ws.owner = -1;
@@ -529,6 +537,7 @@ Ticket Submit(const Request & request)
         s.rawBytes  = request.rawBytes;
         s.dest      = static_cast<u8 *>(request.dest);
         s.destBytes = request.destBytes;
+        s.sequential = (request.kind == Kind::Read) && request.sequential;
         s.bytesDone = 0;
         s.result    = 0;
         s.ioCycles  = 0;

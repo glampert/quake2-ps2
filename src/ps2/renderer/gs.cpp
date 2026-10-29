@@ -285,8 +285,8 @@ void SeedClutBuffer()
 // the 8-11 ms a frame leaves before its field ends. The main thread sleeps instead: the EE INTC's
 // vblank-start line (INTC_VBLANK_S, the same edge the spin watched) signals this semaphore from
 // an interrupt handler, and the kernel resumes the waiter at the handler's exit - microseconds,
-// well inside the blanking interval the DISPFB write needs. The lower-priority threads, the
-// music reader today and the asset loader to come, run in the time the spin burned.
+// well inside the blanking interval the DISPFB write needs. The background loader (fs/async_io.h,
+// the music's reads included) runs in the time the spin burned.
 static s32           s_vblankSema      = -1;
 static int           s_vblankHandlerId = -1;
 static const cvar_t * s_vsyncSpin      = nullptr; // ps2_vsync_spin: 1 brings the spin back, for an A/B

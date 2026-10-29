@@ -64,6 +64,7 @@ struct Stream
     u32           nextOffset; // the next file offset to submit
     u32           position;   // the reader's position in the file
     bool          failed;
+    bool          submitted;  // a request has gone out on loc.fd
     char          name[MAX_QPATH];
 };
 
@@ -104,6 +105,11 @@ bool SubmitSlot(Stream & s, const int slot)
     request.dest      = SlotBuffer(s, slot);
     request.destBytes = kSlotBytes;
 
+    // Each slot's range follows the one before on a descriptor only the loader reads, so the
+    // loader skips the lseek unless something else read it in between. Not the first after the
+    // open: the descriptor number may have been another file's.
+    request.sequential = s.submitted;
+
     sl.ticket = aio::Submit(request);
     if (!sl.ticket.IsValid())
     {
@@ -113,6 +119,7 @@ bool SubmitSlot(Stream & s, const int slot)
     sl.bytes      = request.bytes;
     s.nextOffset  = end;
     s.inFlight   += 1;
+    s.submitted   = true;
     return true;
 }
 

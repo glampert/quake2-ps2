@@ -57,8 +57,9 @@ static char  s_path[MAX_OSPATH];
 static char  s_header[MAX_OSPATH + 96]; // the first line; kept for a fatal report with the log off
 static const cvar_t * s_logEnabled = nullptr;
 
-// Serializes writers: the music stream's reader thread prints too. The owner is what lets a
-// fatal path tell its own thread's interrupted write from another thread's.
+// Serializes writers, for any thread that prints (the music stream's reader thread once did; the
+// background loader never does). The owner is what lets a fatal path tell its own thread's
+// interrupted write from another thread's.
 static int s_lockSema  = -1;
 static int s_lockOwner = -1;
 

@@ -5,7 +5,7 @@
  *        never holding more of it in memory than two read buffers. Two formats:
  *
  *         - baseq2/music/trackNN.adp, SPU2 ADPCM (layout in spu_adpcm.h), what `make music`
- *           produces: two 8 KB buffers hold ~650 ms at 22050Hz.
+ *           produces: two 32 KB buffers hold ~2.6 s at 22050Hz.
  *         - baseq2/music/trackNN.wav, 16-bit PCM, mono or stereo, the fallback for when
  *           the .adp hasn't been made. 3.5x the bytes per second (7x for a 44.1kHz CD rip),
  *           so its buffers grow with the byte rate - two of up to 64 KB, ~740 ms of a CD rip.
@@ -20,12 +20,12 @@
  *        The reads are what make this more than a decoder. Every file read is a SIF RPC to
  *        the IOP that puts its caller to sleep until the data lands, and on a USB stick one
  *        can take tens of milliseconds - a dropped frame if the main loop issued it. So they
- *        come from a reader thread instead, at the main thread's own priority: it never
- *        preempts frame work, it just gets the CPU whenever the main thread sleeps, which
- *        happens several times a frame (the audsrv RPCs in SNDDMA_Submit, any file I/O), and
- *        whenever MusicStream yields to it explicitly after queueing a read. Both SDK file
- *        clients (fio for host:, fileXio for pfs:/mass:) serialize their RPCs with semaphores, so
- *        the reader can share them with the main thread's own file I/O safely.
+ *        go to the background loader (fs/async_io.h) at its Stream priority, a buffer at a
+ *        time, and the decode side picks each one up once it has landed. The loader runs only
+ *        while the main thread sleeps, and its queries (aio::Pending, aio::FileCallInFlight)
+ *        cover these reads for the code that must not make an IOP call behind one. If the
+ *        loader declines a read (ps2_aio 0, or every request slot taken), the main thread
+ *        makes it itself when the buffer is needed, as this stream did before it had a reader.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -33,6 +33,7 @@
 #include <cstddef>
 #include <tamtypes.h>
 #include "ps2/audio/spu_adpcm.h"
+#include "ps2/fs/async_io.h"
 
 namespace ps2::audio {
 
@@ -52,14 +53,14 @@ public:
 
     // Opens `path` and primes the stream. The format comes from the file's own header
     // ("Q2MU" or RIFF/WAVE), not its extension. Blocking: the open, the header reads and the
-    // first payload read all complete before it returns (Play normally lands inside a level
+    // first payload read (the loader's, waited for) all complete before it returns (Play normally lands inside a level
     // load, and waiting for the first buffer lets the music start on the very next frame).
     // `extraLoops` is how many times to wrap back to the start after the first pass - 0 plays
     // it once, kLoopForever never ends. A wrap is seamless: the reads run ahead across it.
     OpenResult Open(const char * path, int extraLoops);
 
-    // Closes the file, if open, and frees its buffers. Blocks for at most the one read in
-    // flight.
+    // Closes the file, if open, and frees its buffers. Blocks for at most the one loader chunk
+    // in flight on it.
     void Close();
 
     bool IsOpen() const { return m_fd >= 0; }
@@ -88,15 +89,8 @@ public:
     // Seamless wraps back to the start since the last call.
     int TakeWraps();
 
-    // True while a buffer is queued for the reader thread or being read. A file call the main
-    // thread makes meanwhile goes through the same SDK client and the same single-threaded IOP
-    // file server, so it waits for the read to land. On a console USB drive that has been over
-    // 300 ms (see MusicReadPending).
-    bool ReadPending() const;
-
 private:
     static constexpr int kNumBuffers = 2;
-    static constexpr int kStackBytes = 8 * 1024;
 
     // Header reads go through this: the RIFF chunk walk and the "Q2MU" header both fit.
     static constexpr int kScratchBytes = 64;
@@ -109,9 +103,10 @@ private:
 
     enum class BufferState : int
     {
-        Empty,   // Free. Owned by the main thread.
-        Pending, // Queued or being read. Owned by the reader thread.
-        Ready,   // Holds data. Owned by the main thread.
+        Empty,    // No read asked for.
+        Queued,   // With the loader, under 'ticket': the loader owns 'data' until it lands.
+        Deferred, // The loader declined it: the main thread reads it when it is needed.
+        Ready,    // Landed (or failed): resultBytes says which.
     };
 
     struct Buffer
@@ -124,15 +119,11 @@ private:
 
         u32 payloadOffset = 0; // Where data[0] sits in the payload.
         int requestBytes  = 0;
+        int resultBytes   = 0; // Bytes read, or negative; once Ready.
 
-        // Written by the reader thread, read by the main thread.
-        volatile int         resultBytes = 0;
-        volatile BufferState state       = BufferState::Empty;
+        aio::Ticket ticket;
+        BufferState state = BufferState::Empty;
     };
-
-    bool StartReaderThread();
-    static void ReaderEntry(void * self);
-    void ReaderLoop();
 
     int ReadScratch(int fd, u32 filePos, int sizeBytes);
     const char * ParseAdpcmHeader();
@@ -141,8 +132,9 @@ private:
     void FreeBuffers();
 
     void RequestNext(int bufferIndex);
-    void WaitForReads();
-    void YieldToReader() const;
+    bool Collect(Buffer & buffer, bool wait);
+    void ReadNow(Buffer & buffer);
+    void CancelReads();
 
     bool BufferReady();
     bool AcquireBuffer();
@@ -174,16 +166,13 @@ private:
     size_t m_bufferMemoryBytes = 0;
     int    m_readBytes         = 0;       // Full read size: whole chunk groups or frames.
 
-    // --- Request side (main thread) -------------------------------------------------------
-    u32 m_nextOffset       = 0; // Next payload offset to read.
-    int m_requestLoopsLeft = 0; // Wraps the reads may still take.
-    int m_requestIndex     = 0; // Buffer the next request goes into.
+    // --- Requests --------------------------------------------------------------------------
+    u32  m_nextOffset       = 0;     // Next payload offset to read.
+    int  m_requestLoopsLeft = 0;     // Wraps the reads may still take.
+    int  m_requestIndex     = 0;     // Buffer the next request goes into.
+    bool m_fdMoved          = true;  // The main thread read m_fd since the last request went out.
 
-    // --- Reader side (reader thread; reset by the main thread only while it is idle) ------
-    int m_readerIndex   = 0;
-    u32 m_readerFilePos = 0;
-
-    // --- Decode side (main thread) --------------------------------------------------------
+    // --- Decoding --------------------------------------------------------------------------
     int  m_decodeIndex     = 0;     // Buffer being decoded, once m_haveBuffer.
     bool m_haveBuffer      = false;
     int  m_unitPos         = 0;     // Next ADPCM block (per channel) or PCM frame in it.
@@ -201,27 +190,9 @@ private:
     int m_blockFrames = 0;
     int m_blockPos    = 0;
 
-    // --- Reader thread --------------------------------------------------------------------
-    int m_threadId    = -1;
-    int m_priority    = 0;
-    int m_requestSema = -1; // Counts queued requests.
-    int m_doneSema    = -1; // Signaled after every completed read.
-
     alignas(64) u8 m_scratch[kScratchBytes] = {};
-
-    // The reader thread's stack. Static, so it lives in .bss rather than as 8 KB of zeros in
-    // the ELF's .data with the rest of the (constant-initialized) object - which works because
-    // there is one MusicStream in the program, cd_audio.cpp's (StartReaderThread checks).
-    alignas(16) static u8 s_readerStack[kStackBytes];
 
     Buffer m_buffers[kNumBuffers];
 };
-
-// Whether the game's music stream (cd_audio.cpp owns the one there is) has a read queued or in
-// flight: MusicStream::ReadPending on it. For the main thread's per-frame file calls - the USB
-// keyboard poll is a read() on the usbkbd:dev device file - which would otherwise wait out a
-// music read inside the frame. On a console that was a 300 ms stall every 640 ms; host: reads
-// are too quick for PCSX2 to show it.
-bool MusicReadPending();
 
 } // namespace ps2::audio

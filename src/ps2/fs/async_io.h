@@ -87,6 +87,13 @@ struct Request
     void *   dest      = nullptr; // 64-aligned; destBytes >= RoundUp64(what is delivered)
     u32      destBytes = 0;
     u32      rawBytes  = 0; // InflateWhole: the inflated size, what is delivered. Read: ignored (bytes).
+
+    // Read: the range starts where this client's previous request on fd ended, and nothing but
+    // the loader has moved fd's position since (the descriptor is the client's alone, and still
+    // the same open file). The loader may then skip its lseek when its own last read on fd ended
+    // there. Without it a request's first chunk always seeks: a descriptor number can be reused
+    // after a close, and the main thread may read a file before handing it over.
+    bool     sequential = false;
 };
 
 // What Submit hands back. A default one is invalid; one from a Released slot goes stale, and
@@ -135,7 +142,7 @@ void Cancel(Ticket ticket);
 void Drain();
 
 // True while any request is Queued or Running: a main-thread file call made now waits behind
-// the chunk in flight (the keyboard poll's guard, beside MusicReadPending()).
+// the chunk in flight (the keyboard poll's guard).
 bool Pending();
 
 // True while the loader is inside a file call (lseek or read, or the throttle standing in for

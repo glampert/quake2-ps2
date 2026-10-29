@@ -2,12 +2,11 @@
  * File: music_stream.cpp
  * Brief: Streamed music, SPU2 ADPCM or 16-bit PCM WAV. See music_stream.h.
  *
- *  The read buffers cycle Empty -> Pending -> Ready -> Empty, always in index order, which
- *  is what lets the request queue get away with no storage of its own: the main thread
- *  fills in a buffer's request, marks it Pending and signals m_requestSema; the reader
- *  thread serves buffers strictly in turn, marks each one Ready and signals m_doneSema.
- *  The state is written last on both sides, so whichever thread reads it sees the rest of
- *  the buffer already in place (one core, and the kernel calls around it keep the order).
+ *  The read buffers cycle Empty -> Queued -> Ready -> Empty, always in index order: a
+ *  released buffer is asked for the next range of the payload at once, as a loader request
+ *  at Priority::Stream, and the decode side polls its ticket when it comes round to it. The
+ *  loader serves Stream requests oldest first, so the two land in order. Everything here runs
+ *  on the main thread; the loader only fills the buffer a ticket names (async_io.h's rules).
  *
  *  Both formats stream the same way - a payload read in whole units, chunk groups or
  *  frames - and differ only in how a buffer turns into frames. ADPCM decoding walks the
@@ -23,7 +22,6 @@
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
-#include <kernel.h>
 
 namespace ps2::audio {
 namespace {
@@ -32,20 +30,19 @@ using ps2::heap::MemTag;
 
 constexpr int kBlockBytes = spu_adpcm::kBlockBytes;
 
-// ADPCM reads: two chunk groups of a stereo file (8 KB), ~325 ms at 22050Hz.
-constexpr int kAdpcmReadBytes = 8 * 1024;
+// ADPCM reads: one loader chunk, eight chunk groups of a stereo file (32 KB), ~1.3 s at
+// 22050Hz. The 2 KB header puts every group 2 KB off a 4 KB boundary of the file, so a stereo
+// request spans one 32 KB boundary and the loader reads it in two: two reads per 1.3 s, where
+// 8 KB requests made five (one in four of them crossing a boundary).
+constexpr int kAdpcmReadBytes = static_cast<int>(aio::kChunkBytes);
 
-// PCM reads aim at ~3/8 s each, like the ADPCM pair's ~650 ms in flight, within these.
-// The cap is a 44.1kHz stereo CD rip: two 64 KB buffers, ~740 ms.
+// PCM reads aim at ~3/8 s each within these, whole 4 KB pages. The cap is a 44.1kHz stereo
+// CD rip: two 64 KB buffers, ~740 ms.
 constexpr int kPcmMinReadBytes = 8 * 1024;
 constexpr int kPcmMaxReadBytes = 64 * 1024;
 
 // RIFF chunks walked looking for "data" before calling the file malformed.
 constexpr int kMaxWavChunks = 32;
-
-// Reader file position when it isn't known (after a failed read, or the header reads):
-// forces a seek.
-constexpr u32 kUnknownFilePos = ~0u;
 
 u32 LoadLe16(const u8 * const p)
 {
@@ -69,111 +66,8 @@ int RoundUp(const int value, const int multiple)
 
 } // namespace
 
-alignas(16) u8 MusicStream::s_readerStack[MusicStream::kStackBytes];
-
 // ------------------------------------------------------------------------------------------------
-// Reader thread
-// ------------------------------------------------------------------------------------------------
-
-bool MusicStream::StartReaderThread()
-{
-    if (m_threadId >= 0)
-    {
-        return true;
-    }
-
-    // s_readerStack can only back one reader thread.
-    static bool s_stackTaken = false;
-    PS2_AssertMsg(!s_stackTaken, "MusicStream: only one instance can have a reader thread");
-    s_stackTaken = true;
-
-    // The reader runs at the main thread's priority: equal priority never preempts, so it
-    // only ever takes the CPU the main thread gives up (see the header note).
-    ee_thread_status_t mainStatus = {};
-    if (ReferThreadStatus(GetThreadId(), &mainStatus) < 0)
-    {
-        Com_Printf("WARNING: MusicStream: can't read the main thread's priority.\n");
-        return false;
-    }
-    m_priority = mainStatus.current_priority;
-
-    ee_sema_t sema  = {};
-    sema.init_count = 0;
-    sema.max_count  = kNumBuffers;
-    m_requestSema   = CreateSema(&sema);
-    m_doneSema      = CreateSema(&sema);
-
-    ee_thread_t thread      = {};
-    thread.func             = reinterpret_cast<void *>(&MusicStream::ReaderEntry);
-    thread.stack            = s_readerStack;
-    thread.stack_size       = kStackBytes;
-    thread.gp_reg           = &_gp;
-    thread.initial_priority = m_priority;
-
-    if (m_requestSema >= 0 && m_doneSema >= 0)
-    {
-        m_threadId = CreateThread(&thread);
-    }
-
-    if (m_threadId < 0 || StartThread(m_threadId, this) < 0)
-    {
-        Com_Printf("WARNING: MusicStream: can't start the reader thread.\n");
-        if (m_threadId >= 0)
-        {
-            DeleteThread(m_threadId);
-            m_threadId = -1;
-        }
-        if (m_requestSema >= 0)
-        {
-            DeleteSema(m_requestSema);
-            m_requestSema = -1;
-        }
-        if (m_doneSema >= 0)
-        {
-            DeleteSema(m_doneSema);
-            m_doneSema = -1;
-        }
-        return false;
-    }
-    return true;
-}
-
-void MusicStream::ReaderEntry(void * const self)
-{
-    static_cast<MusicStream *>(self)->ReaderLoop();
-}
-
-void MusicStream::ReaderLoop()
-{
-    // Never returns: the thread lives as long as the program, idle in WaitSema between
-    // tracks, so opening one never pays for thread creation.
-    for (;;)
-    {
-        WaitSema(m_requestSema);
-
-        Buffer & buffer = m_buffers[m_readerIndex];
-        m_readerIndex = (m_readerIndex + 1) % kNumBuffers;
-
-        // Sequential reads skip the seek; only the first read, a loop wrap or a failure
-        // needs one.
-        const u32 filePos = m_payloadStart + buffer.payloadOffset;
-        int result = -1;
-
-        if (filePos == m_readerFilePos ||
-            lseek(m_fd, static_cast<off_t>(filePos), SEEK_SET) == static_cast<off_t>(filePos))
-        {
-            result = static_cast<int>(read(m_fd, buffer.data, static_cast<size_t>(buffer.requestBytes)));
-        }
-        m_readerFilePos = (result > 0) ? (filePos + static_cast<u32>(result)) : kUnknownFilePos;
-
-        buffer.resultBytes = result;
-        buffer.state       = BufferState::Ready;
-        SignalSema(m_doneSema);
-    }
-}
-
-// ------------------------------------------------------------------------------------------------
-// Requests (main thread)
+// Requests
 // ------------------------------------------------------------------------------------------------
 
 void MusicStream::RequestNext(const int bufferIndex)
@@ -205,35 +99,99 @@ void MusicStream::RequestNext(const int bufferIndex)
     m_nextOffset  += static_cast<u32>(buffer.requestBytes);
     m_requestIndex = (m_requestIndex + 1) % kNumBuffers;
 
-    buffer.state = BufferState::Pending;
-    SignalSema(m_requestSema);
+    // The buffer is a whole number of cache lines (AllocateBuffers' stride), so the rounded
+    // size the loader may write is all its own.
+    aio::Request request;
+    request.kind       = aio::Kind::Read;
+    request.prio       = aio::Priority::Stream;
+    request.fd         = m_fd;
+    request.offset     = m_payloadStart + buffer.payloadOffset;
+    request.bytes      = static_cast<u32>(buffer.requestBytes);
+    request.dest       = buffer.data;
+    request.destBytes  = aio::RoundUp64(request.bytes);
+    request.sequential = !m_fdMoved; // the reads follow one another, but for a wrap
+
+    buffer.ticket = aio::Submit(request);
+    if (buffer.ticket.IsValid())
+    {
+        buffer.state = BufferState::Queued;
+        m_fdMoved    = false;
+    }
+    else
+    {
+        buffer.state = BufferState::Deferred;
+    }
 }
 
-void MusicStream::WaitForReads()
+bool MusicStream::Collect(Buffer & buffer, const bool wait)
 {
-    // m_doneSema can carry a stale count from a read whose Ready state was already seen,
-    // so each wake re-checks rather than trusting the count.
-    for (Buffer & buffer : m_buffers)
+    if (buffer.state == BufferState::Queued)
     {
-        while (buffer.state == BufferState::Pending)
+        if (wait)
         {
-            WaitSema(m_doneSema);
+            aio::Wait(buffer.ticket);
+        }
+
+        const aio::State state = aio::Poll(buffer.ticket);
+        if (state == aio::State::Queued || state == aio::State::Running)
+        {
+            return false;
+        }
+
+        // Done: the bytes delivered. Failed: a negative code, reported by AcquireBuffer.
+        buffer.resultBytes = (state == aio::State::Free) ? -1 : aio::Result(buffer.ticket);
+        aio::Release(buffer.ticket);
+        buffer.ticket = {};
+        buffer.state  = BufferState::Ready;
+    }
+    else if (buffer.state == BufferState::Deferred)
+    {
+        ReadNow(buffer);
+    }
+    return buffer.state == BufferState::Ready;
+}
+
+void MusicStream::ReadNow(Buffer & buffer)
+{
+    // The loader may have the other buffer's read in flight on this descriptor: let it land
+    // first, so the two never move the file position under each other.
+    for (Buffer & other : m_buffers)
+    {
+        if (&other != &buffer && other.state == BufferState::Queued)
+        {
+            Collect(other, true);
         }
     }
-    while (PollSema(m_doneSema) >= 0)
+
+    const u32 filePos = m_payloadStart + buffer.payloadOffset;
+    int result = -1;
+    if (lseek(m_fd, static_cast<off_t>(filePos), SEEK_SET) == static_cast<off_t>(filePos))
     {
+        result = static_cast<int>(read(m_fd, buffer.data, static_cast<size_t>(buffer.requestBytes)));
     }
+
+    buffer.resultBytes = result;
+    buffer.state       = BufferState::Ready;
+    m_fdMoved          = true;
 }
 
-void MusicStream::YieldToReader() const
+void MusicStream::CancelReads()
 {
-    // Hands the CPU to the reader if it is ready to run - with a request to start or a
-    // completed read to hand back - and comes straight back once it sleeps again.
-    RotateThreadReadyQueue(m_priority);
+    // Cancel drops a request the loader hasn't started, waits out the chunk of one it has
+    // (into these buffers, on this descriptor), and releases one that has landed.
+    for (Buffer & buffer : m_buffers)
+    {
+        if (buffer.state == BufferState::Queued)
+        {
+            aio::Cancel(buffer.ticket);
+            buffer.ticket = {};
+        }
+        buffer.state = BufferState::Empty;
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
-// Headers (main thread, reader idle)
+// Headers (before any read is asked for)
 // ------------------------------------------------------------------------------------------------
 
 int MusicStream::ReadScratch(const int fd, const u32 filePos, const int sizeBytes)
@@ -443,11 +401,6 @@ MusicStream::OpenResult MusicStream::Open(const char * const path, const int ext
 {
     Close();
 
-    if (!StartReaderThread())
-    {
-        return OpenResult::Unusable;
-    }
-
     const int fd = open(path, O_RDONLY);
     if (fd < 0)
     {
@@ -486,10 +439,8 @@ MusicStream::OpenResult MusicStream::Open(const char * const path, const int ext
 
     m_fd = fd;
 
-    // The reader is idle (Close() waited it out), so its side can be reset from here. The
-    // header reads left the file position wherever they did, so its first read seeks.
-    m_readerIndex   = 0;
-    m_readerFilePos = kUnknownFilePos;
+    // The header reads left the file position wherever they did, so the first read seeks.
+    m_fdMoved = true;
 
     m_nextOffset       = 0;
     m_requestLoopsLeft = extraLoops;
@@ -517,12 +468,9 @@ MusicStream::OpenResult MusicStream::Open(const char * const path, const int ext
         RequestNext(i);
     }
 
-    // Sleeping here is what lets the reader run: it issues the first read, sleeps on it,
-    // wakes when it lands and signals us, then carries straight on with the second.
-    while (m_buffers[0].state == BufferState::Pending)
-    {
-        WaitSema(m_doneSema);
-    }
+    // Sleeping here is what lets the loader run: the first buffer lands before this returns,
+    // the second carries on behind it.
+    Collect(m_buffers[0], true);
     return OpenResult::Opened;
 }
 
@@ -533,16 +481,11 @@ void MusicStream::Close()
         return;
     }
 
-    // The reader may be inside read() on this fd - and into these buffers - right now.
-    WaitForReads();
+    // The loader may be inside read() on this fd - and into these buffers - right now.
+    CancelReads();
 
     close(m_fd);
     m_fd = -1;
-
-    for (Buffer & buffer : m_buffers)
-    {
-        buffer.state = BufferState::Empty;
-    }
     FreeBuffers();
 
     m_haveBuffer = false;
@@ -561,9 +504,9 @@ const char * MusicStream::FormatName() const
 
 bool MusicStream::AcquireBuffer()
 {
-    const Buffer & buffer = m_buffers[m_decodeIndex];
+    Buffer & buffer = m_buffers[m_decodeIndex];
 
-    if (buffer.state == BufferState::Pending)
+    if (!Collect(buffer, false) && buffer.state == BufferState::Queued)
     {
         return false; // Not landed yet; try again next frame.
     }
@@ -592,10 +535,9 @@ void MusicStream::ReleaseBuffer()
     m_haveBuffer  = false;
     m_decodeIndex = (m_decodeIndex + 1) % kNumBuffers;
 
-    // Refill it straight away, and get the read going now rather than at the main thread's
-    // next sleep.
+    // Refill it straight away. The loader starts on it when the main thread next sleeps,
+    // within the frame.
     RequestNext(released);
-    YieldToReader();
 }
 
 bool MusicStream::BufferReady()
@@ -745,20 +687,8 @@ int MusicStream::DecodePcm(s16 * const outStereo, const int maxFrames)
 
 int MusicStream::Decode(s16 * const outStereo, const int maxFrames)
 {
-    const int produced = (m_format == Format::Adpcm) ? DecodeAdpcm(outStereo, maxFrames)
-                                                     : DecodePcm(outStereo, maxFrames);
-
-    // A read may have landed since the reader last ran: let it hand the buffer back now,
-    // so the next frame finds it Ready.
-    for (const Buffer & buffer : m_buffers)
-    {
-        if (buffer.state == BufferState::Pending)
-        {
-            YieldToReader();
-            break;
-        }
-    }
-    return produced;
+    return (m_format == Format::Adpcm) ? DecodeAdpcm(outStereo, maxFrames)
+                                       : DecodePcm(outStereo, maxFrames);
 }
 
 int MusicStream::TakeWraps()
@@ -766,18 +696,6 @@ int MusicStream::TakeWraps()
     const int wraps = m_wraps;
     m_wraps = 0;
     return wraps;
-}
-
-bool MusicStream::ReadPending() const
-{
-    for (const Buffer & buffer : m_buffers)
-    {
-        if (buffer.state == BufferState::Pending)
-        {
-            return true;
-        }
-    }
-    return false;
 }
 
 } // namespace ps2::audio

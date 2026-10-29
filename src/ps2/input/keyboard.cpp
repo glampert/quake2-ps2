@@ -14,7 +14,6 @@
  * ================================================================================================ */
 
 #include "ps2/input/keyboard.h"
-#include "ps2/audio/music_stream.h"
 #include "ps2/fs/async_io.h"
 #include "ps2/system/iop_boot.h"
 #include "ps2/common.h"
@@ -260,12 +259,12 @@ void Keyboard::Update()
     for (int reads = 0; reads < kMaxReadsPerFrame; ++reads)
     {
         // Each read is a read() on the usbkbd:dev device file, through the same file client and
-        // IOP file server as the music stream's reads. One made while the music reader has a
-        // read out waits for it to land, and over USB on a console that stalled this frame by
-        // ~300 ms, every 640 ms. The driver keeps the keys queued, so they are picked up the
-        // frame the read is done; checked per read, since each one sleeps and lets the reader
-        // start.
-        if (audio::MusicReadPending() || aio::Pending())
+        // IOP file server as the background loader's reads, the music's among them. One made
+        // while the loader has a request out waits for it to land, and over USB on a console that
+        // stalled this frame by ~300 ms, every 640 ms (the music reader of the time). The driver
+        // keeps the keys queued, so they are picked up the frame the read is done; checked per
+        // read, since each one sleeps and lets the loader start.
+        if (aio::Pending())
         {
             break;
         }

@@ -16,7 +16,6 @@
 
 #include "ps2/audio/audsrv_device.h"
 #include "ps2/audio/mix_ring.h"
-#include "ps2/audio/music_stream.h"
 #include "ps2/audio/sound_hold.h"
 #include "ps2/common.h"
 #include "ps2/fs/async_io.h"
@@ -43,7 +42,7 @@ static const cvar_t * s_disableSound = nullptr;
 static const cvar_t * s_soundDefer   = nullptr; // ps2_sound_defer: 0 off, 1 on the HDD, 2 always
 
 // Holding the submit back behind a background read (audio.md). On the HDD, an audsrv RPC made
-// while the loader or the music reader has a file call out waits on the IOP until fileXio's
+// while the loader (the music's reads included) has a file call out waits on the IOP until fileXio's
 // thread lets go: 8-44 ms on the console. The ring holds ~85 ms at a submit, so the submit can
 // wait out the read instead, while the last one is under kMaxSubmitDelayMs old, and then goes
 // anyway. The test runs at a submit, so the gap can reach the limit plus a frame: 30 ms holds
@@ -79,9 +78,9 @@ bool DeferSubmit()
         return false;
     }
 
-    // The loader and the reader only run while the main thread sleeps, so a read can't start
-    // between this test and the RPCs; one that starts while they wait queues behind them.
-    if (!ps2::aio::FileCallInFlight() && !ps2::audio::MusicReadPending())
+    // The loader only runs while the main thread sleeps, so a read can't start between this
+    // test and the RPCs; one that starts while they wait queues behind them.
+    if (!ps2::aio::FileCallInFlight())
     {
         return false;
     }

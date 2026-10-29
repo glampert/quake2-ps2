@@ -742,9 +742,9 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   writes the level it leaves.
 
 On the HDD, the submit's two audsrv RPCs wait on the IOP while another thread's file call is
-out there (the background loader's or the music reader's), 8-44 ms on a console. So while one
-is, the frame's submit is held back while the last one is under 30 ms old (one 50 Hz frame),
-which the ring's ~85 ms covers; `ps2_sound_defer` (0 off, 1 on the HDD, 2 always) switches it.
+out there (the background loader's, the music's reads among them), 8-44 ms on a console. So
+while one is, the frame's submit is held back while the last one is under 30 ms old (one 50 Hz
+frame), which the ring's ~85 ms covers; `ps2_sound_defer` (0 off, 1 on the HDD, 2 always) switches it.
 
 Audio bring-up failure is not fatal: a missing IOP driver just costs sound. `ps2_disable_sound 1`
 turns it off deliberately.
@@ -755,13 +755,13 @@ module over loose `baseq2/music/trackNN.adp` files instead. They are SPU2 ADPCM 
 native sample format, 3.5x smaller than 16-bit PCM - chunk-interleaved so the same files
 could later be streamed straight into SPU2 voices. A track with no `.adp` falls back to its
 `trackNN.wav` (16-bit PCM), so the music plays even if `make music` was never run.
-[`MusicStream`](src/ps2/audio/music_stream.h) keeps just two read buffers in flight - 8 KB
-each for ADPCM (~650 ms at 22050 Hz), up to 64 KB each for a WAV (~740 ms of a CD rip) - and
+[`MusicStream`](src/ps2/audio/music_stream.h) keeps just two read buffers in flight - 32 KB
+each for ADPCM (~1.3 s at 22050 Hz), up to 64 KB each for a WAV (~740 ms of a CD rip) - and
 decodes on demand. The buffers come from the heap when a track starts and go back when it
 stops, so music never holds memory across a level load, and a track that can't get them
-stays silent with a warning instead of halting. The file reads are issued from a reader
-thread at the main thread's priority, since a blocking read off a USB stick could otherwise
-cost a frame. The decoded music is fed into the mixer's raw-sample channel (the one
+stays silent with a warning instead of halting. The file reads go to the background loader
+(see below) at its stream priority, since a blocking read off a USB stick could otherwise
+cost a frame; one it declines is read on the main thread when it is needed. The decoded music is fed into the mixer's raw-sample channel (the one
 cinematics use), so it reaches the SPU2 inside the existing audsrv stream at no extra SIF
 bandwidth; a track at twice the mixer's rate (a 44.1 kHz WAV) goes through a 23-tap
 half-band decimator ([half_band.h](src/ps2/audio/half_band.h)) on the way in. In PCSX2 it

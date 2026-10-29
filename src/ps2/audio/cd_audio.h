@@ -2,7 +2,7 @@
 /* ================================================================================================
  * File: cd_audio.h
  * Brief: What the rest of the backend asks of the soundtrack (cd_audio.cpp) beyond the engine's
- *        CDAudio_* seam and MusicReadPending (music_stream.h): holding the music through a stall
+ *        CDAudio_* seam: holding the music through a stall
  *        that would otherwise cut it off mid-note.
  *
  *        The main thread decodes the music into the mixer's raw-sample ring about 350 ms ahead of

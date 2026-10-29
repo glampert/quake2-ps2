@@ -43,7 +43,8 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   `aio::Pending()` (the music's reads are loader requests since 2026-10-29; `MusicReadPending()`
   covered them before), and the driver keeps the keys queued until then. A console run
   with the keyboard off confirmed the cause, and one with it on and these fixes confirmed the
-  cure: no stalls either way. It also polls
+  cure: no stalls either way. A third, with the music on the loader, showed none either
+  (2026-10-29, performance.md). It also polls
   only four times a second unless a key arrived in the last 10 s or is held (keyboard.h), and
   `in_keyboard` is off by default in release builds. Keep any other per-frame file I/O off the
   main thread the same way. PCSX2's `host:` reads are too quick to show it. In PCSX2 a

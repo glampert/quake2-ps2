@@ -158,6 +158,13 @@ paths:
   on the demo segments Music 138 µs mean (unchanged), SndMix 415-418 (416-419), Input 27 (27),
   no frame over the ring; the music's requests land ~26 KB/s through the loader, one 32 KB request
   every ~1.25 s, each in two reads (the stereo groups sit 2 KB off the chunk boundary).
+- **The music on the loader, console USB (2026-10-29, the profiling release, `in_keyboard 1`;
+  `console-usb-music-aio-2026-10-29.flog` against `console-usb-aio-2026-10-29.flog`):** no Input
+  stall (max 0.64 ms; the poll's ~0.2 ms rows on 6% of gameplay frames, 5% before), Music
+  131 µs mean against 138 and its worst row 0.59 ms against 1.38 (the reader's own reads are gone
+  from main), one 32 KB request landing every 65 frames (1.3 s) in `aioBytes`, mostly as a 30 + 2
+  KB pair. Steady drops 10 against 9, the same two kinds: the demos' own refills (Server
+  314-391 ms) and waste2's heavy view (frames ~4585-4595, chain-bound).
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

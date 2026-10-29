@@ -592,6 +592,9 @@ the MapCycle (memory-budget.md: `Mus` 64 KB, worst moment 30.40 MB). **Console g
 (2026-10-29, USB, the profiling release with `in_keyboard 1`, `console-usb-music-aio-2026-10-29.flog`,
 performance.md): no Input stalls (worst 0.64 ms, the keyboard polled on ~6% of rows),
 the music landing as one 32 KB request every ~1.3 s, Music's worst row 1.38 → 0.59 ms.
+**From the HDD, a regression** (2026-10-29, `console-hdd-music-aio-2026-10-29.flog`,
+performance.md): about one 32 KB music request in six outlasts §12.4's one-frame hold, and the
+submit waits 4-13 ms behind it; gameplay's blocked submits went from 2 to 13. Not yet fixed.
 
 **What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
 stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in

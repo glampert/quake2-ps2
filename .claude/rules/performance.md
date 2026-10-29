@@ -165,6 +165,16 @@ paths:
   from main), one 32 KB request landing every 65 frames (1.3 s) in `aioBytes`, mostly as a 30 + 2
   KB pair. Steady drops 10 against 9, the same two kinds: the demos' own refills (Server
   314-391 ms) and waste2's heavy view (frames ~4585-4595, chain-bound).
+- **The music on the loader, console HDD (2026-10-29, same ELF, `in_keyboard` off;
+  `console-hdd-music-aio-2026-10-29.flog` against `console-hdd-aio-2026-10-29.flog`): a
+  regression.** Blocked submits on gameplay rows (`Sound` over 3 ms, each right after a -2 hold)
+  went from 2 to 13. 11 are music requests: one in ~6 of its 32 KB requests (every ~385 frames)
+  is still out after the one-frame hold, and the submit then waits 4-13 ms behind it (frames
+  23-32 ms). The reader's 8 KB reads were short enough for the hold. The two left are the slugs
+  pickup's first read (6.6 ms here, 11.0 before), as in the earlier capture. The ring never came
+  near empty at any of them (≥ 3.7 KB, ~42 ms, left at the reply), and each pair of rows still
+  spans two fields, so the log shows neither an underrun nor a lost field; the stutter heard at
+  the pickups from the HDD is not explained by it yet. USB: no hold, one 3.5 ms submit.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

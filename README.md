@@ -742,9 +742,14 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   writes the level it leaves.
 
 On the HDD, the submit's two audsrv RPCs wait on the IOP while another thread's file call is
-out there (the background loader's, the music's reads among them), 8-44 ms on a console. So
-while one is, the frame's submit is held back while the last one is under 30 ms old (one 50 Hz
-frame), which the ring's ~85 ms covers; `ps2_sound_defer` (0 off, 1 on the HDD, 2 always) switches it.
+out there (the background loader's, the music's reads among them), 4-44 ms on a console. So the
+submit runs on a thread of its own ([submit_thread.h](src/ps2/audio/submit_thread.h)), one
+priority above the main thread: the main thread posts the frame's painted audio and carries on,
+and a frame whose previous send is still out on the IOP posts nothing, the next one sending both.
+The submit cursor still moves on the main thread only, when it collects a finished send.
+`ps2_sound_async 0` submits on the main thread as before, where the frame's submit is held back
+while a read is out and the last one is under 30 ms old (`ps2_sound_defer`: 0 off, 1 on the HDD,
+2 always).
 
 Audio bring-up failure is not fatal: a missing IOP driver just costs sound. `ps2_disable_sound 1`
 turns it off deliberately.

@@ -56,7 +56,8 @@ namespace ps2::audio {
 bool OutputHeld();
 
 // For the frame log: the free bytes of audsrv's ring the last SNDDMA_Submit found before it
-// topped it up (-1 while held, -2 when it was held back behind a background read), and the ring's size. See FrameSample::sndFree in renderer/profile.cpp.
+// topped it up (-1 while held, -2 when it sent nothing: the send before still out on the IOP, or held
+// back behind a background read), and the ring's size. See FrameSample::sndFree in renderer/profile.cpp.
 int SubmitFreeBytes();
 int DeviceRingBytes();
 

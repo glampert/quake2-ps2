@@ -529,7 +529,7 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
 | Loader throughput lost to re-issue latency (lower priority: the main thread must sleep first) | Measured by the stage-2 self-test; the ring is sized for it; if it matters, a `Submit` from the pump at frame start keeps the queue deep |
 | Cache-line sharing invisible in PCSX2 | Asserts in `Submit`, 64-rounded allocations, the stage-2 console run |
 | A main-thread file call waits behind a chunk | 32 KB cluster-aligned chunks (≤41 ms USB); saves and config writes already run under a sound hold |
-| The audio submit waits on the IOP behind an HDD read (seen 2026-10-28: 8-44 ms in 2% of chunk rows) | §12.4: hold the submit back up to 40 ms while a read is in flight, on the HDD only |
+| The audio submit waits on the IOP behind an HDD read (seen 2026-10-28: 8-44 ms in 2% of chunk rows) | §12.4: the submit on a thread of its own (2026-10-30), the main thread never waiting; before that a hold of one frame while a read is in flight, on the HDD only |
 | D-cache pollution from loader CPU work raises the main thread's EE time | Stage 7 is conditional and gated on a capture |
 | Paks or the pkz closed, or caches swept, with reads in flight | The five drain sites; asserts that nothing is pending at `Unload` and `FreeUnregistered` |
 | A deflated `.cin` or `.dm2` in the pkz gets no read-ahead | `pakzip` stores them, or pak and loose sources only |
@@ -594,7 +594,8 @@ performance.md): no Input stalls (worst 0.64 ms, the keyboard polled on ~6% of r
 the music landing as one 32 KB request every ~1.3 s, Music's worst row 1.38 → 0.59 ms.
 **From the HDD, a regression** (2026-10-29, `console-hdd-music-aio-2026-10-29.flog`,
 performance.md): about one 32 KB music request in six outlasts §12.4's one-frame hold, and the
-submit waits 4-13 ms behind it; gameplay's blocked submits went from 2 to 13. Not yet fixed.
+submit waits 4-13 ms behind it; gameplay's blocked submits went from 2 to 13. Answered by
+§12.4's submit thread (2026-10-30); its console capture is owed.
 
 **What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
 stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in
@@ -785,6 +786,27 @@ held submits back for 67 ms in a row), and 30 ms holds back one 50 Hz frame at m
 (2026-10-29):** HDD stalls 66 → 38 (gameplay 9 → 2), 96% of holds enough, the pickups' dropped
 field gone, USB unchanged; the stalls left are reads still out after the one-frame hold. The
 NOWAIT fallback below stays unbuilt unless those show.
+
+**The fallback, built 2026-10-30, as a thread rather than a NOWAIT call** (`audio::SubmitThread`,
+submit_thread.{h,cpp}; `ps2_sound_async`, 1 by default, 0 the hold above): the music's 32 KB
+requests (§12.1) outlasted the hold on the HDD. A NOWAIT binding turned out unsafe as sketched:
+audsrv's IOP server has one receive buffer, and a request's data is DMAed into it when the
+request is sent, so the free-space query and the play out at once could overwrite each other; the
+SDK's client keeps them one at a time with a semaphore. So a thread one priority above the main
+thread makes the SDK's two calls (`MixRing::Send`, Drain's body without the cursor) while the main
+thread carries on. The main thread posts the frame's painted range at `SNDDMA_Submit` and collects
+a finished send's result at the next `SNDDMA_GetDMAPos` or submit, where the submit cursor moves:
+it never moves on the thread. A frame whose send before is still out posts nothing (`sndFree` -2),
+and the next send takes both frames'. Every place the main thread calls the device itself (a hold,
+its release, a silence, a restart, shutdown, `ps2_sound_async` going to 0) waits for the send out
+first. The thread's priority makes the play RPC follow the free-space reply at once, as on the main
+thread, so the ring is fed on the same schedule, now with nothing for the main thread to wait out.
+PCSX2 (performance.md, `pcsx2-sound-async-throttled-2026-10-30.flog`): `Sound` 210-429 → 8 µs, EE
+work per frame down 127 µs on the demos and ~400 on the cinematics, no send still out at the next
+frame, the ring as before; the save test's music fades unchanged. **Gate (console, HDD):** gameplay
+rows with `Sound` over 3 ms gone (13 in `console-hdd-music-aio-2026-10-29.flog`), the music's
+requests no longer stretching frames, `-2` rows rare and never two in a row, and by ear the pickups'
+stutter gone or not; from USB, a capture like `console-usb-music-aio-2026-10-29.flog`.
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
 the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed

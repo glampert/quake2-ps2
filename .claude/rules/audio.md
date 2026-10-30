@@ -60,8 +60,17 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   a throttled PCSX2 run it held 38% of ntro's submits, never two in a row, and the ring's lowest
   point matched the run without it. On the console from the HDD (2026-10-29) the stalls went from
   66 to 38 over the perf run (gameplay 9 → 2), 96% of the holds were enough, and the pickups no
-  longer drop a field; what is left is reads longer than the hold. The fallback, a `NOWAIT` play
-  RPC through our own binding (plan §12.4), is only worth it if those become visible.
+  longer drop a field; what is left is reads longer than the hold. With the music's 32 KB
+  requests on the loader (§12.1) those became 13 blocked gameplay submits, so **since 2026-10-30
+  the submit runs on a thread of its own** (`submit_thread.{h,cpp}`, `ps2_sound_async`, plan
+  §12.4), one priority above the main thread (0; main is 1, from ps2sdk's `InitThread`, whose
+  kernel helper thread also sits at 0). The main thread posts the painted range and collects the
+  result next frame; the submit cursor moves only there. **Not a `SIF_RPC_M_NOWAIT` call:**
+  audsrv's IOP server has one receive buffer (`rpc_buffer`, rpc_server.c), and SIF RPC DMAs a
+  request's data into it when the request is sent, so two requests out at once can overwrite
+  each other; the SDK client serialises them with `completion_sema`. Anything else that calls
+  `AudsrvDevice` from the main thread (hold, release, silence, restart, shutdown) must
+  `SubmitThread::Wait` first: `Enqueue` writes the device's `m_held`/`m_silent`.
 - **audsrv loops its ring through an underrun.** Its IOP play thread advances the read cursor
   whether or not anything was written (audsrv.c's `play_thread`), so a main loop that stops
   submitting for longer than the ring (10 feed blocks: 9400 bytes, ~106 ms at 22050 Hz) gets

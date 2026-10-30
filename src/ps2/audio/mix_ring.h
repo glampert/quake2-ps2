@@ -50,7 +50,28 @@ public:
     // Hands the device everything painted but not yet submitted, as far as it will
     // take, splitting the copy where the ring wraps. paintedFrames is the engine's
     // `paintedtime`. Whatever doesn't fit stays put and goes out on a later frame.
+    // Send and Commit in one, on the calling thread.
     void Drain(AudsrvDevice & device, int paintedFrames);
+
+    // What one Send did: the frames the device took, and its FreeBytes() before it took them.
+    struct SendResult
+    {
+        int sentFrames = 0;
+        int freeBytes  = 0;
+    };
+
+    // Drain's work without the cursor: offers the device up to pendingFrames of buffer from
+    // startFrames on (both in the submit cursor's free-running count), as far as its free space
+    // goes. It reads the buffer and calls the device, nothing else, so the submit thread
+    // (submit_thread.h) can run it while the main thread paints further on: the mixer only
+    // writes past paintedtime, and the ring is far longer than a mixahead.
+    static SendResult Send(AudsrvDevice & device, const u8 * buffer, int startFrames, int pendingFrames);
+
+    // Applies a Send's result: advances the submit cursor, keeps the free bytes for LastFreeBytes.
+    void Commit(const SendResult & result);
+
+    int SubmittedFrames() const { return m_submittedFrames; }
+    int PendingFrames(int paintedFrames) const { return paintedFrames - m_submittedFrames; }
 
     // The device's FreeBytes() as the last Drain found it, before it enqueued anything: what the
     // IOP had played out since the drain before. For the frame log (renderer/profile.cpp).

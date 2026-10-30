@@ -27,41 +27,49 @@ int MixRing::PositionInSamples() const
 
 void MixRing::Drain(AudsrvDevice & device, const int paintedFrames)
 {
-    int pending = paintedFrames - m_submittedFrames;
+    const int pending = PendingFrames(paintedFrames);
     if (pending <= 0)
     {
         return;
     }
+    Commit(Send(device, m_buffer, m_submittedFrames, pending));
+}
+
+MixRing::SendResult MixRing::Send(AudsrvDevice & device, const u8 * const buffer, const int startFrames, int pendingFrames)
+{
+    SendResult result;
 
     // FreeBytes() is already frame aligned and holds back the guard frame, so this
     // is exactly what audsrv will accept without dropping anything.
-    m_lastFreeBytes      = device.FreeBytes();
-    const int freeFrames = m_lastFreeBytes / AudsrvDevice::kFrameBytes;
-    if (freeFrames < pending)
+    result.freeBytes     = device.FreeBytes();
+    const int freeFrames = result.freeBytes / AudsrvDevice::kFrameBytes;
+    if (freeFrames < pendingFrames)
     {
-        pending = freeFrames;
+        pendingFrames = freeFrames;
     }
 
-    while (pending > 0)
+    int frames = startFrames;
+    while (pendingFrames > 0)
     {
-        const int offsetFrames = m_submittedFrames & (kFrames - 1);
+        const int offsetFrames = frames & (kFrames - 1);
 
         int chunkFrames = kFrames - offsetFrames; // up to the end of the ring
-        if (chunkFrames > pending)
+        if (chunkFrames > pendingFrames)
         {
-            chunkFrames = pending;
+            chunkFrames = pendingFrames;
         }
 
         const int chunkBytes = chunkFrames * AudsrvDevice::kFrameBytes;
-        const int sentBytes = device.Enqueue(m_buffer + (offsetFrames * AudsrvDevice::kFrameBytes), chunkBytes);
+        const int sentBytes = device.Enqueue(buffer + (offsetFrames * AudsrvDevice::kFrameBytes), chunkBytes);
         if (sentBytes <= 0)
         {
             break;
         }
 
         const int sentFrames = sentBytes / AudsrvDevice::kFrameBytes;
-        m_submittedFrames += sentFrames;
-        pending -= sentFrames;
+        frames            += sentFrames;
+        result.sentFrames += sentFrames;
+        pendingFrames     -= sentFrames;
 
         // A short write means the IOP ring filled up despite the FreeBytes() reading
         // - the rest was dropped, not queued. Stop here and pick it up next frame.
@@ -70,6 +78,14 @@ void MixRing::Drain(AudsrvDevice & device, const int paintedFrames)
             break;
         }
     }
+
+    return result;
+}
+
+void MixRing::Commit(const SendResult & result)
+{
+    m_submittedFrames += result.sentFrames;
+    m_lastFreeBytes    = result.freeBytes;
 }
 
 } // namespace ps2::audio

@@ -153,8 +153,10 @@ struct FrameSample
     int chainKB, chainKicks, chainDrains;
 
     // Free bytes in audsrv's IOP ring (~106 ms, DeviceRingBytes) as the frame's SNDDMA_Submit found
-    // it, before it topped the ring up; -1 while the output is held, -2 when the submit was held
-    // back behind a background read (snd.cpp, DeferSubmit). In steady state it is what the
+    // it, before it topped the ring up; -1 while the output is held, -2 when the frame sent nothing:
+    // the send before still out on the IOP (snd.cpp's submit thread), or, with ps2_sound_async 0,
+    // held back behind a background read (DeferSubmit). On the submit thread the reading is the
+    // last finished send's, one frame behind. In steady state it is what the
     // IOP played since the previous submit, so a frame that blocked shows how close the ring came to
     // running dry, which is when audsrv starts replaying its last tenth of a second (sound_hold.h).
     // Once it has run dry the reading is no longer monotonic (the read cursor laps the write cursor),
@@ -317,7 +319,7 @@ void WriteBatch()
                     "vramUploads,vramOomSyncs,vramResident,"
                     "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ\n");
         Emit("FLOG#note,timings are microseconds\n");
-        Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held, -2 held back behind a background read\n",
+        Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held, -2 sent nothing (the last send still out, or held back behind a read)\n",
              ps2::audio::DeviceRingBytes());
         Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
     }

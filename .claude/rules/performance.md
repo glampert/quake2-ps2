@@ -175,6 +175,17 @@ paths:
   near empty at any of them (≥ 3.7 KB, ~42 ms, left at the reply), and each pair of rows still
   spans two fields, so the log shows neither an underrun nor a lost field; the stutter heard at
   the pickups from the HDD is not explained by it yet. USB: no hold, one 3.5 ms submit.
+- **The submit on its own thread (plan §12.4, 2026-10-30), PCSX2** (debug, `ps2_aio_throttle_kbps
+  900`; `pcsx2-sound-async-throttled-2026-10-30.flog` against
+  `pcsx2-music-aio-throttled-2026-10-29.flog`): `Sound` 210 → 8 µs on the demos and 429 → 8 on the
+  cinematics, SndMix (which holds it) 416 → 218 and 506 → 86; EE work per frame 4467 → 4340 µs
+  (base2), 4609 → 4482 (waste2), 4081 → 3687 (eou1_) and 4220 → 3819 (ntro). The cinematic rows'
+  extra submit cost of the 10-29 build (the open item above) is gone from the main thread with
+  the rest. Music rose 137 → 201 µs and Input 27 → 29-34: the thread's copy and play RPC run when
+  the free-space reply lands, which is during `CDAudio_Update`, right after the submit. No `-2`
+  row (a send still out at the next frame), `sndFree` distribution and frames past the ring as
+  before. `ps2_testsaves 1` passed with its music fades at 484-688 ms, as before. The console HDD
+  capture is the gate.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

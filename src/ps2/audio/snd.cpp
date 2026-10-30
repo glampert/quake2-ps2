@@ -9,7 +9,7 @@
  *        snd_mem.c, snd_mix.c): every frame S_Update_ paints s_mixahead seconds of stereo
  *        into dma.buffer and then calls SNDDMA_Submit. All this file does is give the mixer
  *        somewhere to paint, tell it where playback has got to, and push what it painted
- *        towards the SPU2.
+ *        towards the SPU2, on the SubmitThread (submit_thread.h) unless ps2_sound_async is 0.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -17,6 +17,7 @@
 #include "ps2/audio/audsrv_device.h"
 #include "ps2/audio/mix_ring.h"
 #include "ps2/audio/sound_hold.h"
+#include "ps2/audio/submit_thread.h"
 #include "ps2/common.h"
 #include "ps2/fs/async_io.h"
 #include "ps2/renderer/profile.h"
@@ -37,29 +38,51 @@ namespace {
 
 static ps2::audio::AudsrvDevice s_device;
 static ps2::audio::MixRing s_mixRing;
+static ps2::audio::SubmitThread s_submitThread;
 
 static const cvar_t * s_disableSound = nullptr;
+static const cvar_t * s_soundAsync   = nullptr; // ps2_sound_async: 1 the submit thread, 0 the main thread
 static const cvar_t * s_soundDefer   = nullptr; // ps2_sound_defer: 0 off, 1 on the HDD, 2 always
 
-// Holding the submit back behind a background read (audio.md). On the HDD, an audsrv RPC made
-// while the loader (the music's reads included) has a file call out waits on the IOP until fileXio's
-// thread lets go: 8-44 ms on the console. The ring holds ~85 ms at a submit, so the submit can
+// Holding the submit back behind a background read (audio.md), when the main thread submits
+// (ps2_sound_async 0). On the HDD, an audsrv RPC made while the loader (the music's reads
+// included) has a file call out waits on the IOP until fileXio's thread lets go: 8-44 ms on the
+// console. The ring holds ~85 ms at a submit, so the submit can
 // wait out the read instead, while the last one is under kMaxSubmitDelayMs old, and then goes
 // anyway. The test runs at a submit, so the gap can reach the limit plus a frame: 30 ms holds
 // back one 50 Hz frame at most, and none after a frame longer than that.
 constexpr int kMaxSubmitDelayMs = 30;
 static bool s_gameDataOnHdd  = false;
 static int  s_lastSubmitMs   = 0;
-static bool s_submitDeferred = false; // the last SNDDMA_Submit held back (sndFree -2)
+static bool s_submitDeferred = false; // the last SNDDMA_Submit sent nothing: held back, or the send before still out (sndFree -2)
 
 // What holds the output silent (sound_hold.h): PS2_SoundHoldBegin/End's count, and the
 // loading plaque. Either one is enough.
 static int  s_soundHolds  = 0;
 static bool s_loadingHold = false;
 
+// Applies a send the submit thread finished: the submit cursor moves on the main thread only.
+void CollectSubmit()
+{
+    ps2::audio::MixRing::SendResult result;
+    if (s_submitThread.Collect(result))
+    {
+        s_mixRing.Commit(result);
+    }
+}
+
+// Before the main thread calls the device itself: the send out finishes first (an IOP read's wait
+// at worst, and only at a hold, a restart or a switch of ps2_sound_async).
+void SettleSubmit()
+{
+    s_submitThread.Wait();
+    CollectSubmit();
+}
+
 // Brings the device in line with the holds, after one of them changed.
 void ApplySoundHold()
 {
+    SettleSubmit();
     if (ps2::audio::OutputHeld())
     {
         s_device.Hold();
@@ -143,6 +166,7 @@ extern "C" {
 qboolean SNDDMA_Init()
 {
     s_disableSound  = Cvar_Get("ps2_disable_sound", "0", CVAR_ARCHIVE);
+    s_soundAsync    = Cvar_Get("ps2_sound_async", "1", 0);
     s_soundDefer    = Cvar_Get("ps2_sound_defer", "1", 0);
     s_gameDataOnHdd = ps2::sys::GameDataOnHdd();
     if (s_disableSound->value != 0.0f)
@@ -152,6 +176,8 @@ qboolean SNDDMA_Init()
     }
 
     const int sampleRateHz = PickSampleRate();
+
+    SettleSubmit(); // a restart: nothing of the old stream's may still be going out
 
     if (!s_device.Init(sampleRateHz))
     {
@@ -181,12 +207,16 @@ qboolean SNDDMA_Init()
 
 void SNDDMA_Shutdown()
 {
+    SettleSubmit();
     s_device.Shutdown();
     dma.buffer = nullptr;
 }
 
 int SNDDMA_GetDMAPos()
 {
+    // GetSoundtime reads this at the top of S_Update_: a send that landed since the last submit
+    // moves the cursor here, so the frame's mix starts from it.
+    CollectSubmit();
     return s_mixRing.PositionInSamples();
 }
 
@@ -201,10 +231,13 @@ void SNDDMA_BeginPainting()
 void SNDDMA_Submit()
 {
     // Profiled because this is the one part of the sound path that is ours and is
-    // not free: Drain() calls audsrv_available() and audsrv_play_audio(), both
+    // not free: a send calls audsrv_available() and audsrv_play_audio(), both
     // blocking SIF RPCs, and the second copies the painted samples across to the
     // IOP. The mixing above it is engine code (client/snd_mix.c) and is not
-    // covered here - what this measures is the hand-off, not the mix.
+    // covered here - what this measures is the hand-off, not the mix. On the submit
+    // thread it holds the post and the thread's run up to its first RPC (it preempts
+    // the main thread); its copy and play RPC land in whatever the main thread was
+    // doing when the free-space reply came back.
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Sound);
 
     // Held, nothing goes over: the submit cursor, which is the play position the mixer
@@ -214,6 +247,25 @@ void SNDDMA_Submit()
     {
         return;
     }
+
+    // On the submit thread: the main thread never waits on the IOP. A send still out (behind an
+    // IOP read) means nothing goes this frame, like a hold; the next send takes both frames'.
+    if (s_soundAsync->value != 0.0f && s_submitThread.Start(s_device))
+    {
+        CollectSubmit();
+        s_submitDeferred = s_submitThread.Busy();
+        if (!s_submitDeferred)
+        {
+            // NOTE: `paintedtime` is a global defined by client/snd_dma.c
+            const int pending = s_mixRing.PendingFrames(paintedtime);
+            if (pending > 0)
+            {
+                s_submitThread.Post(s_mixRing.Buffer(), s_mixRing.SubmittedFrames(), pending);
+            }
+        }
+        return;
+    }
+    SettleSubmit(); // ps2_sound_async just went to 0
 
     // A background read is out on the IOP: send nothing yet, like a short hold. The mixer stops a
     // mixahead past the cursor and the next submit tops the ring up as usual.
@@ -246,6 +298,7 @@ void PS2_SoundHoldEnd()
 
 void PS2_SoundSilence()
 {
+    SettleSubmit();
     if (!ps2::audio::OutputHeld())
     {
         s_device.Silence();

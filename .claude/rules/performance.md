@@ -217,6 +217,22 @@ paths:
   Since 2026-10-31 every build resets on a console boot unless built with
   `-DPS2_QUAKE_ALWAYS_RESET_IOP=0`; to check an ELF, `strings -a <elf> | grep -c "every console
   boot does"` gives 1 (an ELF from before then said `PS2_QUAKE_ALWAYS_RESET_IOP is set`).
+- **The submit's two RPCs timed on the console, HDD (2026-10-31)** (`quake2_profile_sndrpc_2026-10-31.elf`,
+  `console-hdd-sndrpc-2026-10-31.flog`; columns `sndQuery`/`sndPlay`, the slowest of each per
+  row). **It is the free-space query that waits, not the play call.** Query p50 140 µs on the
+  demos (356 on ntro), over 5 ms in 97 rows (base2 15, waste2 9, eou1_ 3, ntro 70), up to
+  65.4 ms; every one of the 97 has a loader read out or landing within two rows, nearly all
+  the music's 32 KB requests, whose landing frames are the same in every run (116, 163,
+  225-226, ...): that is why the late sends recur at the same demo moments. Play p50 254 µs;
+  only one row over 1.5 ms (5.7 ms, the railgun pickup). Playback kept wall-clock pace through
+  every wait (each reading matches the time since the send before it to within audsrv's
+  940-byte block), so the IOP's play thread (priority 39) is never starved: dev9's DMA spin
+  runs with interrupts on. Only audsrv's RPC thread (40) queues behind fileXio's (40). The
+  railgun pickup (frame 3981, `rg_hum.wav` and `a_slugs.pcx` beside a music request): query
+  24.9 ms, play 5.7 ms, 44.5 ms between top-ups, ~52 ms of audio left; no field dropped. The
+  closest call is base2 frame 803 (65.4 ms query, 7520 free at the reply, ~21 ms left). The
+  earlier HDD capture read an empty ring at two of the same spots (3986, 4731), so the margin
+  is crossed now and then; from USB no query waits.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

@@ -17,14 +17,13 @@ namespace ps2::sys {
 
 // Probes host: for the game data first (PCSX2 exposes the ELF's directory as host: and
 // services it without any IOP involvement - and the probe fails instantly on hardware).
-// On a miss, brings up iomanX/fileXio and the drives' drivers on the IOP as the launcher
-// left it: each module is taken from the resident ones when a module doing its job is
-// there, and loaded otherwise. The IOP is reset first, and everything loaded fresh, only
-// when something resident can't work alongside the game's drivers. The boot also falls
-// back to that reset when a module won't start on top of what was there, when the drives
-// show no game data through the launcher's drivers, or when too little IOP memory is left
-// for the drivers that load later. -DPS2_QUAKE_ALWAYS_RESET_IOP=1 resets every time, as
-// boots used to.
+// On a miss, resets the IOP and brings up iomanX/fileXio and the drives' drivers, all of
+// them the game's own. -DPS2_QUAKE_ALWAYS_RESET_IOP=0 takes the IOP as the launcher left
+// it instead: each module is taken from the resident ones when a module doing its job is
+// there, and loaded otherwise, with the reset only for something resident that can't work
+// alongside the game's drivers, or as the fallback when a module won't start, when the
+// drives show no game data through the launcher's drivers, or when too little IOP memory
+// is left for the drivers that load later.
 // HDD comes next, unless the ELF was launched from USB (mass:), whose boot leaves the HDD
 // alone: optional DEV9/ATA/APA/PFS modules, the ELF's launch partition first,
 // then other main PFS partitions. Within the launch partition, its folder precedes

@@ -9,7 +9,8 @@
  *  the whole Quake filesystem - through iomanX, reaching the mounted pfs0: partition or massN:
  *  volumes transparently.
  *
- *  The IOP is taken as the launcher left it, which in practice is one of two things:
+ *  A console boot resets the IOP and loads every driver the game runs on itself. The launcher
+ *  leaves one of two things, and only the second needed the reset:
  *
  *   - Freshly reset: the boot ROM's modules, sometimes with the ROM's SIO2MAN, MCMAN and MCSERV
  *     on top. LoadExecPS2 launches leave this, and so do wLaunchELF since May 2026 (ps2sdk's
@@ -19,13 +20,13 @@
  *     usbhdfsd before 2022), the ROM's SIO2MAN and PADMAN, ps2sdk's memory card drivers, and
  *     the HDD's drivers if they read it.
  *
- *  Either way, the reset the boot used to start with only threw away what it would load again.
- *  So each module is now taken from the running ones when a module doing its job is there -
- *  recognised by the name it registers, see kModuleIdentities - and loaded otherwise. A USB drive
- *  the launcher already mounted is then read with no IOP reset and no wait for the drive. The
- *  reset stays for what can't work alongside the game's drivers (FindResidentConflict), and as
- *  the fallback when a module won't start on top of what was there, when the launcher's drivers
- *  show no game data, or when too little IOP memory is left for the drivers that load later.
+ *  From 2026-10-12 to 2026-10-31 the boot took the second as it found it: each module was taken
+ *  from the running ones when a module doing its job was there (kModuleIdentities), loaded
+ *  otherwise, and the IOP reset only for a known conflict (FindResidentConflict) or as a
+ *  fallback. That saved ~0.8 s on a USB boot, but wLaunchELF 4.43a's usbhdfsd froze the game
+ *  after its first level load on every run that went through it (ps2-platform.md), and the
+ *  game's behaviour hung on whatever a launcher happened to leave. -DPS2_QUAKE_ALWAYS_RESET_IOP=0
+ *  brings that boot back, for comparing the two on hardware.
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
@@ -85,11 +86,10 @@ extern unsigned char audsrv_irx[];
 extern unsigned int  size_audsrv_irx;
 }
 
-// 1 resets the IOP on every console boot, as boots did before they took the IOP as launched:
-// to compare the two on hardware, or should a launcher ever leave something that gets past
-// FindResidentConflict.
+// 1 (the default) resets the IOP on every console boot. 0 takes the IOP as launched, reusing the
+// launcher's drivers, to compare the two on hardware (see the banner).
 #ifndef PS2_QUAKE_ALWAYS_RESET_IOP
-#define PS2_QUAKE_ALWAYS_RESET_IOP 0
+#define PS2_QUAKE_ALWAYS_RESET_IOP 1
 #endif
 
 namespace ps2::sys {
@@ -1449,7 +1449,7 @@ const char * DetectBasePathAndBootIop(const char * elfPath)
                (loadfile != nullptr) ? VersionMinor(loadfile->version) : 0);
     ReportResidentModules();
 
-    const char * resetReason = PS2_QUAKE_ALWAYS_RESET_IOP ? "PS2_QUAKE_ALWAYS_RESET_IOP is set" : FindResidentConflict();
+    const char * resetReason = PS2_QUAKE_ALWAYS_RESET_IOP ? "every console boot does" : FindResidentConflict();
     if (resetReason == nullptr && !PatchModuleLoader())
     {
         resetReason = "its module loader couldn't be patched";

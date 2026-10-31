@@ -91,14 +91,16 @@ paths:
 
 - Boot (`system/iop_boot.cpp`): the `host:` fast path doesn't reset the IOP.
   `sbv_patch_enable_lmb()` alone lets `SifExecModuleBuffer` load embedded IRX without
-  disturbing open `host:` handles. **Console boots take the IOP as the launcher left it**
-  (since 2026-10-12): the module list says what runs, each module the game needs is reused
-  when one doing its job is there (`kModuleIdentities`), and the rest is loaded. The IOP is
-  reset first only for a known conflict (`FindResidentConflict`), and as the fallback when a
-  module won't start, when no game data turns up through the launcher's drivers, or when the
-  largest free IOP block is under 384 KB. Boot probes host, then HDD/PFS, then USB before
-  `Qcommon_Init`, except that an ELF launched from `mass:` probes USB only (the user's call,
-  2026-10-12). `-DPS2_QUAKE_ALWAYS_RESET_IOP=1` brings back a reset on every boot.
+  disturbing open `host:` handles. **Every console boot resets the IOP** and loads the game's
+  own drivers (since 2026-10-31, the user's call, after the launcher's usbhdfsd froze every run
+  that went through it; see below). From 2026-10-12 to then, console boots took the IOP as the
+  launcher left it, and `-DPS2_QUAKE_ALWAYS_RESET_IOP=0` still does, for comparisons: the module
+  list says what runs, each module the game needs is reused when one doing its job is there
+  (`kModuleIdentities`), and the rest is loaded. The IOP is then reset only for a known conflict
+  (`FindResidentConflict`), and as the fallback when a module won't start, when no game data
+  turns up through the launcher's drivers, or when the largest free IOP block is under 384 KB.
+  Boot probes host, then HDD/PFS, then USB before `Qcommon_Init`, except that an ELF launched
+  from `mass:` probes USB only (the user's call, 2026-10-12).
 - **Where a console's boot time goes** (the user's console, wLaunchELF 4.43a, HDD attached,
   debug builds, 2026-10-12): the IOP reset takes 175 ms; starting `ps2hdd` takes 3.4 s, most
   of it the drive answering `sceAtaInit` (ps2hdd only reads a few sectors at start); dev9, atad

@@ -69,12 +69,10 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   audsrv's IOP server has one receive buffer (`rpc_buffer`, rpc_server.c), and SIF RPC DMAs a
   request's data into it when the request is sent, so two requests out at once can overwrite
   each other; the SDK client serialises them with `completion_sema`. On the console from the HDD
-  (2026-10-31, performance.md) no submit blocks any more. **From USB the same ELF hangs during the
-  first level's load, twice out of two (open, 2026-10-31):** the frame log stops at
-  `FLOG#map,12,base2` (written at `R_BeginRegistration`), and no I/O log (written at the load's
-  end). The 10-29 build loads from the same stick, the HDD run and PCSX2 from an emulated stick
-  (same ELF and config) both load, and the output is held across the load, so the thread
-  should be idle then. Anything else that calls
+  (2026-10-31, performance.md) no submit blocks any more. Its first USB runs froze at the end of
+  base2's load, with `ps2_sound_async 0` too: that ELF was built without
+  `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so it ran on the launcher's usbhdfsd, the known freeze
+  (ps2-platform.md), not the thread. Anything else that calls
   `AudsrvDevice` from the main thread (hold, release, silence, restart, shutdown) must
   `SubmitThread::Wait` first: `Enqueue` writes the device's `m_held`/`m_silent`.
 - **audsrv loops its ring through an underrun.** Its IOP play thread advances the read cursor

@@ -132,7 +132,10 @@ paths:
   has no exception handler, so a hang and a crash look the same; `quake2_dbg_diag_2026-10-26.elf`
   in `build/baselines/` would report a crash to quake2.log. Until it is understood, a run that
   writes to the stick (captures, logs) wants the reset build, and the 80 ms reuse boot is suspect
-  for anything that writes.
+  for anything that writes. **Seen again 2026-10-31** (a profiling release built without the
+  flag by mistake, three runs, `ps2_logfile 1`): `quake2.log` ends at `CL_PrepRefresh`'s
+  `sky 256` line, 36.5 s in, and the I/O log, written at the load's end, never appears. The
+  stick's LED kept blinking through the freeze, so I/O was still going on.
 - **What launchers leave on the IOP** (their sources, read 2026-10-12). wLaunchELF before
   2026-05-26, the 2019 release included, resets the IOP only for an ELF on `hdd0:`. For
   `mass:`/`mc:` it leaves iomanX, fileXio (with a 128 KB buffer), the ROM's SIO2MAN and PADMAN

@@ -196,8 +196,12 @@ paths:
   landed six frames after it went out). The `sndFree` distribution matches the 10-29 capture,
   readings of an empty ring (8460) included (3-5 per segment in both), but two of the new ones
   follow a send that was out: the four-frame run, and the `a_slugs.pcx`/`rg_hum.wav` pickup
-  (frame 3986). Whether either is heard is the open ear check. **From USB the same ELF hung, twice**:
-  see audio.md.
+  (frame 3986). Whether either is heard is the open ear check. From USB that ELF froze at the end
+  of base2's load three times, the last with `ps2_sound_async 0` (`quake2.log` ends at
+  `sky 256`): it lacked `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so it ran on the launcher's usbhdfsd (the
+  2026-10-26 freeze below). The USB capture needs `quake2_profile_soundasync_reset_2026-10-31.elf`.
+  **Before handing over an ELF for a USB run, check it is a reset build**:
+  `strings -a <elf> | grep -c "PS2_QUAKE_ALWAYS_RESET_IOP is set"` gives 1 (0 without the flag).
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

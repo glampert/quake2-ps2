@@ -208,9 +208,12 @@ paths:
   empty-ring reading; on 10-29 the slugs model cost a 23 ms frame (a 3.5 ms submit) and
   `rg_hum.wav` an empty ring. The `sndFree` distribution matches. Readings that go from a full
   ring (≤ 1880 free) to an empty one (≥ 7520) across one short frame, which playback can't do,
-  are as common as before (HDD 10 → 10, USB 50 → 48): an older quirk of the reading, or of
-  audsrv's ring, not the thread's; not looked into. That run's I/O log recorded no loads (0
-  files in each), so it has no load times.
+  are as common as before (HDD 10 → 10, USB 50 → 48). **They are the frame log's own writes**:
+  every 65th frame writes the last 64 rows to the drive (open, append, close, and a
+  `fileXioSync` on the HDD) and isn't itself logged, and from USB 46 of the 54 empty readings in
+  played rows sit one or two rows after such a frame (HDD 10 of 27); the rest follow a level's
+  start or a frame of 80-200 ms. A release build writes no frame log, so it has none of these.
+  That run's I/O log recorded no loads (0 files in each), so it has no load times.
   Since 2026-10-31 every build resets on a console boot unless built with
   `-DPS2_QUAKE_ALWAYS_RESET_IOP=0`; to check an ELF, `strings -a <elf> | grep -c "every console
   boot does"` gives 1 (an ELF from before then said `PS2_QUAKE_ALWAYS_RESET_IOP is set`).

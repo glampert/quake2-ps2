@@ -186,6 +186,18 @@ paths:
   row (a send still out at the next frame), `sndFree` distribution and frames past the ring as
   before. `ps2_testsaves 1` passed with its music fades at 484-688 ms, as before. The console HDD
   capture is the gate.
+- **The submit thread on the console, HDD (2026-10-31)** (`quake2_profile_soundasync_2026-10-30.elf`,
+  `console-hdd-soundasync-2026-10-31.flog` against `console-hdd-music-aio-2026-10-29.flog`): rows
+  with `Sound` over 3 ms 56 → 0 (gameplay 13 → 0), its worst row 32 ms → 125 µs; steady frames
+  dropped 17 → 10 (`frame_budget.py --pal`), EE work p50 unchanged; SndMix 624-994 → 129-254 µs,
+  Music 129 → 191, Input 29 → 32-36. The slugs model pickup no longer stretches a frame (26 ms
+  before; 19.8-20.5 now). Sends still out at the next frame (`-2`): 55 runs over the run, 43 of
+  one frame, 11 of two and one of four (waste2 frame 4727, behind a 32 KB music request that
+  landed six frames after it went out). The `sndFree` distribution matches the 10-29 capture,
+  readings of an empty ring (8460) included (3-5 per segment in both), but two of the new ones
+  follow a send that was out: the four-frame run, and the `a_slugs.pcx`/`rg_hum.wav` pickup
+  (frame 3986). Whether either is heard is the open ear check. **From USB the same ELF hung, twice**:
+  see audio.md.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those

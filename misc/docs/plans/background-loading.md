@@ -595,7 +595,8 @@ the music landing as one 32 KB request every ~1.3 s, Music's worst row 1.38 → 
 **From the HDD, a regression** (2026-10-29, `console-hdd-music-aio-2026-10-29.flog`,
 performance.md): about one 32 KB music request in six outlasts §12.4's one-frame hold, and the
 submit waits 4-13 ms behind it; gameplay's blocked submits went from 2 to 13. Answered by
-§12.4's submit thread (2026-10-30); its console capture is owed.
+§12.4's submit thread (2026-10-30): from the HDD (2026-10-31) no submit blocks; from USB that
+build hangs during the first load (§12.4).
 
 **What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
 stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in
@@ -807,6 +808,13 @@ frame, the ring as before; the save test's music fades unchanged. **Gate (consol
 rows with `Sound` over 3 ms gone (13 in `console-hdd-music-aio-2026-10-29.flog`), the music's
 requests no longer stretching frames, `-2` rows rare and never two in a row, and by ear the pickups'
 stutter gone or not; from USB, a capture like `console-usb-music-aio-2026-10-29.flog`.
+**HDD gate met, USB failed** (2026-10-31, performance.md, `console-hdd-soundasync-2026-10-31.flog`):
+rows with `Sound` over 3 ms 56 → 0 (gameplay 13 → 0), the slugs model pickup no longer stretching
+a frame, steady dropped frames 17 → 10; `-2` rows are rare (55 runs, 12 of two frames or more,
+the longest four, behind one music request), and the ring's readings are distributed as before,
+though two empty-ring readings follow a send that was out (one at the `rg_hum.wav` pickup). The
+ear check is owed. From USB the ELF hung during the first level's load, twice; PCSX2 from an
+emulated stick loads. Open (audio.md).
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
 the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed

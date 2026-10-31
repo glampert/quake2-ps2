@@ -3,7 +3,7 @@
  * Brief: Converts id's pakN.pak into pakN.pkz, the compressed pack the game loads in its place
  *        when both are present. ps2/fs/pkz_format.h has the format and the reasons for it.
  *
- *          pakzip [--level N] [--block-kb N] [--min-saving P] <in.pak> <out.pkz>
+ *          pakzip [--level N] [--block-kb N] [--min-saving P] [--store-ext LIST] <in.pak> <out.pkz>
  *
  *            --level N       deflate level, 0-10 (default 9). 10 is miniz's slowest search.
  *            --block-kb N    restart point spacing in KB, a power of two from 4 to 16384
@@ -12,6 +12,11 @@
  *            --min-saving P  store an entry unless deflating it saves at least P percent
  *                            (default 10). Inflating costs the console time; for most sounds
  *                            that time buys back fewer bytes than it costs to decode them.
+ *            --store-ext LIST  store every entry whose name ends in one of these extensions,
+ *                            comma separated, case ignored (e.g. ".dm2"). The game streams a
+ *                            stored entry through its read-ahead ring (fs/readahead_stream.h),
+ *                            which needs plain byte ranges; a deflated one it reads on the main
+ *                            thread.
  *
  *        Entries keep the pak's order and names. The pack is written to <out>.tmp, read back
  *        and checked: every entry is inflated whole and every block from its own restart point,
@@ -26,6 +31,7 @@
 #include <miniz.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -80,6 +86,7 @@ struct Options
     int         level          = 9;
     int         log2BlockBytes = pkz::kDefaultLog2BlockBytes;
     int         minSavingPct   = 10;
+    std::vector<std::string> storeExts; // lowercase, each with its dot
     const char * inPath        = nullptr;
     const char * outPath       = nullptr;
 };
@@ -468,10 +475,56 @@ bool VerifyPack(const std::vector<std::uint8_t> & zip, const std::vector<std::ui
 void PrintUsage()
 {
     std::fprintf(stderr,
-                 "usage: pakzip [--level N] [--block-kb N] [--min-saving P] <in.pak> <out.pkz>\n"
-                 "  --level N       deflate level, 0-10 (default 9)\n"
-                 "  --block-kb N    restart point spacing in KB, a power of two, 4-16384 (default 32)\n"
-                 "  --min-saving P  store an entry unless deflate saves at least P%% (default 10)\n");
+                 "usage: pakzip [--level N] [--block-kb N] [--min-saving P] [--store-ext LIST] <in.pak> <out.pkz>\n"
+                 "  --level N         deflate level, 0-10 (default 9)\n"
+                 "  --block-kb N      restart point spacing in KB, a power of two, 4-16384 (default 32)\n"
+                 "  --min-saving P    store an entry unless deflate saves at least P%% (default 10)\n"
+                 "  --store-ext LIST  always store entries with these extensions, e.g. .dm2,.cin\n");
+}
+
+std::string ToLower(std::string text)
+{
+    for (char & c : text)
+    {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return text;
+}
+
+// Splits "--store-ext .dm2,.cin" into its lowercase extensions, each starting with a dot.
+bool ParseExtensions(const char * text, std::vector<std::string> & out)
+{
+    std::string list = ToLower(text);
+    std::size_t start = 0;
+    while (start <= list.size())
+    {
+        std::size_t end = list.find(',', start);
+        if (end == std::string::npos)
+        {
+            end = list.size();
+        }
+        const std::string ext = list.substr(start, end - start);
+        if (ext.size() < 2 || ext[0] != '.')
+        {
+            return false;
+        }
+        out.push_back(ext);
+        start = end + 1;
+    }
+    return !out.empty();
+}
+
+bool HasStoredExtension(const std::string & name, const std::vector<std::string> & exts)
+{
+    const std::string lower = ToLower(name);
+    for (const std::string & ext : exts)
+    {
+        if (lower.size() > ext.size() && lower.compare(lower.size() - ext.size(), ext.size(), ext) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool ParseInt(const char * text, const int lo, const int hi, int & out)
@@ -524,6 +577,13 @@ bool ParseArgs(const int argc, char *argv[], Options & opts)
             if (!ParseInt(argv[++i], 0, 99, opts.minSavingPct))
             {
                 return Fail("--min-saving takes 0-99");
+            }
+        }
+        else if (std::strcmp(arg, "--store-ext") == 0 && hasValue)
+        {
+            if (!ParseExtensions(argv[++i], opts.storeExts))
+            {
+                return Fail("--store-ext takes extensions like .dm2,.cin");
             }
         }
         else if (arg[0] == '-' && arg[1] != '\0')
@@ -609,7 +669,7 @@ int main(int argc, char *argv[])
         e.compBytes      = source.size;
         e.log2BlockBytes = 0;
 
-        if (source.size != 0)
+        if (source.size != 0 && !HasStoredExtension(source.name, opts.storeExts))
         {
             if (!DeflateEntry(compressor, flags, data, source.size, opts.log2BlockBytes, deflated, restarts))
             {

@@ -39,6 +39,18 @@ constexpr u32 kSlotBytes   = aio::kChunkBytes;
 constexpr int kMaxSlots    = 16; // 512 KB
 constexpr int kMinSlots    = 8;  // 256 KB, the fallback when 512 can't be had
 
+// A demo's ring: 64 KB, what the stdio buffer it replaces held. A demo opens with its level
+// loaded and the renderer's load still to come (SV_BeginDemoserver), so a cinematic's 512 KB
+// would sit on every demo's load peak; and a demo reads ~2 KB/s (demo1: 132 KB in 66 s), so one
+// 32 KB slot lasts many seconds while the other lands.
+constexpr int kDemoSlots   = 2;
+
+bool IsDemo(const char * filename)
+{
+    const char * const dot = std::strrchr(filename, '.');
+    return dot != nullptr && std::strcmp(dot, ".dm2") == 0;
+}
+
 #ifdef __LARGE64_FILES
 using CookieOffset = _off64_t;
 #else
@@ -318,8 +330,13 @@ extern "C" FILE * PS2_OpenReadAheadStream(const char * const filename, const str
     }
 
     // The ring: ps2_readahead_kb's worth of slots, 512 KB at most; half that if memory is short.
+    // A demo's is kDemoSlots, or less when the cvar asks for less.
     int numSlots = static_cast<int>(s_readaheadKb->value) / static_cast<int>(kSlotBytes / 1024u);
     numSlots     = (numSlots > kMaxSlots) ? kMaxSlots : (numSlots < 1) ? 1 : numSlots;
+    if (IsDemo(filename) && numSlots > kDemoSlots)
+    {
+        numSlots = kDemoSlots;
+    }
 
     u8 * ring = nullptr;
     while (ring == nullptr && numSlots >= 1)

@@ -12,7 +12,9 @@
  *        all of them in flight from the open, the consumed head slot resubmitted for the next range.
  *        A read copies from the head slot and sleeps only when it has not landed yet, which on a USB
  *        stick means the loader fell more than the ring behind: 512 KB covers a 0.5 s stall during
- *        ntro's 700 KB/s peak, which is the worst the data has.
+ *        ntro's 700 KB/s peak, which is the worst the data has. A demo's ring is 64 KB: it reads
+ *        ~2 KB/s, and opens before its level's renderer load, where 512 KB would raise the peak.
+ *        `make pkz` stores the demos (pakzip --store-ext .dm2) so that pak0.pkz's are eligible.
  * 
  *        NOTE: Shared header between C and C++.
  *

@@ -578,6 +578,11 @@ music: $(BUILD_DIR)/tools/musenc
 # go onto the USB stick once its pkz exists.
 PAK_DIR ?= baseq2
 
+# Demos stay stored, so the game streams them through its read-ahead ring
+# (ps2/fs/readahead_stream.h): a deflated one is read on the main thread, a 64 KB
+# refill at a time, which froze a frame for 80 ms from the HDD.
+PKZ_FLAGS ?= --store-ext .dm2
+
 pkz: $(BUILD_DIR)/tools/pakzip
 	@found=0; \
 	for pak in $(PAK_DIR)/pak[0-9].pak; do \
@@ -585,7 +590,7 @@ pkz: $(BUILD_DIR)/tools/pakzip
 		found=1; \
 		pkz="$${pak%.pak}.pkz"; \
 		if [ "$$pkz" -nt "$$pak" ] && [ "$$pkz" -nt $(BUILD_DIR)/tools/pakzip ]; then continue; fi; \
-		$(BUILD_DIR)/tools/pakzip "$$pak" "$$pkz" || exit 1; \
+		$(BUILD_DIR)/tools/pakzip $(PKZ_FLAGS) "$$pak" "$$pkz" || exit 1; \
 	done; \
 	[ $$found = 1 ] || { echo "No pakN.pak files in $(PAK_DIR)/"; exit 1; }
 

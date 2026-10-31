@@ -150,6 +150,13 @@ constexpr const char * kLoadfileName = "LoadModuleByEE";
 constexpr char kHddArgs[] = "-o\0" "4\0" "-n\0" "20";
 constexpr char kPfsArgs[] = "-m\0" "1\0" "-o\0" "16\0" "-n\0" "40";
 
+// The game's audsrv (ps2/iop/audsrv) takes its RPC thread's priority as an argument. ps2sdk's
+// created it at 40, fileXio's priority, and the IOP has no time slicing, so audsrv_available and
+// audsrv_play_audio waited out any file read already in progress: up to 65 ms from the HDD, most
+// of audsrv's ~106 ms ring (console, 2026-10-31; performance.md). At 39, the play thread's
+// priority, a request preempts the read when it arrives.
+constexpr char kAudsrvArgs[] = "rpc_prio=39";
+
 // An IRX the ELF carries, with the arguments the boot starts it with.
 struct IrxModule
 {
@@ -172,7 +179,7 @@ const IrxModule kUsbd       = { "usbd",        usbd_irx,        &size_usbd_irx, 
 const IrxModule kUsbmassBd  = { "usbmass_bd",  usbmass_bd_irx,  &size_usbmass_bd_irx,  nullptr,  0                };
 const IrxModule kPs2Kbd     = { "ps2kbd",      ps2kbd_irx,      &size_ps2kbd_irx,      nullptr,  0                };
 const IrxModule kLibsd      = { "libsd",       libsd_irx,       &size_libsd_irx,       nullptr,  0                };
-const IrxModule kAudsrv     = { "audsrv",      audsrv_irx,      &size_audsrv_irx,      nullptr,  0                };
+const IrxModule kAudsrv     = { "audsrv",      audsrv_irx,      &size_audsrv_irx,      kAudsrvArgs, sizeof(kAudsrvArgs) };
 
 // What the modules that load after the boot need of the IOP's memory: sound (libsd, audsrv and its
 // buffers), the ROM's SIO2MAN, PADMAN, MCMAN and MCSERV, and the keyboard driver. A boot that kept

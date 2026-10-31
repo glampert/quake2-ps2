@@ -9,7 +9,9 @@ paths:
   `ghcr.io/ps2dev/ps2sdk` image, for every push or PR that changes more than the docs or
   editor settings. So it also builds vclpp, the VU programs (with their checks) and the host
   tools. It is a compile check and keeps no ELF: releases are packaged from local builds
-  (`make_github_release.sh`), and the IOP modules an ELF embeds come from the SDK that built it.
+  (`make_github_release.sh`), and the IOP modules an ELF embeds come from the SDK that built it,
+  but audsrv, which `make` builds from `src/ps2/iop/audsrv` with the image's IOP compiler and the
+  SDK's `samples/Makefile.iopglobal`.
 - **`tools.yml`** builds the host tools alone, with GCC, Apple clang and MSVC, when they or the
   headers they share with the game change. It keeps the Windows `.exe` files as an artifact.
 - The two jobs see different hosts. `tools.yml` gets whatever GCC `ubuntu-latest` ships, on

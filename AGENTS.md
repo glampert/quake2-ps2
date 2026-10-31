@@ -7,7 +7,9 @@ id's Quake II (3.19) ported to the PS2 with only the free ps2dev SDK. Two halves
 - **`src/ps2`**: the console backend, all new C++20 (no exceptions, no RTTI, strict `-Werror`).
   It plugs into the engine at the old platform seams: `refexport_t`, `Sys_*`, `NET_*`, `IN_*`,
   `SNDDMA_*`, `CDAudio_*`, `Sys_Save*`. [src/ps2/common.h](src/ps2/common.h) is the one header
-  that bridges to the C engine.
+  that bridges to the C engine. The exception is `src/ps2/iop/audsrv`, the game's copy of
+  ps2sdk's audsrv IOP module: the SDK's C, built with the IOP compiler, kept close to upstream
+  with every change tagged `[PS2_QUAKE]` ([its README](src/ps2/iop/audsrv/README.md)).
 
 [README.md](README.md) is the architecture document: the renderer, VU1 path, sound, input,
 memory, save games, debugging cvars and the PCSX2 setup. Read the section you need before
@@ -17,7 +19,8 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 ## Toolchain
 
 - EE compiler: `mips64r5900el-ps2-elf-gcc`/`g++` (GCC 15). There is no `ee-gcc`/`ee-g++`, so
-  don't go looking for them. VU tools: `openvcl`, `dvp-as`. Also `bin2c`.
+  don't go looking for them. IOP compiler (audsrv only): `mipsel-none-elf-gcc`. VU tools:
+  `openvcl`, `dvp-as`. Also `bin2c`.
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.

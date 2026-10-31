@@ -23,6 +23,8 @@ paths:
   and the `scanf` family `warn_unused_result`. Neither macOS's libc nor newlib does, so an
   unchecked `fread` passes `make tools` and fails Linux CI (unpak, 2026-10-18). To check locally,
   redeclare them with `__attribute__((warn_unused_result))` in a header passed by `-include`.
+- `src/ps2/iop/audsrv` is ps2sdk's C for the IOP, not backend code: none of this applies to it.
+  Keep it close to upstream and tag every change `[PS2_QUAKE]` (its README).
 - Reach the engine through `ps2/common.h`, not by including engine headers directly.
 - Seam functions keep their Quake names, because they are `extern "C"` symbols the C engine
   links against: `Sys_*`, `NET_*`, `VID_*`, `IN_*`, `SNDDMA_*`, `CDAudio_*`, `Sys_Save*`, the

@@ -218,6 +218,13 @@ paths:
   boot's or the launcher's, so the keyboard asks for usbd whatever the boot started.
   Module-loader readiness is separate: only the host: path reaches its first buffer load
   without the sbv patches.
+- **IOP thread priorities decide who waits on a file read.** The IOP kernel has no time slicing:
+  a thread runs until it blocks or a higher-priority one (a lower number) becomes ready, and an
+  interrupt's `iSignalSema`/`iWakeupThread` switches at its exit. fileXio's RPC thread is 40, and
+  a HDD read keeps it running (dev9's `SpdDmaTransfer` spins on the DMA with interrupts on, by
+  design), so any other server at 40 waits for the whole read; ps2sdk's audsrv was one (its RPC
+  thread 40, its play thread 39). The game's audsrv runs its RPC thread at 39 (audio.md). Check a
+  module's `CreateThread` priority before routing per-frame RPCs through it.
 - **`mass:` is `mass0:`.** iomanX's `parsefile` reads a missing unit number as 0, and libcglue
   passes both spellings through unchanged. bdmfs_fatfs serves the N-th FAT/exFAT volume it
   mounted as `massN:` (N < 10, FatFs `FF_VOLUMES`): one volume per partition, in mount order,

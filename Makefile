@@ -303,13 +303,19 @@ TOOLS_BINS = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
 # by ps2/system/iop_boot.cpp when the game data isn't on host:,
 # the USB keyboard driver started on demand by ps2/input/keyboard.cpp, and the
 # sound driver pair (libsd under audsrv) started by ps2/audio/audsrv_device.cpp.
+# All are the SDK's but audsrv, which is the game's copy (src/ps2/iop/audsrv/README.md),
+# built into build/iop/ for both configs.
 IRX_PATH  = $(PS2SDK)/iop/irx
 IRX_FILES = iomanX.irx fileXio.irx \
             ps2dev9.irx ps2atad.irx ps2hdd.irx ps2fs.irx \
             bdm.irx bdmfs_fatfs.irx usbd.irx usbmass_bd.irx \
-            ps2kbd.irx libsd.irx audsrv.irx
+            ps2kbd.irx libsd.irx
 
-IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o))
+AUDSRV_PATH = $(SRC_DIR)/ps2/iop/audsrv
+AUDSRV_OUT  = $(BUILD_DIR)/iop/audsrv
+AUDSRV_IRX  = $(AUDSRV_OUT)/audsrv.irx
+
+IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o)) $(OUTPUT_DIR)/irx/audsrv.o
 
 EE_OBJS = $(C_OBJS) $(CXX_OBJS) $(VU_OBJS) $(IRX_OBJS) $(MINIZ_OBJS) $(SAVE_TABLES_O)
 DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d) $(MINIZ_OBJS:.o=.d)
@@ -513,6 +519,19 @@ $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx
 	$(PS2SDK)/bin/bin2c $< $(basename $@).c $(notdir $(basename $@))_irx
 	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $(basename $@).c -o $@
 
+$(OUTPUT_DIR)/irx/audsrv.o: $(AUDSRV_IRX)
+	@mkdir -p $(dir $@)
+	$(PS2SDK)/bin/bin2c $< $(basename $@).c audsrv_irx
+	$(EE_CC) $(EE_CFLAGS) $(EE_INCS) -c $(basename $@).c -o $@
+
+# The game's audsrv. Its own make decides what to rebuild, so it runs every time; an IRX it
+# left untouched keeps its date, and audsrv.o with it.
+$(AUDSRV_IRX): FORCE
+	@mkdir -p $(AUDSRV_OUT)
+	@$(MAKE) --no-print-directory -C $(AUDSRV_PATH) IOP_OBJS_DIR=$(abspath $(AUDSRV_OUT)/obj)/ IOP_BIN=$(abspath $@)
+
+FORCE:
+
 # Host tools.
 tools: $(TOOLS_BINS)
 
@@ -593,7 +612,7 @@ compiledb:
 
 # Both configs, not just the selected one.
 clean:
-	rm -rf $(BUILD_DIR)/debug $(BUILD_DIR)/release $(BUILD_DIR)/vu $(BUILD_DIR)/tools
+	rm -rf $(BUILD_DIR)/debug $(BUILD_DIR)/release $(BUILD_DIR)/vu $(BUILD_DIR)/iop $(BUILD_DIR)/tools
 
 clean_vu:
 	rm -rf $(BUILD_DIR)/vu

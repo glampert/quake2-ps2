@@ -157,6 +157,13 @@ int ps2::audio::DeviceRingBytes()
     return s_device.RingBytes();
 }
 
+void ps2::audio::TakeSubmitTimes(u32 & queryCycles, u32 & playCycles)
+{
+    const ps2::audio::MixRing::SendTimes times = s_mixRing.TakeSendTimes();
+    queryCycles = times.queryCycles;
+    playCycles  = times.playCycles;
+}
+
 // ------------------------------------------------------------------------------------------------
 // Public API
 // ------------------------------------------------------------------------------------------------

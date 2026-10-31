@@ -54,10 +54,22 @@ public:
     void Drain(AudsrvDevice & device, int paintedFrames);
 
     // What one Send did: the frames the device took, and its FreeBytes() before it took them.
+    // For the frame log, the ReadCycles() its two RPCs took: the free-space query, and the play
+    // (both of them when the copy splits at the wrap). Either waits on the IOP while a file read
+    // is out there.
     struct SendResult
     {
-        int sentFrames = 0;
-        int freeBytes  = 0;
+        int sentFrames  = 0;
+        int freeBytes   = 0;
+        u32 queryCycles = 0;
+        u32 playCycles  = 0;
+    };
+
+    // The slowest query and play of the sends committed since the last call, in ReadCycles().
+    struct SendTimes
+    {
+        u32 queryCycles = 0;
+        u32 playCycles  = 0;
     };
 
     // Drain's work without the cursor: offers the device up to pendingFrames of buffer from
@@ -77,11 +89,15 @@ public:
     // IOP had played out since the drain before. For the frame log (renderer/profile.cpp).
     int LastFreeBytes() const { return m_lastFreeBytes; }
 
+    // SendTimes since the last call, then starts over. For the frame log.
+    SendTimes TakeSendTimes();
+
 private:
     // Total frames handed to the device since Reset(). Free-running; the mask in
     // PositionInSamples() is what folds it back into the ring.
     int m_submittedFrames = 0;
     int m_lastFreeBytes   = 0;
+    SendTimes m_sendTimes;
 
     alignas(64) u8 m_buffer[kSizeBytes] = {};
 };

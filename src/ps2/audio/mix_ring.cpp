@@ -6,6 +6,7 @@
  * ================================================================================================ */
 
 #include "ps2/audio/mix_ring.h"
+#include "ps2/debug/profile.h" // ReadCycles
 #include <cstring>
 
 namespace ps2::audio {
@@ -41,8 +42,10 @@ MixRing::SendResult MixRing::Send(AudsrvDevice & device, const u8 * const buffer
 
     // FreeBytes() is already frame aligned and holds back the guard frame, so this
     // is exactly what audsrv will accept without dropping anything.
-    result.freeBytes     = device.FreeBytes();
-    const int freeFrames = result.freeBytes / AudsrvDevice::kFrameBytes;
+    const CpuCycles queryStart = ReadCycles();
+    result.freeBytes           = device.FreeBytes();
+    result.queryCycles         = ReadCycles() - queryStart;
+    const int freeFrames       = result.freeBytes / AudsrvDevice::kFrameBytes;
     if (freeFrames < pendingFrames)
     {
         pendingFrames = freeFrames;
@@ -59,8 +62,10 @@ MixRing::SendResult MixRing::Send(AudsrvDevice & device, const u8 * const buffer
             chunkFrames = pendingFrames;
         }
 
-        const int chunkBytes = chunkFrames * AudsrvDevice::kFrameBytes;
-        const int sentBytes = device.Enqueue(buffer + (offsetFrames * AudsrvDevice::kFrameBytes), chunkBytes);
+        const int chunkBytes      = chunkFrames * AudsrvDevice::kFrameBytes;
+        const CpuCycles playStart = ReadCycles();
+        const int sentBytes       = device.Enqueue(buffer + (offsetFrames * AudsrvDevice::kFrameBytes), chunkBytes);
+        result.playCycles        += ReadCycles() - playStart;
         if (sentBytes <= 0)
         {
             break;
@@ -86,6 +91,16 @@ void MixRing::Commit(const SendResult & result)
 {
     m_submittedFrames += result.sentFrames;
     m_lastFreeBytes    = result.freeBytes;
+
+    m_sendTimes.queryCycles = (result.queryCycles > m_sendTimes.queryCycles) ? result.queryCycles : m_sendTimes.queryCycles;
+    m_sendTimes.playCycles  = (result.playCycles > m_sendTimes.playCycles) ? result.playCycles : m_sendTimes.playCycles;
+}
+
+MixRing::SendTimes MixRing::TakeSendTimes()
+{
+    const SendTimes times = m_sendTimes;
+    m_sendTimes           = {};
+    return times;
 }
 
 } // namespace ps2::audio

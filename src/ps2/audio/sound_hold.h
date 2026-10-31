@@ -49,6 +49,8 @@ void PS2_SoundSetLoadingHold(int held);
 #ifdef __cplusplus
 }
 
+#include <tamtypes.h>
+
 namespace ps2::audio {
 
 // Whether the output is held now, by a PS2_SoundHoldBegin or by the loading plaque: nothing the
@@ -60,6 +62,10 @@ bool OutputHeld();
 // back behind a background read), and the ring's size. See FrameSample::sndFree in renderer/profile.cpp.
 int SubmitFreeBytes();
 int DeviceRingBytes();
+
+// Also for the frame log: the ReadCycles() of the slowest free-space query and play RPC of the
+// sends that finished since the last call, then starts over. See FrameSample::sndQueryCycles.
+void TakeSubmitTimes(u32 & queryCycles, u32 & playCycles);
 
 } // namespace ps2::audio
 #endif /* __cplusplus */

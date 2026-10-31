@@ -166,6 +166,12 @@ struct FrameSample
     // The background loader (fs/async_io.h): bytes it landed during the frame, and how many
     // requests were queued or running at the capture.
     int aioBytes, aioQ;
+
+    // How long the sends committed since the last row waited in each of their two audsrv RPCs
+    // (the slowest of each): the free-space query, whose reply sndFree is, and the play that
+    // follows it. Either waits on the IOP while a file read is out there; the ring can run lower
+    // than sndFree shows by as long as the play waits.
+    u32 sndQueryCycles, sndPlayCycles;
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -317,11 +323,12 @@ void WriteBatch()
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
-                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ\n");
+                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay\n");
         Emit("FLOG#note,timings are microseconds\n");
         Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held, -2 sent nothing (the last send still out, or held back behind a read)\n",
              ps2::audio::DeviceRingBytes());
         Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
+        Emit("FLOG#note,sndQuery and sndPlay are the slowest free-space and play RPCs of the sends finished since the last row, in microseconds\n");
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -345,7 +352,7 @@ void WriteBatch()
         {
             std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled,
                           s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
@@ -353,7 +360,8 @@ void WriteBatch()
                           s.batches, s.entities, s.particles, s.dlights,
                           s.lmAtlases, s.lmStyle, s.lmDynamic, s.lmRestore,
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
-                          s.chainKB, s.chainKicks, s.chainDrains, s.sndFree, s.aioBytes, s.aioQ);
+                          s.chainKB, s.chainKicks, s.chainDrains, s.sndFree, s.aioBytes, s.aioQ,
+                          ToMicrosec(s.sndQueryCycles), ToMicrosec(s.sndPlayCycles));
         }
 
         Emit("%s", line);
@@ -466,6 +474,8 @@ void FrameLogCapture()
     const ps2::aio::Stats aio = ps2::aio::TakeFrameStats();
     s.aioBytes = static_cast<int>(aio.bytesLanded);
     s.aioQ     = static_cast<int>(aio.queueDepth);
+
+    ps2::audio::TakeSubmitTimes(s.sndQueryCycles, s.sndPlayCycles);
 }
 
 void FrameLogFlush()

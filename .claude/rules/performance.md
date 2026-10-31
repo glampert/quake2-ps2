@@ -200,6 +200,17 @@ paths:
   of base2's load three times, the last with `ps2_sound_async 0` (`quake2.log` ends at
   `sky 256`): it lacked `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so it ran on the launcher's usbhdfsd (the
   2026-10-26 freeze below). The USB capture needs `quake2_profile_soundasync_reset_2026-10-31.elf`.
+  **USB, with that ELF (2026-10-31)** (`console-usb-soundasync-2026-10-31.flog` against
+  `console-usb-music-aio-2026-10-29.flog`): rows with `Sound` over 1 ms 6603 → 0 (over 3 ms
+  3 → 0), its worst row 33 ms → 132 µs; steady frames dropped 10 → 7, EE work mean 10182 →
+  9929 µs; SndMix 624-1037 → 130-255 µs, Music 130 → 195, Input 35-45 → 32-35. Only 4 `-2`
+  rows (two two-frame runs, both in cinematics). Both pickups now run at 17-23 ms frames with no
+  empty-ring reading; on 10-29 the slugs model cost a 23 ms frame (a 3.5 ms submit) and
+  `rg_hum.wav` an empty ring. The `sndFree` distribution matches. Readings that go from a full
+  ring (≤ 1880 free) to an empty one (≥ 7520) across one short frame, which playback can't do,
+  are as common as before (HDD 10 → 10, USB 50 → 48): an older quirk of the reading, or of
+  audsrv's ring, not the thread's; not looked into. That run's I/O log recorded no loads (0
+  files in each), so it has no load times.
   **Before handing over an ELF for a USB run, check it is a reset build**:
   `strings -a <elf> | grep -c "PS2_QUAKE_ALWAYS_RESET_IOP is set"` gives 1 (0 without the flag).
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow

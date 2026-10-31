@@ -595,8 +595,8 @@ the music landing as one 32 KB request every ~1.3 s, Music's worst row 1.38 → 
 **From the HDD, a regression** (2026-10-29, `console-hdd-music-aio-2026-10-29.flog`,
 performance.md): about one 32 KB music request in six outlasts §12.4's one-frame hold, and the
 submit waits 4-13 ms behind it; gameplay's blocked submits went from 2 to 13. Answered by
-§12.4's submit thread (2026-10-30): from the HDD (2026-10-31) no submit blocks; the USB capture
-is owed (§12.4).
+§12.4's submit thread (2026-10-30): on the console (2026-10-31, HDD and USB) no submit blocks
+(§12.4).
 
 **What exists.** `audio::MusicStream` (music_stream.{h,cpp}) owns a second thread: 8 KB static
 stack, equal priority to main, two semaphores, `ReaderLoop` serving two `Buffer`s strictly in
@@ -815,7 +815,10 @@ the longest four, behind one music request), and the ring's readings are distrib
 though two empty-ring readings follow a send that was out (one at the `rg_hum.wav` pickup). The
 ear check is owed. From USB that ELF froze at the end of the first load, with
 `ps2_sound_async 0` too: it was not a reset build, so it ran on the launcher's usbhdfsd
-(ps2-platform.md). The USB capture is owed, with `quake2_profile_soundasync_reset_2026-10-31.elf`.
+(ps2-platform.md). **USB gate met** with the reset build (2026-10-31,
+`console-usb-soundasync-2026-10-31.flog`, performance.md): no submit over 1 ms (6603 before), 4
+`-2` rows in the whole run, both pickups clean, dropped steady frames 10 → 7. The ear check is
+owed.
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
 the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed

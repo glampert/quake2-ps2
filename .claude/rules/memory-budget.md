@@ -76,9 +76,9 @@ paths:
   that shares the gap with dlmalloc.
 - **The background loader** (tag `Aio`, 2026-10-26): ~20 KB static (its 16 KB stack, 32 request
   slots, the pending tables: 8 sounds, 16 textures, 16 models), a 44 KB inflate workspace on the
-  heap from the first deflated request on, a 256-512 KB ring while a cinematic plays (in place of
-  the 64 KB stdio buffer), and file-sized staging for each sound, texture or model in flight
-  (models over 768 KB load synchronously). Every drain site runs before a level's sweeps, so
+  heap from the first deflated request on, a 256-512 KB ring while a cinematic plays and a 64 KB
+  one while a demo does (in place of the 64 KB stdio buffer), and file-sized staging for each
+  sound, texture or model in flight (models over 768 KB load synchronously). Every drain site runs before a level's sweeps, so
   nothing of it survives into a load. **MapCycle 2026-10-28** (`mapcycle-aio`, debug, pkz, against
   `mapcycle-menu-gamma`): all 39 maps load; every map's live total and load peak are +0.04 MB
   through mine4 and +0.08-0.09 MB from fact2 on, the worst moment 30.33 → **30.41 MB** (city3),

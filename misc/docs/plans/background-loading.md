@@ -457,8 +457,9 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
 - [x] **3. Cinematic read-ahead**, landed 2026-10-26 (`src/ps2/fs/readahead_stream.{h,cpp}`,
   the `FS_FOpenFileImpl` extension rule, `ps2_readahead_kb`, `aio::Cancel` so a close waits one
   chunk at most, the frame log's `aioBytes`/`aioQ`). Demos get it where their source is a range
-  (pak, stored pkz entry, loose); pak0.pkz deflates `.dm2`, so they don't from it: the `pakzip`
-  store rule stays optional. PCSX2 (can't show the gain, only that nothing broke): cinematic rows'
+  (pak, stored pkz entry, loose). pak0.pkz deflated `.dm2` until 2026-11-01, when `make pkz`
+  started storing them (`pakzip --store-ext .dm2`), with a 64 KB ring for a demo: from the HDD
+  that removed two 80 ms demo-refill frames per run (performance.md). PCSX2 (can't show the gain, only that nothing broke): cinematic rows'
   FsIo 958 → 824 µs mean, p95 1418 → 1101, Cinematic and Frame unchanged; `ps2_aio_throttle_kbps
   900` gives the same capture to the row, 200 KB/s starves as designed (`pcsx2-readahead-
   2026-10-26.flog`, `-throttled-`). **Console gate met (USB, 2026-10-27,
@@ -532,7 +533,7 @@ segment, since the USB capture's frame numbers are offset by a menu detour).
 | The audio submit waits on the IOP behind an HDD read (seen 2026-10-28: 8-44 ms in 2% of chunk rows) | §12.4: the submit on a thread of its own (2026-10-30), the main thread never waiting; before that a hold of one frame while a read is in flight, on the HDD only |
 | D-cache pollution from loader CPU work raises the main thread's EE time | Stage 7 is conditional and gated on a capture |
 | Paks or the pkz closed, or caches swept, with reads in flight | The five drain sites; asserts that nothing is pending at `Unload` and `FreeUnregistered` |
-| A deflated `.cin` or `.dm2` in the pkz gets no read-ahead | `pakzip` stores them, or pak and loose sources only |
+| A deflated `.cin` or `.dm2` in the pkz gets no read-ahead | `make pkz` stores `.dm2` (2026-11-01); `.cin` files are loose in `video/` |
 | The PCSX2 `_request_end` TLB flake during host I/O | Known (testing-pcsx2.md); re-run before investigating |
 | The deadline re-queue in `S_PaintChannels` | Re-queue strictly past `paintedtime`, so its issue loop always breaks |
 
@@ -817,8 +818,13 @@ ear check is owed. From USB that ELF froze at the end of the first load, with
 `ps2_sound_async 0` too: it was not a reset build, so it ran on the launcher's usbhdfsd
 (ps2-platform.md). **USB gate met** with the reset build (2026-10-31,
 `console-usb-soundasync-2026-10-31.flog`, performance.md): no submit over 1 ms (6603 before), 4
-`-2` rows in the whole run, both pickups clean, dropped steady frames 10 → 7. The ear check is
-owed.
+`-2` rows in the whole run, both pickups clean, dropped steady frames 10 → 7. **By ear
+(2026-10-31) the HDD still stuttered at the railgun pickup and a few other demo moments,** and
+timing the thread's two RPCs (`sndQuery`/`sndPlay`) found the free-space query waiting up to
+65 ms behind a loader read: ps2sdk's audsrv answers RPCs at fileXio's priority. **Fixed
+2026-11-01** by the game's own audsrv (`src/ps2/iop/audsrv`, a `rpc_prio=` argument, started at
+39): the slowest query 0.53-0.64 ms (performance.md). With the demos stored in the pkz as well
+(stage 3's optional rule, done the same day), a full HDD run was heard with no stutter.
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from
 the HDD, 57 cinematic rows had `SndMix` of 8-44 ms, each one a row where a loader chunk landed

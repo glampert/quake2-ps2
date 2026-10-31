@@ -69,12 +69,19 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   audsrv's IOP server has one receive buffer (`rpc_buffer`, rpc_server.c), and SIF RPC DMAs a
   request's data into it when the request is sent, so two requests out at once can overwrite
   each other; the SDK client serialises them with `completion_sema`. On the console from the HDD
-  (2026-10-31, performance.md) no submit blocks any more, but the thread's own RPCs still wait:
-  timed (`sndQuery`/`sndPlay`), the free-space query waits up to 65 ms behind a loader read,
-  the play call almost never, and the time between top-ups then nears the ring's ~96 ms. audsrv
-  creates its RPC thread with a literal 40 (`rpc_server.c`; the one `li a1,40` in the SDK's
-  audsrv.irx, `.text` 0x11b0), and its ring at `feed_size * 10` (`audsrv_set_format`) though
-  the static buffer is 20480 bytes. Its first USB runs froze at the end of
+  (2026-10-31, performance.md) no submit blocks any more, but the thread's own RPCs still waited:
+  timed (`sndQuery`/`sndPlay`), the free-space query waited up to 65 ms behind a loader read,
+  the play call almost never, and the time between top-ups then neared the ring's ~96 ms; the
+  user heard it at the railgun pickup. **ps2sdk's audsrv creates its RPC thread at a literal 40**
+  (`rpc_server.c`), fileXio's priority, and the IOP has no time slicing, so a request waits out
+  any read in progress (its play thread, 39, is unaffected: dev9's DMA spin runs with interrupts
+  on). **Since 2026-11-01 the game builds its own audsrv** (`src/ps2/iop/audsrv`, the SDK's at
+  `329e2bb` plus a `rpc_prio=` argument) and starts it at 39: the slowest free-space call of a
+  console HDD run went 65.4 → 0.53-0.64 ms and sends still out at the next frame 77 → 1
+  (performance.md). A boot-time patch of the SDK's image (the one `li a1,40`, `.text` 0x11b0)
+  measured the same and was dropped for the source change. audsrv's ring is `feed_size * 10`
+  (`audsrv_set_format`) though its static buffer is 20480 bytes: a longer ring would be a
+  one-line change there now, at the cost of latency. Its first USB runs froze at the end of
   base2's load, with `ps2_sound_async 0` too: that ELF was built without
   `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so it ran on the launcher's usbhdfsd, the known freeze
   (ps2-platform.md), not the thread. Anything else that calls

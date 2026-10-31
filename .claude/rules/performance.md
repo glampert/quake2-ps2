@@ -233,6 +233,18 @@ paths:
   closest call is base2 frame 803 (65.4 ms query, 7520 free at the reply, ~21 ms left). The
   earlier HDD capture read an empty ring at two of the same spots (3986, 4731), so the margin
   is crossed now and then; from USB no query waits.
+- **audsrv's RPC thread at 39, console HDD (2026-11-01).** First as a boot-time patch of the SDK's
+  image (`quake2_profile_audsrvprio_2026-10-31.elf`, `console-hdd-audsrvprio-2026-11-01.flog`):
+  `sndQuery` max 65.4 → 0.77 ms, rows over 5 ms 97 → 0, `sndPlay` max 5.7 → 1.4 ms, sends still
+  out at the next frame 77 → 1 (eou1_'s start), query p50 unchanged (139-140 µs on the demos); by
+  ear the railgun pickup's stutter was gone. The two left in the demos were the demo stream's
+  refills (80 ms frames, ~58 ms of Server; the ring still held ~32 ms). Then the game's own
+  audsrv plus the demos stored in the pkz (`quake2_profile_audsrvfork_2026-11-01.elf`,
+  `console-hdd-audsrvfork-2026-11-01.flog`): `sndQuery` max 0.53 ms on the demos, 0.64 on ntro;
+  no demo frame over 60 ms (two before); dropped steady frames 8 → 6, all of them waste2's heavy
+  view (4587-4604), base2 none (2 before); the demo opens' Server 27.1 and 41.8 → 15.6 and 26.5 ms.
+  No stutter heard in the run. The near-empty readings left in the demos (frames 116-117, 3792)
+  each follow a frame-log write, as above.
 - **Emergency chain drains: fixed 2026-10-11** (`cmdbuf::Reserve`'s overflow path). An overflow
   used to kick what was built, wait for the GS to draw all of it and rebuild in the same half, so
   the EE sat idle. On a console that cost ~5 ms per overflowing frame, and under NTSC those
@@ -271,6 +283,9 @@ paths:
   plays two refills, and the demo switch adds demo2's first fill. One costs 135-630 ms,
   because it waits out a pending music read (`audio.md`). Server holds the time, one row
   before the slow Frame (see `frame_budget.py`). Only demo playback streams like this.
+  **Gone since 2026-11-01:** `make pkz` stores the demos, so they stream through the loader's
+  read-ahead ring (64 KB for a demo) like the cinematics; from the HDD the two 80 ms refill
+  frames (base2 1722, waste2 4921) went with them (the 2026-11-01 bullet above).
 
 - **The console baseline of 2026-10-26** (the user's PAL console, profiling release f7c9918 with the
   I/O log, launched from the HDD; `build/baselines/console-hdd-2026-10-26.flog`, the raw

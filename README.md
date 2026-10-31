@@ -709,7 +709,10 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
 
 - [`AudsrvDevice`](src/ps2/audio/audsrv_device.h) owns the streaming session over `audsrv.irx`
   (loaded with `libsd.irx`, both embedded in the ELF, by
-  [iop_boot.cpp](src/ps2/system/iop_boot.cpp), like every IOP module), exposing audsrv's queue
+  [iop_boot.cpp](src/ps2/system/iop_boot.cpp), like every IOP module). The audsrv is the game's
+  own copy of ps2sdk's ([ps2/iop/audsrv](src/ps2/iop/audsrv/README.md)), started with its RPC
+  thread one priority above fileXio's, so its calls never wait out a file read; the rest of the
+  IOP modules are the SDK's. It exposes audsrv's queue
   as "how many bytes fit right now" and "take these". The SPU2 is only reachable from the
   IOP — there is no EE-side mapping of its registers — so every mixed byte crosses SIF.
   Output is 16-bit stereo at 22050 Hz by default (`s_khz`; 11025 and 44100 also work),
@@ -740,9 +743,11 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
   music starts as the plaque comes down. A level change brings the plaque up before it
   writes the level it leaves.
 
-On the HDD, the submit's two audsrv RPCs wait on the IOP while another thread's file call is
-out there (the background loader's, the music's reads among them), 4-44 ms on a console. So the
-submit runs on a thread of its own ([submit_thread.h](src/ps2/audio/submit_thread.h)), one
+On the HDD, the submit's two audsrv RPCs used to wait on the IOP while another thread's file call
+was out there (the background loader's, the music's reads among them), 4-65 ms on a console:
+ps2sdk's audsrv answers at the priority of fileXio's thread, and the IOP has no time slicing. The
+game's audsrv answers one priority above it, and the calls take under a millisecond. The
+submit also runs on a thread of its own ([submit_thread.h](src/ps2/audio/submit_thread.h)), one
 priority above the main thread: the main thread posts the frame's painted audio and carries on,
 and a frame whose previous send is still out on the IOP posts nothing, the next one sending both.
 The submit cursor still moves on the main thread only, when it collects a finished send.
@@ -918,8 +923,9 @@ mostly reads, so the changes are all about reading less, less often:
   reader work unchanged and a frame's reads copy from memory. The 64 KB stdio buffer the main
   thread used to refill, 93 ms a time from a USB stick, was the cinematic stutter: each refill
   frame overran audsrv's 106 ms ring. `ps2_readahead_kb` sizes the ring (512 KB default, 256 KB
-  when memory is short, 0 = the old stream); a deflated pkz entry still gets the old stream, so a
-  `.dm2` from pak0.pkz does.
+  when memory is short, 0 = the old stream; a demo's is 64 KB); a deflated pkz entry still gets
+  the old stream, so `make pkz` stores the demos (`pakzip --store-ext .dm2`). From a deflated
+  `.dm2` each 64 KB refill froze a demo frame for 80 ms on the HDD.
 
 ### System and memory
 

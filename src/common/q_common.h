@@ -28,7 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 // [PS2_QUAKE]: Original Quake2 source code release starts at 3.19 and so does
 // PS2 Quake2's first release. Subsequent PS2 releases bump the minor version.
-#define VERSION 3.21
+#define VERSION 3.22
 #define BASEDIRNAME "baseq2"
 
 #ifdef WIN32

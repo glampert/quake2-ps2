@@ -64,6 +64,20 @@ paths:
   only, by the names input.cpp's table gives them (`IN_GamepadKeyName`); its grab is answered
   with each button's game key (`M_IsGrabbingKey`), since the menu keys the pad otherwise sends
   (Enter for cross and square, Escape for circle) would bind the wrong key.
+- **Every level load asks for files baseq2 doesn't have.** `CL_RegisterTEntModels` (cl_tent.c)
+  registers `models/ctf/segment`, `objects/r_explode2`, `proj/lightning`, `proj/beam` and
+  `proj/widowbeam`, which only CTF and the mission packs ship. id's shipped demos also carry bad
+  data: `demo1.dm2` names `weapons/v_shotg/flash2/tris.md2` (no `models/` prefix), and both demos
+  give the player the skin `male/skin`, so the attract loop asks for `players/male/skin.pcx` and
+  `skin_i.pcx`. ref_gl failed these silently. Ours print `Unable to load model` and
+  `Can't load PCX file`, both `Com_DPrintf` (developer only) since 2026-11-04.
+- **`RegisterSkin`/`RegisterPic` never return NULL on this port**: a missing file comes back as
+  the checkerboard (`FindTextureOrPlaceholder`, ref.cpp). That leaves `CL_LoadClientinfo`'s
+  fallbacks dead: the "skin missing, use `grunt.pcx`" step and the "anything missing, use
+  `cl.baseclientinfo`" step. The demo player gets the checkerboard skin and icon, where ref_gl
+  gave grunt. In the demos that's never seen (no model drawn for the viewer), but a multiplayer
+  client with a skin we lack would show it. Left as is on 2026-11-04. A fix returns NULL for a
+  missing file, after checking that every skin and pic draw site handles NULL.
 
 ## Level loading and registration
 

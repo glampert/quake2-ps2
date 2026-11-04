@@ -472,7 +472,7 @@ const ModelInstance * ModelCache::LoadModel(const char * const name)
     // load and is closed once here.
     if (!PeekModelType(name, type, &file, &fileLen)) [[unlikely]]
     {
-        Com_Printf("WARNING: Unable to load model '%s'! Failed to open file.\n", name);
+        Com_DPrintf("WARNING: Unable to load model '%s'! Failed to open file.\n", name);
         return nullptr;
     }
 

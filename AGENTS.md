@@ -7,9 +7,7 @@ id's Quake II (3.19) ported to the PS2 with only the free ps2dev SDK. Two halves
 - **`src/ps2`**: the console backend, all new C++20 (no exceptions, no RTTI, strict `-Werror`).
   It plugs into the engine at the old platform seams: `refexport_t`, `Sys_*`, `NET_*`, `IN_*`,
   `SNDDMA_*`, `CDAudio_*`, `Sys_Save*`. [src/ps2/common.h](src/ps2/common.h) is the one header
-  that bridges to the C engine. The exception is `src/ps2/iop/audsrv`, the game's copy of
-  ps2sdk's audsrv IOP module: the SDK's C, built with the IOP compiler, kept close to upstream
-  with every change tagged `[PS2_QUAKE]` ([its README](src/ps2/iop/audsrv/README.md)).
+  that bridges to the C engine.
 
 [README.md](README.md) is the architecture document: the renderer, VU1 path, sound, input,
 memory, save games, debugging cvars and the PCSX2 setup. Read the section you need before
@@ -19,8 +17,7 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 ## Toolchain
 
 - EE compiler: `mips64r5900el-ps2-elf-gcc`/`g++` (GCC 15). There is no `ee-gcc`/`ee-g++`, so
-  don't go looking for them. IOP compiler (audsrv only): `mipsel-none-elf-gcc`. VU tools:
-  `openvcl`, `dvp-as`. Also `bin2c`.
+  don't go looking for them. VU tools: `openvcl`, `dvp-as`. Also `bin2c`.
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.
@@ -28,8 +25,10 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   (`./build-all.sh 3 4 5` reruns only those steps: 1 toolchain, 2 ps2sdk, 3 ports,
   4 ps2-packer, 5 ps2client). ps2sdk-ports needs Homebrew's `pkgconf`, and its install runs
   `sed -i` on symlinked `.pc` files, which BSD sed refuses. Then `make clean`: make tracks
-  neither the SDK's libraries nor its headers. Last rebuilt 2026-10-19: ps2sdk `329e2bb`
-  (CI's pin), newlib `8881dc4`.
+  neither the SDK's libraries nor its headers. `build-all.sh` builds ps2sdk's master; to match
+  CI's pin, run the step with its commit instead, from `build/`:
+  `../scripts/002-ps2sdk.sh <sha>`. Last rebuilt 2026-10-19 (toolchain, newlib `8881dc4`)
+  and 2026-11-04 (ps2sdk `d41ea62`, CI's pin).
 - Submodules: `src/tools/vclpp` (VCL preprocessor, with its own nested `external/parse-utils`),
   `src/tools/vu-checker` (`check_vu_code.py`), `src/tools/miniz`. The build uses the pinned
   vclpp it builds into `build/tools/vclpp`, never one on `PATH`.

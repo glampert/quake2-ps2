@@ -150,12 +150,12 @@ constexpr const char * kLoadfileName = "LoadModuleByEE";
 constexpr char kHddArgs[] = "-o\0" "4\0" "-n\0" "20";
 constexpr char kPfsArgs[] = "-m\0" "1\0" "-o\0" "16\0" "-n\0" "40";
 
-// The game's audsrv (ps2/iop/audsrv) takes its RPC thread's priority as an argument. ps2sdk's
-// created it at 40, fileXio's priority, and the IOP has no time slicing, so audsrv_available and
-// audsrv_play_audio waited out any file read already in progress: up to 65 ms from the HDD, most
-// of audsrv's ~106 ms ring (console, 2026-10-31; performance.md). At 39, the play thread's
-// priority, a request preempts the read when it arrives.
-constexpr char kAudsrvArgs[] = "rpc_prio=39";
+// audsrv's RPC thread priority (thpri=, ps2sdk d41ea62 on; 40 by default). At 40, fileXio's
+// priority, with no time slicing on the IOP, audsrv_available and audsrv_play_audio waited out
+// any file read already in progress: up to 65 ms from the HDD, most of audsrv's ~106 ms ring
+// (console, 2026-10-31; performance.md). At 39, the play thread's priority, a request preempts
+// the read when it arrives. An older audsrv ignores the argument.
+constexpr char kAudsrvArgs[] = "thpri=39";
 
 // An IRX the ELF carries, with the arguments the boot starts it with.
 struct IrxModule

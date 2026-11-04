@@ -709,10 +709,9 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
 
 - [`AudsrvDevice`](src/ps2/audio/audsrv_device.h) owns the streaming session over `audsrv.irx`
   (loaded with `libsd.irx`, both embedded in the ELF, by
-  [iop_boot.cpp](src/ps2/system/iop_boot.cpp), like every IOP module). The audsrv is the game's
-  own copy of ps2sdk's ([ps2/iop/audsrv](src/ps2/iop/audsrv/README.md)), started with its RPC
-  thread one priority above fileXio's, so its calls never wait out a file read; the rest of the
-  IOP modules are the SDK's. It exposes audsrv's queue
+  [iop_boot.cpp](src/ps2/system/iop_boot.cpp), like every IOP module). audsrv is started with
+  `thpri=39`, its RPC thread one priority above fileXio's, so its calls never wait out a file
+  read. It exposes audsrv's queue
   as "how many bytes fit right now" and "take these". The SPU2 is only reachable from the
   IOP — there is no EE-side mapping of its registers — so every mixed byte crosses SIF.
   Output is 16-bit stereo at 22050 Hz by default (`s_khz`; 11025 and 44100 also work),
@@ -745,8 +744,9 @@ in the build unchanged. The backend ([ps2/audio/](src/ps2/audio/)) only implemen
 
 On the HDD, the submit's two audsrv RPCs used to wait on the IOP while another thread's file call
 was out there (the background loader's, the music's reads among them), 4-65 ms on a console:
-ps2sdk's audsrv answers at the priority of fileXio's thread, and the IOP has no time slicing. The
-game's audsrv answers one priority above it, and the calls take under a millisecond. The
+audsrv answered at the priority of fileXio's thread, and the IOP has no time slicing. Started with
+`thpri=39` (an argument ps2sdk's audsrv has taken since `d41ea62`), it answers one priority above
+it, and the calls take under a millisecond. The
 submit also runs on a thread of its own ([submit_thread.h](src/ps2/audio/submit_thread.h)), one
 priority above the main thread: the main thread posts the frame's painted audio and carries on,
 and a frame whose previous send is still out on the IOP posts nothing, the next one sending both.

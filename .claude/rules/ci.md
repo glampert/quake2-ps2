@@ -9,9 +9,7 @@ paths:
   `ghcr.io/ps2dev/ps2sdk` image, for every push or PR that changes more than the docs or
   editor settings. So it also builds vclpp, the VU programs (with their checks) and the host
   tools. It is a compile check and keeps no ELF: releases are packaged from local builds
-  (`make_github_release.sh`), and the IOP modules an ELF embeds come from the SDK that built it,
-  but audsrv, which `make` builds from `src/ps2/iop/audsrv` with the image's IOP compiler and the
-  SDK's `samples/Makefile.iopglobal`.
+  (`make_github_release.sh`), and the IOP modules an ELF embeds come from the SDK that built it.
 - **`tools.yml`** builds the host tools alone, with GCC, Apple clang and MSVC, when they or the
   headers they share with the game change. It keeps the Windows `.exe` files as an artifact.
 - The two jobs see different hosts. `tools.yml` gets whatever GCC `ubuntu-latest` ships, on
@@ -37,10 +35,13 @@ paths:
   and August 2026 still resolved in October.
 - **`v2.0.0`, the only release tag since 2021, can't build this tree.** openvcl and masp
   joined ps2toolchain-dvp on 2026-05-18, two days after it. Every `latest` since has them.
-- The pin, as of 2026-10-19: `latest` as built on 2026-10-13, which is ps2sdk `329e2bb`,
-  GCC 15.2.0, binutils 2.45.1, newlib 4.6.0 (`8881dc4`, with `HAVE_BLKSIZE`), openvcl 0.4.0,
-  on Alpine 3.24. The local install was rebuilt the same day from the same sources (see the
-  update recipe in AGENTS.md).
+- The pin, as of 2026-11-04: `latest` as built on 2026-11-03, which is ps2sdk `d41ea62` (the
+  first with audsrv's `thpri=`, PR #952), GCC 15.2.0, binutils 2.45.1, newlib 4.6.0 (`8881dc4`,
+  with `HAVE_BLKSIZE`), openvcl 0.4.0, on Alpine 3.24. The previous pin was 2026-10-13's,
+  ps2sdk `329e2bb`; the toolchain repos had no new commits between the two. The local install
+  matches (the update recipe is in AGENTS.md). The image is two squashed layers, so comparing
+  layers says nothing about what changed: compare the revision labels, and the toolchain
+  repos' commits and image builds (`gh run list -R ps2dev/ps2toolchain`).
 - **Moving the pin:** read the new digest, check that it builds (below), then update the
   digest and the comment above it in `ps2.yml`. The registry answers without Docker or a
   GitHub login:

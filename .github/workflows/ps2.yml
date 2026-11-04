@@ -35,9 +35,9 @@ jobs:
     # x64 on purpose: the runner can only run JavaScript actions (checkout) inside an Alpine
     # container on an x64 machine.
     runs-on: ubuntu-latest
-    # ps2sdk:latest as built on 2026-10-13: ps2sdk 329e2bb, GCC 15.2.0, binutils 2.45.1,
-    # newlib 4.6.0, openvcl 0.4.0, on Alpine 3.24.
-    container: ghcr.io/ps2dev/ps2sdk@sha256:075831168002ab67659125e369d24f34e8f43d1af530f63582932e7648d9275a
+    # ps2sdk:latest as built on 2026-11-03: ps2sdk d41ea62 (audsrv's thpri= argument), GCC
+    # 15.2.0, binutils 2.45.1, newlib 4.6.0, openvcl 0.4.0, on Alpine 3.24.
+    container: ghcr.io/ps2dev/ps2sdk@sha256:af7fa0f35aec087c89d033c8063cbc0e68c084e534a8f512827e77df274984d9
     steps:
       # The image has nothing for the host side of the build: make, the C/C++ compiler vclpp and
       # the host tools are built with, CMake, and Python 3 for the build scripts. git goes in

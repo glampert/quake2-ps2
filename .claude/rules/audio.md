@@ -75,13 +75,14 @@ measurements behind CD music (`cd_audio.cpp`, `music_stream.*`, `spu_adpcm.h`,
   user heard it at the railgun pickup. **ps2sdk's audsrv creates its RPC thread at a literal 40**
   (`rpc_server.c`), fileXio's priority, and the IOP has no time slicing, so a request waits out
   any read in progress (its play thread, 39, is unaffected: dev9's DMA spin runs with interrupts
-  on). **Since 2026-11-01 the game builds its own audsrv** (`src/ps2/iop/audsrv`, the SDK's at
-  `329e2bb` plus a `rpc_prio=` argument) and starts it at 39: the slowest free-space call of a
-  console HDD run went 65.4 → 0.53-0.64 ms and sends still out at the next frame 77 → 1
-  (performance.md). A boot-time patch of the SDK's image (the one `li a1,40`, `.text` 0x11b0)
-  measured the same and was dropped for the source change. audsrv's ring is `feed_size * 10`
-  (`audsrv_set_format`) though its static buffer is 20480 bytes: a longer ring would be a
-  one-line change there now, at the cost of latency. Its first USB runs froze at the end of
+  on). **The boot starts audsrv with `thpri=39`**, its RPC thread one above fileXio's: the
+  slowest free-space call of a console HDD run went 65.4 → 0.53-0.64 ms and sends still out at
+  the next frame 77 → 1 (performance.md). The argument went into ps2sdk as PR #952 (in
+  `d41ea62`, CI's pin since 2026-11-04); from 2026-11-01 until then the game built its own copy
+  of audsrv with the same change, and before that a boot-time patch of the SDK's image (its one
+  `li a1,40`, `.text` 0x11b0) measured the same. An audsrv older than `d41ea62` ignores the
+  argument and stays at 40. Its ring is `feed_size * 10` (`audsrv_set_format`) though the static
+  buffer is 20480 bytes; a longer ring would cost latency. Its first USB runs froze at the end of
   base2's load, with `ps2_sound_async 0` too: that ELF was built without
   `PS2_QUAKE_ALWAYS_RESET_IOP=1`, so it ran on the launcher's usbhdfsd, the known freeze
   (ps2-platform.md), not the thread. Anything else that calls

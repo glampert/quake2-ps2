@@ -822,8 +822,9 @@ ear check is owed. From USB that ELF froze at the end of the first load, with
 (2026-10-31) the HDD still stuttered at the railgun pickup and a few other demo moments,** and
 timing the thread's two RPCs (`sndQuery`/`sndPlay`) found the free-space query waiting up to
 65 ms behind a loader read: ps2sdk's audsrv answers RPCs at fileXio's priority. **Fixed
-2026-11-01** by the game's own audsrv (`src/ps2/iop/audsrv`, a `rpc_prio=` argument, started at
-39): the slowest query 0.53-0.64 ms (performance.md). With the demos stored in the pkz as well
+2026-11-01** by audsrv's RPC thread at 39 (first a copy of audsrv with a `rpc_prio=` argument;
+since 2026-11-04 the SDK's own, `thpri=39`, upstreamed as ps2sdk PR #952): the slowest query
+0.53-0.64 ms (performance.md). With the demos stored in the pkz as well
 (stage 3's optional rule, done the same day), a full HDD run was heard with no stutter.
 
 **What the console showed** (2026-10-28, `console-hdd-aio-2026-10-28.flog`, performance.md): from

@@ -42,4 +42,7 @@ void IN_RumbleStop(void);                    // stop the motors now, e.g. ahead 
 // [PS2_QUAKE]: the controls menu lists gamepad buttons, by the names the backend gives them.
 const char * IN_GamepadKeyName(int key);     // the button sending 'key' in play, or NULL for any other key
 
+// [PS2_QUAKE]: the pad's default binds on every pad key left unbound (after default.cfg's unbindall).
+void IN_InstallDefaultBinds(void);
+
 #endif // CL_INPUT_H

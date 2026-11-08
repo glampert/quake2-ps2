@@ -804,7 +804,8 @@ lookspring or lookstrafe rows: those only changed mouse look, and nothing reads 
 Buttons send **one of two keys depending on where input focus is**, so menus and the console
 stay navigable without stealing gameplay binds. The gameplay keys are ordinary rebindable
 `JOY`/`AUX` keys, given default binds at startup only if the user's config has not bound
-them already:
+them already. The Options menu's "reset defaults" puts them back too: `default.cfg`'s
+`unbindall` clears them, and it binds only the keyboard again.
 
 | Button | Menu / console | In game (default bind) |
 | --- | --- | --- |

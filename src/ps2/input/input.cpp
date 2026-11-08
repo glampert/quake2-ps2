@@ -156,7 +156,9 @@ void InstallDefaultBinds()
 {
     for (const ButtonMapping & mapping : kButtonMap)
     {
-        if (mapping.gameBind == nullptr || keybindings[mapping.gameKey] != nullptr)
+        // An empty binding is an unbound key too: unbind and unbindall leave "" behind, not null.
+        const char * const current = keybindings[mapping.gameKey];
+        if (mapping.gameBind == nullptr || (current != nullptr && current[0] != '\0'))
         {
             continue; // Nothing to bind, or the user's config already bound this key.
         }
@@ -266,6 +268,14 @@ void IN_Shutdown()
 {
     s_gamepad.Shutdown();
     s_keyboard.Shutdown();
+}
+
+// The pad's default binds on every pad key left unbound. IN_Init runs it after config.cfg, and
+// the Options menu's "reset defaults" after default.cfg, whose unbindall clears them along with
+// the keyboard's binds and which binds only the keyboard's again.
+void IN_InstallDefaultBinds()
+{
+    InstallDefaultBinds();
 }
 
 // ------------------------------------------------------------------------------------------------

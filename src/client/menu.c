@@ -78,6 +78,12 @@ static char * m_config_at_open;
 static size_t m_config_at_open_len;
 char * CL_ConfigurationText(size_t * length); // cl_main.c
 
+// [PS2_QUAKE]: the controls menu waiting for a button to bind (declared with the keys menu in id's
+// code). Moved up so M_ForceMenuOff can end it: SELECT's console toggle closes the menu from keys.c
+// without the keys menu seeing the key, and a grab left set has the backend send game keys to
+// every later menu and the console, which then ignore every button (see M_IsGrabbingKey).
+static int bind_grab;
+
 // play after drawing a frame, so caching won't disrupt the sound.
 static qboolean m_entersound;
 
@@ -175,6 +181,7 @@ void M_ForceMenuOff(void)
     m_keyfunc = 0;
     cls.key_dest = key_game;
     m_menudepth = 0;
+    bind_grab = false; // [PS2_QUAKE]: see its declaration
     Key_ClearStates();
     Cvar_Set("paused", "0");
 }
@@ -758,7 +765,7 @@ char * bindnames[][2] =
 };
 
 int keys_cursor;
-static int bind_grab;
+// [PS2_QUAKE]: bind_grab moved up, next to the menu stack, for M_ForceMenuOff.
 
 // [PS2_QUAKE]: read by the input backend, which then sends each gamepad button's game key
 // rather than its menu key, so the bind lands on the key the button sends in play.
@@ -1298,6 +1305,9 @@ static void ControlsResetDefaultsFunc(void * unused)
 {
     Cbuf_AddText("exec default.cfg\n");
     Cbuf_Execute();
+    // [PS2_QUAKE]: default.cfg's unbindall cleared the pad's binds too, and it binds only the
+    // keyboard again: put back the pad's defaults, which the backend installs at boot.
+    IN_InstallDefaultBinds();
 
     ControlsSetMenuItemValues();
 }

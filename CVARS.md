@@ -164,6 +164,7 @@ Registered by id's code rather than the backend, but set up or read differently 
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
 | `developer` | `1` | `0` | | Engine debug prints (`Com_DPrintf`); the default follows the build here. |
+| `crosshair_scale` | `1` | `1` | Arch. | New on this port, beside id's `crosshair`: the crosshair's size on screen, as a multiple of the pic's own, 0.5 to 4, still centred (cl_view.c). The Options menu's "crosshair size" row steps 1x to 3x in halves. Pics are point-sampled, so a whole number keeps every line of it the same width. Applies at the next frame. |
 | `s_khz` | `22` | `22` | Arch. | Sound output rate: 11, 22 or 44 (kHz); anything else falls back to 22. |
 | `sensitivity` | `3` | `3` | Arch. | The right stick's turning and looking speed, as a multiple of the default 3: 6 turns twice as fast (the Options menu's "camera rotation speed", 1 to 11). There is no mouse. |
 | `m_pitch` | `0.022` | `0.022` | Arch. | Only its sign is read: negative flips the right stick's up and down (the Options menu's "invert look Y axis"), as win32's joystick code did with the mouse inverted. |

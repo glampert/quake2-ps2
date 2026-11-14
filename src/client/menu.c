@@ -1208,6 +1208,7 @@ static menulist_s s_options_invertmouse_box;
 static menulist_s s_options_lookspring_box;
 static menulist_s s_options_lookstrafe_box;
 static menulist_s s_options_crosshair_box;
+static menulist_s s_options_crosshairscale_box; // [PS2_QUAKE]
 static menuslider_s s_options_sfxvolume_slider;
 static menuslider_s s_options_musicvolume_slider; // [PS2_QUAKE]
 static menulist_s s_options_joystick_box;
@@ -1221,6 +1222,29 @@ static menuaction_s s_options_debug_action; // [PS2_QUAKE]
 static void CrosshairFunc(void * unused)
 {
     Cvar_SetValue("crosshair", s_options_crosshair_box.curvalue);
+}
+
+// [PS2_QUAKE]: the crosshair's size (crosshair_scale, cl_view.c), a row per entry here.
+static const float crosshair_scales[] = { 1.0f, 1.5f, 2.0f, 2.5f, 3.0f };
+
+static void CrosshairScaleFunc(void * unused)
+{
+    Cvar_SetValue("crosshair_scale", crosshair_scales[s_options_crosshairscale_box.curvalue]);
+}
+
+// The entry nearest the cvar, which the console can set to anything.
+static int CrosshairScaleIndex(void)
+{
+    const int count = sizeof(crosshair_scales) / sizeof(crosshair_scales[0]);
+    int best = 0;
+    int i;
+
+    for (i = 1; i < count; ++i)
+    {
+        if (PS2_Fabsf(crosshair_scales[i] - crosshair_scale->value) < PS2_Fabsf(crosshair_scales[best] - crosshair_scale->value))
+            best = i;
+    }
+    return best;
 }
 
 static void JoystickFunc(void * unused)
@@ -1291,6 +1315,8 @@ static void ControlsSetMenuItemValues(void)
 
     Cvar_SetValue("crosshair", ClampCvar(0, 3, crosshair->value));
     s_options_crosshair_box.curvalue = crosshair->value;
+
+    s_options_crosshairscale_box.curvalue = CrosshairScaleIndex(); // [PS2_QUAKE]
 
     Cvar_SetValue("in_joystick", ClampCvar(0, 1, in_joystick->value));
     s_options_joystick_box.curvalue = in_joystick->value;
@@ -1450,6 +1476,17 @@ void Options_MenuInit(void)
       0
     };
 
+    // [PS2_QUAKE]: crosshair_scales' entries, in order.
+    static const char * crosshair_scale_names[] =
+    {
+      "1x",
+      "1.5x",
+      "2x",
+      "2.5x",
+      "3x",
+      0
+    };
+
     win_noalttab = Cvar_Get("win_noalttab", "0", CVAR_ARCHIVE);
 
     /*
@@ -1570,6 +1607,15 @@ void Options_MenuInit(void)
     s_options_crosshair_box.generic.callback = CrosshairFunc;
     s_options_crosshair_box.itemnames = crosshair_names;
 
+    // [PS2_QUAKE] 2026-11-15
+    // The crosshair's size (crosshair_scale, cl_view.c). Everything below moved down a row for it.
+    s_options_crosshairscale_box.generic.type = MTYPE_SPINCONTROL;
+    s_options_crosshairscale_box.generic.x = 0;
+    s_options_crosshairscale_box.generic.y = 80;
+    s_options_crosshairscale_box.generic.name = "crosshair size";
+    s_options_crosshairscale_box.generic.callback = CrosshairScaleFunc;
+    s_options_crosshairscale_box.itemnames = crosshair_scale_names;
+
     /*
     s_options_noalttab_box.generic.type = MTYPE_SPINCONTROL;
     s_options_noalttab_box.generic.x    = 0;
@@ -1581,7 +1627,7 @@ void Options_MenuInit(void)
 
     s_options_joystick_box.generic.type = MTYPE_SPINCONTROL;
     s_options_joystick_box.generic.x = 0;
-    s_options_joystick_box.generic.y = 80;
+    s_options_joystick_box.generic.y = 90;
     s_options_joystick_box.generic.name = "gamepad movement"; // [PS2_QUAKE]: was "use joystick": in_joystick gates the sticks (ps2/input/input.cpp)
     s_options_joystick_box.generic.callback = JoystickFunc;
     s_options_joystick_box.itemnames = yesno_names;
@@ -1590,26 +1636,26 @@ void Options_MenuInit(void)
     // Gamepad vibration (ps2/input/rumble.cpp). The actions below moved down a row for it.
     s_options_rumble_box.generic.type = MTYPE_SPINCONTROL;
     s_options_rumble_box.generic.x = 0;
-    s_options_rumble_box.generic.y = 90;
+    s_options_rumble_box.generic.y = 100;
     s_options_rumble_box.generic.name = "gamepad rumble";
     s_options_rumble_box.generic.callback = RumbleFunc;
     s_options_rumble_box.itemnames = yesno_names;
 
     s_options_customize_options_action.generic.type = MTYPE_ACTION;
     s_options_customize_options_action.generic.x = 0;
-    s_options_customize_options_action.generic.y = 110;
+    s_options_customize_options_action.generic.y = 120;
     s_options_customize_options_action.generic.name = "customize controls";
     s_options_customize_options_action.generic.callback = CustomizeControlsFunc;
 
     s_options_defaults_action.generic.type = MTYPE_ACTION;
     s_options_defaults_action.generic.x = 0;
-    s_options_defaults_action.generic.y = 120;
+    s_options_defaults_action.generic.y = 130;
     s_options_defaults_action.generic.name = "reset defaults";
     s_options_defaults_action.generic.callback = ControlsResetDefaultsFunc;
 
     s_options_console_action.generic.type = MTYPE_ACTION;
     s_options_console_action.generic.x = 0;
-    s_options_console_action.generic.y = 130;
+    s_options_console_action.generic.y = 140;
     s_options_console_action.generic.name = "open console"; // [PS2_QUAKE]: was "go to console"
     s_options_console_action.generic.callback = ConsoleFunc;
 
@@ -1617,7 +1663,7 @@ void Options_MenuInit(void)
     // The debug page, for a console with no keyboard to type commands with.
     s_options_debug_action.generic.type = MTYPE_ACTION;
     s_options_debug_action.generic.x = 0;
-    s_options_debug_action.generic.y = 140;
+    s_options_debug_action.generic.y = 150;
     s_options_debug_action.generic.name = "debug";
     s_options_debug_action.generic.callback = DebugMenuFunc;
 
@@ -1635,6 +1681,7 @@ void Options_MenuInit(void)
     //Menu_AddItem(&s_options_menu, (void *)&s_options_lookstrafe_box); // [PS2_QUAKE]: no row
     //Menu_AddItem(&s_options_menu, (void *)&s_options_freelook_box); // [PS2_QUAKE]: no row
     Menu_AddItem(&s_options_menu, (void *)&s_options_crosshair_box);
+    Menu_AddItem(&s_options_menu, (void *)&s_options_crosshairscale_box); // [PS2_QUAKE]
     Menu_AddItem(&s_options_menu, (void *)&s_options_joystick_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_rumble_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_customize_options_action);

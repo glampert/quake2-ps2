@@ -33,6 +33,7 @@ struct model_s * gun_model;
 //=============
 
 cvar_t * crosshair;
+cvar_t * crosshair_scale; // [PS2_QUAKE]
 cvar_t * cl_testparticles;
 cvar_t * cl_testentities;
 cvar_t * cl_testlights;
@@ -560,7 +561,23 @@ void SCR_DrawCrosshair(void)
         return;
     }
 
-    re.DrawPic(scr_vrect.x + ((scr_vrect.width - crosshair_width) >> 1), scr_vrect.y + ((scr_vrect.height - crosshair_height) >> 1), crosshair_pic);
+    // [PS2_QUAKE] 2026-11-15
+    // crosshair_scale sizes it, for a TV across the room. Clamped to 0.5-4, and still centred.
+    // Pics are point-sampled, so a whole-number scale keeps every line the same width.
+    {
+        float scale = crosshair_scale->value;
+        int w, h;
+
+        if (scale < 0.5f)
+            scale = 0.5f;
+        else if (scale > 4.0f)
+            scale = 4.0f;
+
+        w = (int)(crosshair_width * scale + 0.5f);
+        h = (int)(crosshair_height * scale + 0.5f);
+
+        re.DrawStretchPic(scr_vrect.x + ((scr_vrect.width - w) >> 1), scr_vrect.y + ((scr_vrect.height - h) >> 1), w, h, crosshair_pic);
+    }
 }
 
 /*
@@ -736,6 +753,7 @@ void V_Init(void)
     Cmd_AddCommand("viewpos", V_Viewpos_f);
 
     crosshair = Cvar_Get("crosshair", "0", CVAR_ARCHIVE);
+    crosshair_scale = Cvar_Get("crosshair_scale", "1", CVAR_ARCHIVE); // [PS2_QUAKE]
 
     cl_testblend = Cvar_Get("cl_testblend", "0", 0);
     cl_testparticles = Cvar_Get("cl_testparticles", "0", 0);

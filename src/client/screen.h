@@ -30,6 +30,7 @@ extern int sb_lines;
 
 extern cvar_t * scr_viewsize;
 extern cvar_t * crosshair;
+extern cvar_t * crosshair_scale; // [PS2_QUAKE]: the crosshair's size on screen (cl_view.c)
 
 extern char crosshair_pic[MAX_QPATH];
 extern int crosshair_width;

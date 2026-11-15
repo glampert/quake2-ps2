@@ -798,7 +798,8 @@ The Options menu's mouse rows act on the right stick, as there is no mouse. "cam
 speed" is id's `sensitivity` (1 to 11), which scales the stick's turning and looking as a
 multiple of its default, 3. "invert look Y axis" makes `m_pitch` negative, which flips the
 stick's up and down, as win32's joystick code did with the mouse inverted. "gamepad movement"
-(`in_joystick`) turns both sticks off. The sticks always look, so the page has no free look,
+(`in_joystick`) turns both sticks off, and "swap sticks" (`in_swapsticks`) moves with the
+right stick and looks with the left; the `joy_*` cvars follow the job, not the stick. The sticks always look, so the page has no free look,
 lookspring or lookstrafe rows: those only changed mouse look, and nothing reads them here.
 
 Buttons send **one of two keys depending on where input focus is**, so menus and the console

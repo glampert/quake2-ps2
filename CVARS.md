@@ -120,14 +120,15 @@ bigger picture.
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
 | `in_joystick` | `1` | `1` | Arch. | Use the gamepad's analog sticks (the Options menu's "gamepad movement" toggle). |
-| `joy_yawsensitivity` | `1` | `1` | | Right stick horizontal (turn) speed; negative inverts the axis. |
-| `joy_pitchsensitivity` | `1` | `1` | | Right stick vertical (look) speed; negative inverts the axis. |
-| `joy_forwardsensitivity` | `1` | `1` | | Left stick vertical (move) speed; negative inverts the axis. |
-| `joy_sidesensitivity` | `1` | `1` | | Left stick horizontal (strafe) speed; negative inverts the axis. |
-| `joy_yawthreshold` | `0.25` | `0.25` | Arch. | Right stick horizontal dead zone, as a fraction of full deflection. The travel past each dead zone is rescaled, so the response starts from zero at its edge. Raise it if a worn pad turns the camera with the stick released. |
-| `joy_pitchthreshold` | `0.25` | `0.25` | Arch. | Right stick vertical dead zone. |
-| `joy_forwardthreshold` | `0.25` | `0.25` | Arch. | Left stick vertical dead zone. |
-| `joy_sidethreshold` | `0.25` | `0.25` | Arch. | Left stick horizontal dead zone. |
+| `in_swapsticks` | `0` | `0` | Arch. | Swap the sticks' jobs: 1 moves with the right stick and looks with the left (the Options menu's "swap sticks"). The `joy_*` cvars follow the job, not the stick: the yaw/pitch ones always tune the camera stick, the forward/side ones the move stick. |
+| `joy_yawsensitivity` | `1` | `1` | | Camera stick (right, or left with `in_swapsticks`) horizontal (turn) speed; negative inverts the axis. |
+| `joy_pitchsensitivity` | `1` | `1` | | Camera stick vertical (look) speed; negative inverts the axis. |
+| `joy_forwardsensitivity` | `1` | `1` | | Move stick (left, or right with `in_swapsticks`) vertical (move) speed; negative inverts the axis. |
+| `joy_sidesensitivity` | `1` | `1` | | Move stick horizontal (strafe) speed; negative inverts the axis. |
+| `joy_yawthreshold` | `0.25` | `0.25` | Arch. | Camera stick horizontal dead zone, as a fraction of full deflection. The travel past each dead zone is rescaled, so the response starts from zero at its edge. Raise it if a worn pad turns the camera with the stick released. |
+| `joy_pitchthreshold` | `0.25` | `0.25` | Arch. | Camera stick vertical dead zone. |
+| `joy_forwardthreshold` | `0.25` | `0.25` | Arch. | Move stick vertical dead zone. |
+| `joy_sidethreshold` | `0.25` | `0.25` | Arch. | Move stick horizontal dead zone. |
 | `in_rumble` | `1` | `1` | Arch. | Gamepad force feedback (the Options menu's "gamepad rumble"). |
 | `in_rumbledebug` | `0` | `0` | | Print each rumble effect as it starts. |
 | `in_keyboard` | `1` | `0` | Arch. | Bring up the USB keyboard driver (one-shot; the IOP modules load once). A keyboard is polled every frame while in use (a key within 10 s, or one held), four times a second otherwise. |

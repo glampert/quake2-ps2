@@ -1195,6 +1195,7 @@ CONTROLS MENU
 
 extern cvar_t * in_joystick;
 extern cvar_t * in_rumble; // [PS2_QUAKE]
+extern cvar_t * in_swapsticks; // [PS2_QUAKE]
 static cvar_t * win_noalttab;
 
 static menuframework_s s_options_menu;
@@ -1213,6 +1214,7 @@ static menuslider_s s_options_sfxvolume_slider;
 static menuslider_s s_options_musicvolume_slider; // [PS2_QUAKE]
 static menulist_s s_options_joystick_box;
 static menulist_s s_options_rumble_box; // [PS2_QUAKE]
+static menulist_s s_options_swapsticks_box; // [PS2_QUAKE]
 static menulist_s s_options_cdvolume_box;
 static menulist_s s_options_quality_list;
 static menulist_s s_options_compatibility_list;
@@ -1255,6 +1257,12 @@ static void JoystickFunc(void * unused)
 static void RumbleFunc(void * unused)
 {
     Cvar_SetValue("in_rumble", s_options_rumble_box.curvalue);
+}
+
+// [PS2_QUAKE]: move with the right stick and look with the left (ps2/input/input.cpp).
+static void SwapSticksFunc(void * unused)
+{
+    Cvar_SetValue("in_swapsticks", s_options_swapsticks_box.curvalue);
 }
 
 static void CustomizeControlsFunc(void * unused)
@@ -1323,6 +1331,9 @@ static void ControlsSetMenuItemValues(void)
 
     Cvar_SetValue("in_rumble", ClampCvar(0, 1, in_rumble->value));
     s_options_rumble_box.curvalue = in_rumble->value;
+
+    Cvar_SetValue("in_swapsticks", ClampCvar(0, 1, in_swapsticks->value)); // [PS2_QUAKE]
+    s_options_swapsticks_box.curvalue = in_swapsticks->value;
 
     s_options_noalttab_box.curvalue = win_noalttab->value;
 }
@@ -1632,30 +1643,40 @@ void Options_MenuInit(void)
     s_options_joystick_box.generic.callback = JoystickFunc;
     s_options_joystick_box.itemnames = yesno_names;
 
+    // [PS2_QUAKE] 2026-11-15
+    // Trades the sticks' jobs (in_swapsticks, ps2/input/input.cpp). Rumble and the actions
+    // below moved down a row for it.
+    s_options_swapsticks_box.generic.type = MTYPE_SPINCONTROL;
+    s_options_swapsticks_box.generic.x = 0;
+    s_options_swapsticks_box.generic.y = 100;
+    s_options_swapsticks_box.generic.name = "swap sticks";
+    s_options_swapsticks_box.generic.callback = SwapSticksFunc;
+    s_options_swapsticks_box.itemnames = yesno_names;
+
     // [PS2_QUAKE] 2026-09-27
     // Gamepad vibration (ps2/input/rumble.cpp). The actions below moved down a row for it.
     s_options_rumble_box.generic.type = MTYPE_SPINCONTROL;
     s_options_rumble_box.generic.x = 0;
-    s_options_rumble_box.generic.y = 100;
+    s_options_rumble_box.generic.y = 110;
     s_options_rumble_box.generic.name = "gamepad rumble";
     s_options_rumble_box.generic.callback = RumbleFunc;
     s_options_rumble_box.itemnames = yesno_names;
 
     s_options_customize_options_action.generic.type = MTYPE_ACTION;
     s_options_customize_options_action.generic.x = 0;
-    s_options_customize_options_action.generic.y = 120;
+    s_options_customize_options_action.generic.y = 130;
     s_options_customize_options_action.generic.name = "customize controls";
     s_options_customize_options_action.generic.callback = CustomizeControlsFunc;
 
     s_options_defaults_action.generic.type = MTYPE_ACTION;
     s_options_defaults_action.generic.x = 0;
-    s_options_defaults_action.generic.y = 130;
+    s_options_defaults_action.generic.y = 140;
     s_options_defaults_action.generic.name = "reset defaults";
     s_options_defaults_action.generic.callback = ControlsResetDefaultsFunc;
 
     s_options_console_action.generic.type = MTYPE_ACTION;
     s_options_console_action.generic.x = 0;
-    s_options_console_action.generic.y = 140;
+    s_options_console_action.generic.y = 150;
     s_options_console_action.generic.name = "open console"; // [PS2_QUAKE]: was "go to console"
     s_options_console_action.generic.callback = ConsoleFunc;
 
@@ -1663,7 +1684,7 @@ void Options_MenuInit(void)
     // The debug page, for a console with no keyboard to type commands with.
     s_options_debug_action.generic.type = MTYPE_ACTION;
     s_options_debug_action.generic.x = 0;
-    s_options_debug_action.generic.y = 150;
+    s_options_debug_action.generic.y = 160;
     s_options_debug_action.generic.name = "debug";
     s_options_debug_action.generic.callback = DebugMenuFunc;
 
@@ -1683,6 +1704,7 @@ void Options_MenuInit(void)
     Menu_AddItem(&s_options_menu, (void *)&s_options_crosshair_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_crosshairscale_box); // [PS2_QUAKE]
     Menu_AddItem(&s_options_menu, (void *)&s_options_joystick_box);
+    Menu_AddItem(&s_options_menu, (void *)&s_options_swapsticks_box); // [PS2_QUAKE]
     Menu_AddItem(&s_options_menu, (void *)&s_options_rumble_box);
     Menu_AddItem(&s_options_menu, (void *)&s_options_customize_options_action);
     Menu_AddItem(&s_options_menu, (void *)&s_options_defaults_action);

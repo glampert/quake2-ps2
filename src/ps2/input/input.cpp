@@ -4,8 +4,9 @@
  *        GamePad (see pad.h) and maps its state onto the engine: buttons become key
  *        events routed by input focus (menu/console navigation vs. rebindable game
  *        action keys), the right stick rotates the camera and the left stick moves
- *        the player - following the axis handling of the original win32/in_win.c,
- *        with wider dead zones, past which the response ramps up from zero.
+ *        the player (in_swapsticks trades them) - following the axis handling of the
+ *        original win32/in_win.c, with wider dead zones, past which the response ramps
+ *        up from zero.
  *        The pad's vibration motors play the force feedback from rumble.cpp.
  *
  *        A USB keyboard (see keyboard.h) is optional and gated by the in_keyboard
@@ -45,6 +46,11 @@ extern unsigned sys_frame_time;
 // Referenced by the options menu (menu.c). Gates stick movement only - buttons
 // keep working regardless, or the menus would become unnavigable.
 cvar_t * in_joystick = nullptr;
+
+// Referenced by the options menu (menu.c, "swap sticks"). Nonzero puts movement on the right
+// stick and the camera on the left, for players who learned the other way round. The joy_*
+// cvars follow the job, not the stick: joy_yawthreshold is the camera stick's dead zone either way.
+cvar_t * in_swapsticks = nullptr;
 
 // menu.c: whether the controls menu is waiting for a button to bind. No engine header
 // declares it (menu.c keeps its own prototypes).
@@ -241,6 +247,7 @@ extern "C" {
 void IN_Init()
 {
     in_joystick          = Cvar_Get("in_joystick",            "1",    CVAR_ARCHIVE);
+    in_swapsticks        = Cvar_Get("in_swapsticks",          "0",    CVAR_ARCHIVE);
     s_yawSensitivity     = Cvar_Get("joy_yawsensitivity",     "1",    0);
     s_pitchSensitivity   = Cvar_Get("joy_pitchsensitivity",   "1",    0);
     s_forwardSensitivity = Cvar_Get("joy_forwardsensitivity", "1",    0);
@@ -362,7 +369,7 @@ void IN_Commands()
 }
 
 // ------------------------------------------------------------------------------------------------
-// IN_Move - sticks: right rotates the camera, left moves the player
+// IN_Move - sticks: right rotates the camera, left moves the player (swapped by in_swapsticks)
 // ------------------------------------------------------------------------------------------------
 
 void IN_Move(usercmd_t * cmd)
@@ -380,7 +387,7 @@ void IN_Move(usercmd_t * cmd)
     const float speed = running ? 2.0f : 1.0f;
     const float angleSpeed = speed * cls.frametime;
 
-    // Right stick rotates the camera. Stick right = turn right (yaw decreases),
+    // The look stick (right by default) rotates the camera. Stick right = turn right (yaw decreases),
     // stick up = look up (pitch decreases); flip a sensitivity cvar to invert.
     // The options menu's mouse rows act on it, as there is no mouse: "camera rotation
     // speed" is sensitivity, and "invert look Y axis" a negative m_pitch, which in_win.c's
@@ -389,19 +396,26 @@ void IN_Move(usercmd_t * cmd)
     const float lookSpeed = angleSpeed * (sensitivity->value / kDefaultSensitivity);
     const float invertPitch = (m_pitch->value < 0.0f) ? -1.0f : 1.0f;
 
-    const float yaw = ApplyDeadZone(s_gamepad.RightStickX(), s_yawThreshold);
+    // in_swapsticks trades the two sticks' jobs; everything past this reads them by job.
+    const bool swapped = (in_swapsticks->value != 0.0f);
+    const float lookX = swapped ? s_gamepad.LeftStickX() : s_gamepad.RightStickX();
+    const float lookY = swapped ? s_gamepad.LeftStickY() : s_gamepad.RightStickY();
+    const float moveX = swapped ? s_gamepad.RightStickX() : s_gamepad.LeftStickX();
+    const float moveY = swapped ? s_gamepad.RightStickY() : s_gamepad.LeftStickY();
+
+    const float yaw = ApplyDeadZone(lookX, s_yawThreshold);
     cl.viewangles[YAW] -= yaw * s_yawSensitivity->value * lookSpeed * cl_yawspeed->value;
 
-    const float pitch = ApplyDeadZone(s_gamepad.RightStickY(), s_pitchThreshold) * invertPitch;
+    const float pitch = ApplyDeadZone(lookY, s_pitchThreshold) * invertPitch;
     cl.viewangles[PITCH] += pitch * s_pitchSensitivity->value * lookSpeed * cl_pitchspeed->value;
 
-    // Left stick moves the player. CL_FinishMove clamps the pitch and packs the
+    // The move stick (left by default) moves the player. CL_FinishMove clamps the pitch and packs the
     // final angles/moves after IN_Move returns.
-    const float forward = ApplyDeadZone(s_gamepad.LeftStickY(), s_forwardThreshold);
+    const float forward = ApplyDeadZone(moveY, s_forwardThreshold);
     cmd->forwardmove = static_cast<short>(static_cast<float>(cmd->forwardmove) -
         (forward * s_forwardSensitivity->value * speed * cl_forwardspeed->value));
 
-    const float side = ApplyDeadZone(s_gamepad.LeftStickX(), s_sideThreshold);
+    const float side = ApplyDeadZone(moveX, s_sideThreshold);
     cmd->sidemove = static_cast<short>(static_cast<float>(cmd->sidemove) +
         (side * s_sideSensitivity->value * speed * cl_sidespeed->value));
 }

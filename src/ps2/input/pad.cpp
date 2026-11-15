@@ -14,7 +14,6 @@
 namespace ps2::input {
 namespace {
 
-constexpr int kPadPort = 0; // Controller connector 1
 constexpr int kPadSlot = 0; // First (only) slot - no multitap
 
 // Motor mapping for padSetActAlign: byte 0 of the padSetActDirect array drives
@@ -43,16 +42,30 @@ bool GamePad::Connected(int state)
 bool GamePad::Init()
 {
     // The pad driver lives on the IOP: the boot code brings up the serial and pad modules
-    // and libpad (or finds them running), then this opens connector 1. Connection and
+    // and libpad (or finds them running), then this opens both connectors. Connection and
     // analog mode switching are asynchronous and polled per frame in Update().
     if (!ps2::sys::StartPadDriver())
     {
         Com_Printf("WARNING: no pad driver - gamepad disabled!\n");
         return false;
     }
-    if (padPortOpen(kPadPort, kPadSlot, m_dmaArea) == 0)
+
+    bool anyOpen = false;
+    for (int port = 0; port < kPortCount; ++port)
     {
-        Com_Printf("WARNING: padPortOpen failed - gamepad disabled!\n");
+        m_portOpen[port] = (padPortOpen(port, kPadSlot, m_dmaArea[port]) != 0);
+        if (m_portOpen[port])
+        {
+            anyOpen = true;
+        }
+        else
+        {
+            Com_Printf("WARNING: padPortOpen failed on port %d!\n", port + 1);
+        }
+    }
+    if (!anyOpen)
+    {
+        Com_Printf("WARNING: no pad port opened - gamepad disabled!\n");
         return false;
     }
 
@@ -65,7 +78,14 @@ void GamePad::Shutdown()
     if (m_status != Status::Unavailable)
     {
         SetMotors(false, 0);
-        padPortClose(kPadPort, kPadSlot);
+        for (int port = 0; port < kPortCount; ++port)
+        {
+            if (m_portOpen[port])
+            {
+                padPortClose(port, kPadSlot);
+                m_portOpen[port] = false;
+            }
+        }
         padEnd();
         m_status = Status::Unavailable;
     }
@@ -80,18 +100,36 @@ void GamePad::Update()
         return;
     }
 
-    const int state = padGetState(kPadPort, kPadSlot);
+    if (m_status == Status::Disconnected)
+    {
+        // No pad in use: take the first port, in connector order, that has one.
+        int found = -1;
+        for (int port = 0; port < kPortCount && found < 0; ++port)
+        {
+            if (m_portOpen[port] && Connected(padGetState(port, kPadSlot)))
+            {
+                found = port;
+            }
+        }
+        if (found < 0)
+        {
+            return;
+        }
+        m_port = found;
+    }
+
+    const int state = padGetState(m_port, kPadSlot);
 
     switch (m_status)
     {
     case Status::Disconnected:
-        if (Connected(state))
+        if (Connected(state)) // Found above; the state is from the same poll.
         {
             // Pads boot in digital mode; request DualShock (analog sticks) if the
             // device supports it, locked so the MODE button can't switch it back.
-            if (padInfoMode(kPadPort, kPadSlot, PAD_MODETABLE, -1) > 0)
+            if (padInfoMode(m_port, kPadSlot, PAD_MODETABLE, -1) > 0)
             {
-                padSetMainMode(kPadPort, kPadSlot, PAD_MMODE_DUALSHOCK, PAD_MMODE_LOCK);
+                padSetMainMode(m_port, kPadSlot, PAD_MMODE_DUALSHOCK, PAD_MMODE_LOCK);
                 m_status = Status::SettingMode;
             }
             else
@@ -103,15 +141,22 @@ void GamePad::Update()
 
     case Status::SettingMode:
     {
-        const unsigned char request = padGetReqState(kPadPort, kPadSlot);
+        if (state == PAD_STATE_DISCONN)
+        {
+            // Unplugged mid-switch. Back to watching both ports, or a pad left in the
+            // other one would never be picked up.
+            m_status = Status::Disconnected;
+            break;
+        }
+        const unsigned char request = padGetReqState(m_port, kPadSlot);
         if ((request == PAD_RSTAT_COMPLETE || request == PAD_RSTAT_FAILED) && Connected(state))
         {
-            Com_DPrintf("Gamepad connected.\n");
+            Com_DPrintf("Gamepad connected on port %d.\n", m_port + 1);
 
             // Only a pad with an analog mode can have motors, and they take their
             // mapping after the mode is set - the mode switch resets it.
-            if (padInfoAct(kPadPort, kPadSlot, -1, 0) > 0 &&
-                padSetActAlign(kPadPort, kPadSlot, kMotorAlign) == 1)
+            if (padInfoAct(m_port, kPadSlot, -1, 0) > 0 &&
+                padSetActAlign(m_port, kPadSlot, kMotorAlign) == 1)
             {
                 m_status = Status::SettingMotors;
             }
@@ -130,7 +175,7 @@ void GamePad::Update()
         }
         else if (Connected(state)) // No longer executing the request.
         {
-            m_hasMotors = (padGetReqState(kPadPort, kPadSlot) == PAD_RSTAT_COMPLETE);
+            m_hasMotors = (padGetReqState(m_port, kPadSlot) == PAD_RSTAT_COMPLETE);
             m_sentSmall = kMotorsUnknown;
             m_status = Status::Ready;
             Com_DPrintf("Gamepad vibration motors %s.\n", m_hasMotors ? "enabled" : "failed to enable");
@@ -144,7 +189,7 @@ void GamePad::Update()
             m_hasMotors = false;
             m_status = Status::Disconnected;
         }
-        else if (padRead(kPadPort, kPadSlot, &m_data) != 0)
+        else if (padRead(m_port, kPadSlot, &m_data) != 0)
         {
             m_buttons = static_cast<u16>(m_data.btns ^ 0xFFFFu); // Active-low.
 
@@ -180,7 +225,7 @@ void GamePad::SetMotors(bool smallOn, u8 largeSpeed)
     // Laid out per kMotorAlign. Not a request like padSetActAlign: padman just
     // stores the values and sends them to the motors with every poll from then on.
     const char direct[6] = { static_cast<char>(small), static_cast<char>(largeSpeed), 0, 0, 0, 0 };
-    padSetActDirect(kPadPort, kPadSlot, direct);
+    padSetActDirect(m_port, kPadSlot, direct);
 
     m_sentSmall = small;
     m_sentLarge = largeSpeed;

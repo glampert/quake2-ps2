@@ -785,7 +785,10 @@ Behaviour follows id's `cd_win.c`: a map's track loops `cd_loopcount` times, the
 
 **Gamepad.** [`GamePad`](src/ps2/input/pad.h) owns the connection state machine (connect →
 request analog mode → map the vibration motors → ready) and per-frame polling, exposing the
-button mask and sticks normalised to [-1, +1], and runs the two motors. [input.cpp](src/ps2/input/input.cpp) maps that onto the engine: the
+button mask and sticks normalised to [-1, +1], and runs the two motors. It opens both
+controller ports (slot 0 of each; no multitap) and, while no pad is in use, takes the first
+port in connector order that has one: with two pads attached, connector 1's plays. The chosen
+pad keeps it until it is unplugged, and then both ports are watched again. [input.cpp](src/ps2/input/input.cpp) maps that onto the engine: the
 right stick rotates the camera and the left stick moves the player, with the same
 sensitivity/threshold cvars (`joy_yawsensitivity` and friends) the original win32 joystick
 code used — negate a sensitivity to invert that axis. The thresholds are per-axis dead zones
@@ -1270,7 +1273,6 @@ against a release ELF you get function names from the symbol table but no file o
 - Potentially support loading the game from Memory Card to support microSD to MC adapters
   (like the MX4SIO SIO2SD Adapter).
 - Saving to Memory Card slot 2, and formatting an unformatted card from the game.
-- Support second game connector and multiple slots. Right now only port 0/slot 0 (controller connector 1) are supported.
 - Split-screen mutiplayer should be possible with a bit of work!
 
 **Build and project**

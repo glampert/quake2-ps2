@@ -3,7 +3,8 @@
  * File: pad.h
  * Brief: DualShock gamepad abstraction over libpad. The GamePad class owns the pad
  *        connection lifecycle and per-frame polling, exposing the button mask and
- *        the normalised analog sticks, and drives the two vibration motors. The Quake
+ *        the normalised analog sticks, and drives the two vibration motors. It watches
+ *        both controller ports and drives the first pad that connects. The Quake
  *        input seam (input.cpp) drives a single static instance and maps its state
  *        onto key events and movement; rumble.cpp decides what the motors do.
  *
@@ -18,14 +19,17 @@ namespace ps2::input {
 class GamePad final
 {
 public:
-    // Brings up SIF RPC, loads the IOP pad modules and opens connector 1. Returns
-    // false if the gamepad is unavailable, after which the accessors report a
-    // neutral, disconnected pad forever.
+    // Brings up the IOP pad driver and opens both controller ports (slot 0 of each: no
+    // multitap). Returns false if neither port could be opened, after which the accessors
+    // report a neutral, disconnected pad forever.
     bool Init();
     void Shutdown();
 
     // Advances the connection state machine and, once connected, polls the pad.
     // Call exactly once per client frame before querying the state below.
+    // While no pad is in use, the ports are checked in order and the first one with a
+    // pad wins, so with two pads attached the one in connector 1 (port 0) drives the game. The
+    // chosen pad keeps it until it is unplugged; then both ports are checked again.
     void Update();
 
     // Currently-pressed buttons as an active-high mask of PAD_* bits
@@ -63,9 +67,14 @@ private:
     // the motors with after a (re)connect, so the next SetMotors always goes out.
     static constexpr u8 kMotorsUnknown = 0xFF;
 
+    // The two controller ports, connector 1 and connector 2.
+    static constexpr int kPortCount = 2;
+
     static bool Connected(int state);
 
     Status m_status = Status::Unavailable;
+    int m_port = 0; // The port the pad in use is on; meaningful past Disconnected.
+    bool m_portOpen[kPortCount] = {};
     padButtonStatus m_data{};    // last good padRead() result
     u16 m_buttons = 0; // active-high pressed mask
     bool m_analogValid = false;
@@ -74,8 +83,9 @@ private:
     u8 m_sentSmall = kMotorsUnknown; // motor values last sent to the IOP
     u8 m_sentLarge = 0;
 
-    // libpad DMA transfer area: 256 bytes, 64-byte aligned.
-    alignas(64) char m_dmaArea[256];
+    // libpad DMA transfer areas, one per open port, which padman writes the port's state
+    // into on every poll: 256 bytes each, 64-byte aligned.
+    alignas(64) char m_dmaArea[kPortCount][256];
 };
 
 } // namespace ps2::input

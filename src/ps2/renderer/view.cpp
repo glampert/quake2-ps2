@@ -867,7 +867,6 @@ struct SurfaceDrawState
 // ------------------------------------------------------------------------------------------------
 // Triangle gathering through the clipper
 //
-// The VU rejects a straddling triangle whole rather than cutting it, so world
 // Sprites, beams, null models and the dlight flares build their corners here
 // and hand them to GatherTriangle, which turns them into batch vertices. VU1
 // cuts whatever straddles; nothing on this path meets the EE clipper any more.

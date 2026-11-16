@@ -141,7 +141,10 @@ constexpr int kNumGifTagQwords = 7; // must match the microprograms' tag-copy lo
 //
 // This, BatchWarp and BatchVertexFormat below are separate fields rather than one mode enum so the
 // microprogram can test each with a bare compare against zero - no scratch register, no
-// arithmetic. They are independent in principle; no caller currently sets two.
+// arithmetic. Each is read into a register once per batch and never written in the triangle
+// loop, which is what lets oxide-vcl's unswitch give the loop one copy per colour mode and
+// vertex format (see textured_triangles.vcl). They are independent in principle; no caller
+// currently sets two.
 enum class BatchColorMode : u32
 {
     PackedU32 = 0, // A+D write to RGBAQ, straight out of the vertex - world diffuse, sprites, beams

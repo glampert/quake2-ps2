@@ -78,8 +78,8 @@ constexpr float kCullSignScale = 1099511627776.0f; // 2^40
 
 // What the microprogram actually receives: the sign it multiplies the determinant by, after
 // which it only ever asks whether the result is negative. Zero never culls, because zero is not
-// negative. Cheaper on the VU than the mode itself - a mask register, a compare target and a
-// branch, all of which VI registers the microprogram does not have to spare.
+// negative. Cheaper on the VU than the mode itself: the mode would cost a compare and a branch
+// per triangle, where the sign is one multiply in the chain the determinant already takes.
 constexpr float CullSignFor(const FaceCull cull)
 {
     return (cull == FaceCull::Negative) ?  kCullSignScale

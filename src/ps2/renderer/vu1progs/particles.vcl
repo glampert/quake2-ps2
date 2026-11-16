@@ -2,8 +2,9 @@
 ; particles.vcl
 ;
 ; A VU1 microprogram to draw a batch of camera-facing particle
-; billboards. Preprocessed with vclpp; the -j flag injects the VCL
-; boilerplate (.init_*, --enter/--exit blocks).
+; billboards. Built by oxide-vcl, whose preprocessor (-G) runs first;
+; --vcl-boilerplate injects the VCL boilerplate (.init_*, --enter/--exit
+; blocks).
 ;
 ; The EE submits one quadword per particle - packed colour and world
 ; origin - and this program builds the whole billboard. Nothing is
@@ -91,18 +92,29 @@
 ;       memcpy(out, &batch[kGifTags], 7 * sizeof(qword));
 ;       out += 7;
 ;
+;       // The GS scale, folded once a batch into everything the loop
+;       // scales by it: the matrix's x, y and z columns, the corner offset,
+;       // and - divided out again - the clip judgement's scale. Its x and y
+;       // are 2048, a power of two, so on those axes the fold is exact:
+;       mvp[0..3].xyz *= gsScale.xyz;
+;       quadOff.xyz   *= gsScale.xyz;
+;       vec3 judgeScale = clipScale.xyz / gsScale.xyz;
+;
 ;       do // One particle per iteration:
 ;       {
 ;           vec4 p = in[0]; // (rgba, x, y, z); raw packed colour in .x
 ;
-;           // World space to clip space. The position is in .yzw and the
-;           // w term is a literal 1, so vf00[w] supplies it:
+;           // World space to clip space, scaled to the GS on x, y and z. The
+;           // position is in .yzw and the w term is a literal 1, so vf00[w]
+;           // supplies it:
 ;           vec4 c = p.y * mvp[0] + p.z * mvp[1]
 ;                  + p.w * mvp[2] + 1.0f * mvp[3];
 ;
 ;           // Guard-band clip judgement on the centre; the caller-side
-;           // equivalent of the triangle programs' per-vertex test:
-;           vec3 judge = c.xyz * clipScale.xyz;
+;           // equivalent of the triangle programs' per-vertex test. The
+;           // scale undoes the fold: c.xyz * judgeScale is c's clip-space
+;           // position times clipScale:
+;           vec3 judge = c.xyz * judgeScale;
 ;           clipFlagQueue.push(judge, abs(c.w));
 ;
 ;           float q = 1.0f / c.w;
@@ -114,18 +126,18 @@
 ;           // dot product the EE used to compute disappears here.
 ;           float scale = 1.0f + c.w * quadOff.w;
 ;
-;           // Corner offset in NDC: the constant clip-space offset
-;           // scaled and put through the same perspective divide. Its
-;           // w is 0 by construction, so both corners keep c.w.
+;           // Corner offset in GS units: the constant offset scaled and
+;           // put through the same perspective divide. Its w is 0 by
+;           // construction, so both corners keep c.w.
 ;           float k       = scale * q;
 ;           vec3  offset  = quadOff.xyz * k;
 ;
-;           vec3 ndc0 = c.xyz * q;
-;           vec3 ndc1 = ndc0 + offset;
-;
-;           // NDC to GS window coordinates, in 12.4 fixed point:
-;           vec3 s0 = ftoi4(gsOffset.xyz + ndc0 * gsScale.xyz);
-;           vec3 s1 = ftoi4(gsOffset.xyz + ndc1 * gsScale.xyz);
+;           // The two opposite corners in GS window coordinates, 12.4 fixed
+;           // point. With the GS scale in c already, the perspective divide
+;           // and the move to the window are one multiply-add:
+;           vec3 w0 = gsOffset.xyz + c.xyz * q;
+;           vec3 s0 = ftoi4(w0);
+;           vec3 s1 = ftoi4(w0 + offset);
 ;
 ;           // Whole-billboard reject: if any of the centre's 6 clip
 ;           // flags is set, adc becomes 0x8000 - bit 15, the ADC bit -
@@ -133,8 +145,8 @@
 ;           int adc = 0x7FFF + (clipFlagQueue.last() != 0 ? 1 : 0);
 ;
 ;           out[0].x    = p.x;    // native RGBAQ: packed colour...
-;           out[0].y    = q;      // ...with Q in the word above
-;           out[0].z    = 0x01;   // A+D destination: RGBAQ register
+;           out[0].yz   = (q, 0x01); // ...with Q in the word above, and
+;                                    // the A+D destination: RGBAQ register
 ;           out[1]      = uv0;
 ;           out[2].xyz  = s0;
 ;           out[2].w    = adc;
@@ -155,8 +167,11 @@
     LoadFrameConstants{ }
 
     ; A+D destination address the per-particle color qwords carry in .z
-    ; (0x01 = the RGBAQ register):
+    ; (0x01 = the RGBAQ register). It goes into fQ's .z once, as the integer
+    ; it is - mfir copies the bits, no FMAC op touches them - and stays there:
+    ; the loop writes only fQ's .y, so one sq.yz stores Q and the address.
     iaddiu iRegRGBAQ, vi00, 1
+    mfir.z fQ, iRegRGBAQ
 
     ; Current double buffer and this batch's constants:
     xtop   iBase
@@ -170,6 +185,28 @@
     ; which are one qword each:
     iadd   iKick, iInPtr, iNumPrts
 
+    ; The GS scale, folded into what the loop multiplies by it, once a batch:
+    ; the matrix's x, y and z columns, so the transform lands in GS units
+    ; (w, the depth the blow-up and the divide read, is untouched), and the
+    ; corner offset. The clip judgement's scale is divided by it to undo the
+    ; fold there. Its x and y are 2048, so on those axes both are exact; its z
+    ; is the depth scale, where the result can differ in the last bit.
+    ;
+    ; Only the registers change: the frame constants in VU memory stay as the
+    ; EE wrote them, for the triangle program.
+    mul.xyz fMVP0,    fMVP0,    fGSScale
+    mul.xyz fMVP1,    fMVP1,    fGSScale
+    mul.xyz fMVP2,    fMVP2,    fGSScale
+    mul.xyz fMVP3,    fMVP3,    fGSScale
+    mul.xyz fQuadOff, fQuadOff, fGSScale
+
+    div    q,       fClipScale[x], fGSScale[x]
+    addq.x fJScale, vf00,          q
+    div    q,       fClipScale[y], fGSScale[y]
+    addq.y fJScale, vf00,          q
+    div    q,       fClipScale[z], fGSScale[z]
+    addq.z fJScale, vf00,          q
+
     CopyGifTags{ }
 
     ; One particle per iteration:
@@ -177,16 +214,17 @@
 
         lq fP, 0(iInPtr)
 
-        ; World to clip space. The packed color occupies .x, so the
-        ; position sits in .yzw and the w term is a literal 1 from vf00.
+        ; World to clip space, in GS units on x, y and z (see the fold
+        ; above). The packed color occupies .x, so the position sits in .yzw
+        ; and the w term is a literal 1 from vf00.
         mul  acc, fMVP0, fP[y]
         madd acc, fMVP1, fP[z]
         madd acc, fMVP2, fP[w]
         madd fC,  fMVP3, vf00[w]
 
         ; Guard-band clip judgement on the billboard centre: scaled x/y,
-        ; exact z, against |w|.
-        mul.xyz   fJudge, fC, fClipScale
+        ; exact z, against |w|. fJScale takes the GS scale back out.
+        mul.xyz   fJudge, fC, fJScale
         clipw.xyz fJudge, fC[w]
 
         div q, vf00[w], fC[w]
@@ -198,24 +236,21 @@
         add.w  fScale, fScale, vf00[w]
 
         ; Fold the blow-up into the perspective divide, then take the
-        ; constant clip-space corner offset through both at once. Its z
-        ; is 0 (orthogonal to the view axis), so both corners keep the
-        ; centre's depth as well as its w.
+        ; constant corner offset through both at once. Its z is 0
+        ; (orthogonal to the view axis), so both corners keep the centre's
+        ; depth as well as its w.
         mulq.w   fK,    fScale,   q
         mul.xyz  fOff,  fQuadOff, fK[w]
 
-        ; The two opposite corners, in NDC:
-        mulq.xyz fNdc0, fC,    q
-        add.xyz  fNdc1, fNdc0, fOff
-
-        ; NDC to GS window coordinates, in 12.4 fixed point:
-        mula.xyz  acc, fGSOffset, vf00[w]
-        madd.xyz  fS0, fNdc0, fGSScale
-        ftoi4.xyz fS0, fS0
-
-        mula.xyz  acc, fGSOffset, vf00[w]
-        madd.xyz  fS1, fNdc1, fGSScale
-        ftoi4.xyz fS1, fS1
+        ; The two opposite corners, in GS window coordinates, 12.4 fixed
+        ; point. With the GS scale in fC already, the perspective divide and
+        ; the move to the window are one multiply-add, and the far corner is
+        ; the near one plus the offset.
+        mulaw.xyz acc,  fGSOffset, vf00[w]
+        maddq.xyz fW0,  fC,        q
+        add.xyz   fW1,  fW0,       fOff
+        ftoi4.xyz fS0,  fW0
+        ftoi4.xyz fS1,  fW1
 
         ; Q for the A+D RGBAQ qword. Unused while the batch samples
         ; through UV (PRIM's FST bit), but it must stay a finite float.
@@ -229,8 +264,7 @@
         iaddiu iADC, vi01, 0x7FFF
 
         sq.x   fP,        0(iOutPtr)
-        sq.y   fQ,        0(iOutPtr)
-        isw.z  iRegRGBAQ, 0(iOutPtr)
+        sq.yz  fQ,        0(iOutPtr)
         sq     fUV0,      1(iOutPtr)
         sq.xyz fS0,       2(iOutPtr)
         isw.w  iADC,      2(iOutPtr)

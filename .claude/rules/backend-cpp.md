@@ -31,7 +31,7 @@ paths:
   exception.
 - `alignas(N)` is the alignment idiom, not `__attribute__((aligned))`.
 
-## Naming (Quake-flavoured; backend only, not vclpp/parse-utils)
+## Naming (Quake-flavoured; backend only)
 
 - Types and **all** functions, including file-local `static`/anonymous-namespace helpers:
   PascalCase (`ps2::gs::Init`, `QwordCount`).

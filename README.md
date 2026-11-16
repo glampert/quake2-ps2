@@ -68,11 +68,14 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
    | Tool | Comes from | Typical location |
    | --- | --- | --- |
    | `mips64r5900el-ps2-elf-gcc` / `-g++` | ps2toolchain | `$PS2DEV/ee/bin` |
-   | `openvcl` | openvcl | `$PS2DEV/bin` |
    | `dvp-as` | ps2toolchain (dvp) | `$PS2DEV/dvp/bin` |
    | `bin2c` | ps2sdk | `$PS2SDK/bin` |
 
    Note the toolchain prefix is `mips64r5900el-ps2-elf-*`, not the older `ee-gcc`.
+
+   The VU microprograms are compiled by [oxide-vcl](https://github.com/glampert/oxide-vcl),
+   which the build makes from its submodule (below), so the toolchain's `openvcl` is not
+   used.
 
    On macOS, ps2dev's `build-all.sh` also needs Homebrew's `pkgconf`, and GNU sed ahead of
    the system one, or its ps2sdk-ports step fails:
@@ -137,14 +140,16 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 
 ### Building
 
-Three dependencies come in as git submodules: [vclpp](https://github.com/glampert/vclpp), the
-preprocessor the VU microprograms go through, at [src/tools/vclpp/](src/tools/vclpp/) (built
-with its own Makefile, with a submodule of its own), [vu-checker](https://github.com/glampert/vu-checker),
-the checks every VU build runs over the toolchain's output, at [src/tools/vu-checker/](src/tools/vu-checker/),
-and [miniz](https://github.com/richgel999/miniz), the deflate codec the save games are compressed
-with, at [src/tools/miniz/](src/tools/miniz/) (its sources are compiled straight into the game).
-Clone with `--recursive`, or run
+Two dependencies come in as git submodules: [oxide-vcl](https://github.com/glampert/oxide-vcl),
+the VCL compiler the VU microprograms are built with, preprocessor included, at
+[src/tools/oxide-vcl/](src/tools/oxide-vcl/), and [miniz](https://github.com/richgel999/miniz),
+the deflate codec the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/)
+(its sources are compiled straight into the game). Clone with `--recursive`, or run
 `git submodule update --init --recursive` in an existing clone.
+
+oxide-vcl is Rust: the build runs `cargo` (a recent stable release, from
+[rustup](https://rustup.rs)) to make it into `build/tools/oxide-vcl/`, once, and again only
+when the submodule moves to a new commit.
 
 ```sh
 make            # debug build -> build/debug/quake2.elf (+ host tools)
@@ -535,8 +540,7 @@ src/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc, pakzip)
     scripts/                      Python helpers (symbolize, compile_commands.json generator, gen_save_tables - the save games' function/animation name tables) and make_github_release.sh
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
-    vclpp/                        VCL preprocessor for the VU microprograms (git submodule)
-    vu-checker/                   check_vu_code.py, the openvcl/dvp-as output checks run by every VU build (git submodule)
+    oxide-vcl/                    VCL compiler and preprocessor for the VU microprograms (git submodule)
     miniz/                        deflate codec for the save games and the compressed packs (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
@@ -691,10 +695,14 @@ does the on-screen trim. The far plane is judged but not cut, since it was never
 straddled across the perf demos. The sky is the one thing still cut on the EE
 ([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
 
-The VU toolchain fails silently in several ways that only show up on screen, so every VU
-build runs the six checks in [check_vu_code.py](src/tools/vu-checker/check_vu_code.py) over its output: register allocation (by reaching
-definitions), clip-flag and Q latency across branches, loop-counter and cross-loop register
-reuse, immediate truncation, and branch reach.
+The microprograms are compiled by [oxide-vcl](https://github.com/glampert/oxide-vcl) in its
+oxide mode with every optimization (`--mode=oxide --opt=all`), its built-in preprocessor
+first, and assembled by `dvp-as`. Its scheduler pipelines the particle loop and gives the
+triangle loop one copy per colour mode and vertex format (*unswitching*), so each copy runs
+from the input loads to the output stores without a test in between. Measured on a console
+over the two demos' gameplay frames, against the openvcl build of the earlier sources, the
+time the EE waits on the GS and VU1 fell from 3.68 ms to 1.40 ms a frame (0.87 to 0.33 µs a
+triangle).
 
 **Frame pass order** ([view.cpp](src/ps2/renderer/view.cpp)), following
 `ref_gl`'s `R_RenderView`: PVS + frustum culled world surfaces and the skybox, opaque

@@ -6,8 +6,9 @@
 ; guard band. Every triangle the renderer draws comes through here but
 ; particles and sky - world surfaces, their lightmap pass, turbulent
 ; water and MD2 models - and the batch header says which work applies.
-; Preprocessed with vclpp; the -j flag injects the VCL boilerplate
-; (.init_*, --enter/--exit blocks).
+; Built by oxide-vcl, whose preprocessor (-G) runs first;
+; --vcl-boilerplate injects the VCL boilerplate (.init_*, --enter/--exit
+; blocks).
 ;
 ; VU data memory layout (qwords; must match vu1.h):
 ;   0-3  MVP matrix rows (row-vector convention; for keyframes, row 3
@@ -70,6 +71,11 @@
 #define kWindowVerts   45
 #define kWindowPrimTag 6
 
+; The most vertices one triangle can write: five planes can each add a corner,
+; so a clipped triangle fans out to at most eight corners, six triangles,
+; eighteen vertices. A window closes when it has less room than this left.
+#define kWindowReserve 18
+
 ; The per-draw block, uploaded once per draw chain: the dynamic lights for a
 ; DrawVertex batch, which only colour mode 1 reads, or the lerp constants for
 ; a keyframe batch. Must match vu1::kLightBlockAddr and vu1::kLerpBlockAddr.
@@ -78,10 +84,6 @@
 
 ; The keyframe colour's ceiling, a frame constant. See vu1::kColorClamp.
 #define kColorClamp  7
-
-; Where the input stride is parked, in .y - the clipper's spill qword, whose
-; .x is the survivor count. Must match vu1::kClipSpillAddr.
-#define kInputStride 1009
 
 ; The turbulent surface constants, uploaded once by vu1::Init and never
 ; rewritten. Only a warped batch reads them. Must match vu1::kWarpConstBlockAddr.
@@ -131,19 +133,15 @@
     ; it an ordinary per-vertex attribute, which is what a clipper needs - a cut
     ; vertex has no world position to light, only two endpoints to interpolate
     ; between, and light is linear in exactly the way Gouraud already assumes.
-    ; Defined on both paths before it is read: openvcl checks that statically and
-    ; nothing below this branch writes it in mode 0. One instruction, and the
-    ; alternative is a register the emit could read as whatever was left in it.
-    ; Black, with the alpha the lightmap pass needs, before the branch rather than
-    ; inside it. The alpha is a constant - it does not depend on the lights - and
-    ; setting it here makes it independent of how this branch resolves. Left on the
-    ; lit side it came out as vf00's 1.0 instead of 128, measured by reading the
-    ; emitted quadword back out of VU memory, and an alpha of 1 scales the
-    ; framebuffer by 1/128: black, yet non-zero, so it still passes the
-    ; NOTEQUAL-0 alpha test instead of being skipped.
+    ; Defined on both paths before it is read: the compiler rejects a read of a
+    ; register that some path leaves unwritten, and in mode 0 nothing below this
+    ; branch writes it, while the clipper's seed still stores it. Black, with the
+    ; alpha the lightmap pass needs: 128, since an alpha of 1 scales the
+    ; framebuffer by 1/128 - black, yet non-zero, so it still passes the
+    ; NOTEQUAL-0 alpha test instead of being skipped. The alpha does not depend on
+    ; the lights, so it is set here, ahead of the branch, and not on the lit side.
     ;
-    ; Mode 0 pays two instructions for an alpha it never reads. The program this
-    ; was merged from had no branch here at all, which is why it never showed.
+    ; Mode 0 pays two instructions for a colour it never emits.
     move.xyz vCol, vf00
     move.w   vCol, fLightClamp
 
@@ -215,11 +213,9 @@
 ; emit, both of which read it as the zero the VU makes of a denormal.
 ;
 ; Every register written here is also written by ClipTransform, which runs
-; instead of this on the other side of a branch, so each is first written
-; the way it is there - vPos and vStq whole, vCol as .xyz and .w apart - and
-; nothing ahead of the branch writes any of them. A masked write and an
-; unmasked one to the same register with a branch between them is where
-; openvcl has silently gone wrong before; within one block it is ordered.
+; instead of this on the other side of a branch, and each is written the same
+; way on both sides - vPos and vStq whole, vCol as .xyz and .w apart - so the
+; code after the join sees one shape of value whichever side ran.
 ;
 ; C-like pseudo-code ('in' is the qword array at iInPtr):
 ;
@@ -483,10 +479,11 @@
 ; other two within a leaf's extent of it. Per triangle rather than per
 ; polygon, which is just as exact - every triangle draws on its own.
 ;
-; Into memory rather than the corner registers: the seed stored them whole,
-; and a masked write after a branch to a register written whole before it is
-; the ordering openvcl gets wrong. The caller's branch also puts these stores
-; in a block after the seed's own.
+; Into memory rather than the corner registers: the seed has stored the
+; corners already, and the fan reads them from there. These stores must land
+; after the seed's, which write the same qwords through another address
+; register: on the cut path the warp flag's branch puts them in a later block,
+; and the uncut path has a --barrier between the two.
 ;
 ; C-like pseudo-code ('corner' is the seed's (rgba, s, t, q) qword):
 ;
@@ -502,7 +499,7 @@
 
     ; (u, v) up one lane, into the qword's s and t, with two masked writes of
     ; lanes that are both defined: a rotate would read fUV's .zw, which nothing
-    ; writes, and openvcl rejects that.
+    ; writes, and the compiler rejects that.
     WarpTexels{ fStq0 }
     add.y    fCutST, vf00, fUV[x]
     add.z    fCutST, vf00, fUV[y]
@@ -526,6 +523,29 @@
 
 #endmacro
 
+; Emits the three transformed corners as one triangle at iOutPtr, with the ADC
+; word JudgeTriangleAdc left in iADC, without advancing anything.
+;
+; The program invokes this before it knows whether the triangle is culled,
+; cut or warped - see the note at the invocations - so it must stay free of
+; side effects beyond the nine qwords at iOutPtr. 'lbl' prefixes the labels
+; the three emits place, and has to be unique to each invocation.
+;
+; C-like pseudo-code:
+;
+;   void EmitTriangle(vec4 pos[3], vec4 stq[3], vec4 col[3])
+;   {
+;       for (i = 0..2)
+;           EmitVertex(pos[i], stq[i], col[i], 3i, 3i + 1, 3i + 2);
+;       out[2].w = out[5].w = out[8].w = adc;
+;   }
+#macro EmitTriangle: lbl
+    EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lbl##0 }
+    EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lbl##1 }
+    EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lbl##2 }
+    StoreTriangleAdc{ }
+#endmacro
+
 ; C-like pseudo-code of the program below ('vuMem' is VU1 data memory
 ; seen as an array of qwords):
 ;
@@ -541,31 +561,35 @@
 ;       qword* batch     = &vuMem[XTOP];
 ;       int    numVerts  = batch[kBatchHeader].w;
 ;       int    colorMode = batch[kBatchHeader].x;
+;       int    warped    = batch[kBatchHeader].y;
+;       int    format    = batch[kBatchHeader].z;
 ;       qword* in        = &batch[kVertexData];
 ;
 ;       // Output goes to a window, which is opened by copying the 7
-;       // GIF tag qwords the EE prepared to its head:
-;       qword* win       = &vuMem[XTOP + kWindowA];
-;       int    winStep   = kWindowQwords; // flips sign on every kick
-;       qword* out       = OpenWindow(win);
-;       int    vertsLeft = kWindowVerts;
+;       // GIF tag qwords the EE prepared to its head. 'room' counts the
+;       // vertices left beyond the kWindowReserve one triangle can need:
+;       qword* win     = &vuMem[XTOP + kWindowA];
+;       int    winStep = kWindowQwords; // flips sign on every kick
+;       qword* out     = OpenWindow(win);
+;       int    room    = kWindowVerts - kWindowReserve;
 ;
 ;       do // One triangle per iteration:
 ;       {
 ;           // Room for the most a clipped triangle can fan out to - see
 ;           // the note at the test. Never asked again inside the clipper.
-;           if (vertsLeft < 18)
+;           if (room < 0)
 ;           {
-;               win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;               win[kWindowPrimTag].nloop = kWindowVerts - kWindowReserve - room;
 ;               XGKICK(win);
 ;               win += winStep; winStep = -winStep;
-;               out = OpenWindow(win); vertsLeft = kWindowVerts;
+;               out = OpenWindow(win); room = kWindowVerts - kWindowReserve;
 ;           }
 ;
 ;           // Three corners to clip space, with position, (colour or
 ;           // index, s, t, q) and computed colour each:
 ;           vec4 p[3], stq[3], col[3];
-;           if (batch[kBatchHeader].z == DrawVertex)
+;           bool culled = false;
+;           if (format == DrawVertex)
 ;           {
 ;               for (i = 0..2) ClipTransform(in[2i], in[2i + 1], ...);
 ;               in += 6;
@@ -574,43 +598,46 @@
 ;           {
 ;               for (i = 0..2) LerpTransform(in[3i], in[3i + 1], in[3i + 2], ...);
 ;               in += 9;
-;               if (BackFacing(p[0], p[1], p[2])) continue; // no emit at all
-;           }
-;
-;           bool cut = clipFlagQueue.last3() != 0; // about 1 triangle in 50
-;           if (!cut && !warped)
-;           {
-;               for (i = 0..2) EmitVertex(p[i], stq[i], col[i], &out[3i]);
-;               out[2].w = out[5].w = out[8].w = 0x7FFF; // ADC clear: draw
-;               out += 9; vertsLeft -= 3;
-;           }
-;           else
-;           {
-;               // A turbulent triangle's coordinates are finished first -
-;               // warped at its corners and rebased - so the clipper, if it
-;               // cuts, interpolates finished values:
-;               Seed(cut ? bufA : bufB, p, stq, col);
-;               if (warped)
-;                   WarpCorners(cut ? bufA : bufB);
-;
-;               // Sutherland-Hodgman against near and the four guard-band
-;               // sides (vu_clip.i), then fan the survivors from corner 0:
-;               int n = cut ? ClipPolygon(bufA) : 3; // 0, or 3 to 8 corners in bufB
-;               for (i = 1; i < n - 1; ++i)
-;               {
-;                   EmitVertex(corner 0, i and i + 1, &out[0..8]);
-;                   out[2].w = out[5].w = out[8].w = Adc(judged again);
-;                   out += 9; vertsLeft -= 3;
-;               }
+;               culled = BackFacing(p[0], p[1], p[2]);
 ;           }
 ;           numVerts -= 3;
+;           bool cut = clipFlagQueue.last3() != 0; // about 1 triangle in 50
+;
+;           // Written before it is judged, and kept only if it goes out as
+;           // it stands; otherwise 'out' does not move, and the fan, if
+;           // anything, writes over it:
+;           EmitTriangle(p, stq, col); // ADC from the judgement
+;           if (culled)
+;               continue;              // no emit at all
+;           if (!cut && !warped)
+;           {
+;               out += 9; room -= 3;
+;               continue;
+;           }
+;
+;           // A turbulent triangle's coordinates are finished first -
+;           // warped at its corners and rebased - so the clipper, if it
+;           // cuts, interpolates finished values:
+;           Seed(cut ? bufA : bufB, p, stq, col);
+;           if (warped)
+;               WarpCorners(cut ? bufA : bufB);
+;
+;           // Sutherland-Hodgman against near and the four guard-band
+;           // sides (vu_clip.i), then fan the survivors from corner 0:
+;           int n = cut ? ClipPolygon(bufA) : 3; // 0, or 3 to 8 corners in bufB
+;           for (i = 1; i < n - 1; ++i)
+;           {
+;               EmitVertex(corner 0, i and i + 1, &out[0..8]);
+;               out[2].w = out[5].w = out[8].w = Adc(judged again);
+;               out += 9; room -= 3;
+;           }
 ;       }
 ;       while (numVerts != 0);
 ;
 ;       // Skipped if the last triangles were all culled or clipped away.
-;       if (vertsLeft != kWindowVerts)
+;       if (room != kWindowVerts - kWindowReserve)
 ;       {
-;           win[kWindowPrimTag].nloop = kWindowVerts - vertsLeft;
+;           win[kWindowPrimTag].nloop = kWindowVerts - kWindowReserve - room;
 ;           XGKICK(win);
 ;       }
 ;   }
@@ -633,33 +660,19 @@
     ilw.w  iNumVerts,  kBatchHeader(iBase)
     ilw.x  iColorMode, kBatchHeader(iBase)
 
+    ; The warp flag and the vertex format, held for the whole batch. Neither
+    ; changes inside the loop, so neither has to be read again, and the
+    ; colour mode, written nowhere in the loop either, is what oxide-vcl's
+    ; unswitch makes one copy of the loop per value of.
+    ilw.y  iWarp,   kBatchHeader(iBase)
+    ilw.z  iFormat, kBatchHeader(iBase)
+
     iaddiu iInPtr, iBase, kVertexData
 
     ; The first output window, the step that alternates to the other one,
     ; and where this batch's GIF tags are - all parked in VU memory rather
     ; than held in VI registers. See vu_common.i.
     InitOutputWindows{ }
-
-    ; The warp flag goes to the spill's spare lane rather than a register of its
-    ; own. Read once per vertex and live across the whole program otherwise, it
-    ; cost the thirteenth allocatable VI and openvcl refused the program - INTEGER
-    ; is what this runs out of first, with the clipper holding what it holds.
-    ; Reloaded at each use it is live for two instructions.
-    ilw.y  iWarp, kBatchHeader(iBase)
-    isw.w  iWarp, kWindowSpill(vi00)
-
-    ; Input qwords per triangle, for the advance at the bottom of the loop: three
-    ; DrawVertex of 2 qwords, or three keyframe vertices of 3. Parked rather than
-    ; held, for the same reason as the warp flag; see the advance for why it is
-    ; not simply a constant in each format's block.
-    ilw.z  iFormat, kBatchHeader(iBase)
-    iaddiu iStride, vi00, 6
-    ibeq   iFormat, vi00, lStrideSet
-    iaddiu iStride, vi00, 9
-    lStrideSet:
-    isw.y  iStride, kInputStride(vi00)
-
-    --barrier
 
     OpenOutputWindow{ }
 
@@ -668,15 +681,16 @@
 
         ; The dynamic light block, re-read every triangle rather than held.
         ;
-        ; Held, it is twelve float registers live from the top of the program to
-        ; the bottom, and with the clipper's own fifteen that is more than the
-        ; thirty-two this machine has - openvcl says so, in as many words. Read
-        ; here it is live only as far as the third transform below, which is
-        ; before the clipper needs anything, so the two sets never overlap.
+        ; Held, it would be twelve float registers live across the whole loop,
+        ; the clipper's included. Read here it is live only as far as the third
+        ; transform below, which is before the clipper needs anything, so the
+        ; two sets never overlap. In the loop's copy for packed colours, where
+        ; nothing reads the lights, the compiler leaves out every load but the
+        ; clamp's .w, the alpha the colour's initialiser copies.
         ;
         ; Unconditional, although only colour mode 1 reads it: guarding it would
-        ; leave the registers undefined on the other path, which openvcl rejects
-        ; statically whether or not the read is reachable.
+        ; leave the registers undefined on the other path, which the compiler
+        ; rejects whether or not the read is reachable.
         lq fLightX,     kLightBlock + 0(vi00)
         lq fLightY,     kLightBlock + 1(vi00)
         lq fLightZ,     kLightBlock + 2(vi00)
@@ -693,13 +707,11 @@
         ; Room for everything this triangle can produce, asked once, here.
         ;
         ; Two rules meet at this line. It has to come *before* the corners are
-        ; transformed, because OpenOutputWindow reloads the GIF tag block into
-        ; seven VF registers and openvcl will put those on top of a
-        ; transformed corner that is still live across the call. And it has to
-        ; cover the worst case up front - eighteen vertices, since five planes
-        ; can each add a corner, so eight corners fan to six triangles -
-        ; because asking again from inside the clipper means more window
-        ; opens and kicks in there, and that is what stalls VIF1.
+        ; transformed, because the triangle is written into the window as soon
+        ; as it is (see below). And it has to cover the worst case up front -
+        ; kWindowReserve vertices - because asking again from inside the
+        ; clipper means more window opens and kicks in there, and that is what
+        ; stalls VIF1.
         ;
         ; Eighteen of a 45-vertex window is a lot to hold back for the 2% of
         ; triangles that clip, and the measured fan never exceeded six corners
@@ -707,28 +719,19 @@
         ; window closes once fewer than eighteen are left, so it carries
         ; between 27 and 45 instead of always 45, and a full chunk takes two
         ; to four kicks where it took two. GsWait is the canary.
-        ; Through a register, not an immediate: iaddi's immediate is five bits
-        ; signed, and dvp-as truncates anything larger without a word - -18
-        ; assembles to exactly the same instruction as +14, which made this
-        ; test always pass and walked the GIF straight out of the window.
-        ; check_vu_code.py now fails the build on it.
-        iaddiu iRoom, vi00,       18
-        isub   iRoom, iVertsLeft, iRoom
         ibgez iRoom, lWindowHasRoom
         CloseOutputWindowAndKick{ lKicked1 }
         OpenOutputWindow{ }
         lWindowHasRoom:
 
-        ; Which vertex format this batch carries, re-read from the header rather
-        ; than held: VI is what the clipper runs out of, and iBase is live anyway.
+        ; Which vertex format this batch carries. Branched on once a triangle
+        ; rather than once a vertex, so each side is one block the scheduler
+        ; can interleave three corners through.
         ;
-        ; Branched on once a triangle rather than once a vertex, so each side is
-        ; one block the scheduler can interleave three corners through. The
-        ; keyframe side comes *second* in the source, and that matters: openvcl
-        ; allocates registers by source-order interval, so the light block loaded
-        ; above - twelve registers, last read in the DrawVertex side - is over
-        ; before the keyframe side begins, and the two never compete.
-        ilw.z iFormat, kBatchHeader(iBase)
+        ; The DrawVertex side comes first, the keyframe side second and the
+        ; clipper last, and the order matters to oxide-vcl's unswitch: with the
+        ; DrawVertex side placed after the clipper, the loop was not copied per
+        ; colour mode, and a world triangle took about twice the cycles.
         ibne  iFormat, vi00, lKeyframes
 
         ClipTransform{ fPos0, fStq0, fCol0, 0, 1, lLight0Done }
@@ -736,13 +739,33 @@
         ClipTransform{ fPos2, fStq2, fCol2, 4, 5, lLight2Done }
 
         ; Did any corner leave the volume? Judged here, in the same block as the
-        ; clipw it reads, and not after the join below: the clip flags land four
-        ; cycles after a clipw, and openvcl pads for that only within a block. Put
-        ; across the branch, the fcand ran two cycles after the third corner's
-        ; clipw and judged every world triangle without it, so a triangle whose
-        ; third corner was behind the eye went out unclipped, across the screen.
+        ; clipw it reads: the clip flags land four cycles after a clipw. Put
+        ; across a branch from it, an fcand once ran two cycles after the third
+        ; corner's clipw and judged every world triangle without it, so a
+        ; triangle whose third corner was behind the eye went out unclipped,
+        ; across the screen.
         JudgeTriangleAdc{ }
-        b lTransformed
+        iaddiu iInPtr,    iInPtr,     6
+        iaddi  iNumVerts, iNumVerts, -3
+
+        ; The triangle is written out before it is known to go out as it
+        ; stands, which is what lets this block run straight from the input
+        ; loads to the output stores: the transform's chains and the emit's
+        ; stores share it, and fill each other's empty slots. Most triangles
+        ; do go out as they stand. One that is cut or warped goes through the
+        ; fan instead, which starts at the same iOutPtr and writes over it;
+        ; one whose fan is empty leaves it past the end of what the window's
+        ; tag counts, where nothing sends it.
+        ;
+        ; So the output advances here too, and the slow path below takes it
+        ; back. vi01 is still the judgement and iWarp the batch's flag: either
+        ; sends the triangle there, with one branch.
+        EmitTriangle{ lEmitDv }
+        iaddiu iOutPtr, iOutPtr,  9
+        iaddi  iRoom,   iRoom,   -3
+        ior    iSlow,   vi01,    iWarp
+        ibne   iSlow,   vi00,    lSlow
+        b lTriangleBottom
 
     lKeyframes:
 
@@ -761,6 +784,8 @@
 
         ; Judged here for the same reason as on the DrawVertex side.
         JudgeTriangleAdc{ }
+        iaddiu iInPtr,    iInPtr,     9
+        iaddi  iNumVerts, iNumVerts, -3
 
         ; Backface cull, ahead of the clipper, which is where it has to be: a
         ; cut does not change a triangle's facing, and a back face should cost
@@ -789,9 +814,9 @@
         add.x      fArea,  fArea,  fArea[y]
         add.x      fArea,  fArea,  fArea[z]
 
-        ; The sign travels as data, never flags (openvcl reorders around flag
-        ; reads): clamped to [-1, +1] so the ftoi4 cannot overflow the 16 bits
-        ; mtir moves, leaving the sign in bit 15, which is what ibltz reads.
+        ; The sign travels as data: clamped to [-1, +1] so the ftoi4 cannot
+        ; overflow the 16 bits mtir moves, leaving the sign in bit 15, which is
+        ; what ibltz reads.
         ;
         ; The draw's cull sign goes on first, so the test is always just "is it
         ; negative": a positive sign culls negative determinants, a negative one
@@ -803,39 +828,40 @@
         max.x      fArea,  fArea,  fMinusOne[x]
         ftoi4.x    fArea,  fArea
         mtir       iCull,  fArea[x]
-        ibltz      iCull,  lTriangleAdvance
 
-    lTransformed:
+        ; Written out ahead of the cull as well as of the judgement - see the
+        ; DrawVertex side. The cull's chain is long, and the emit fills it. A
+        ; back face leaves the output where it was.
+        EmitTriangle{ lEmitKf }
+        ibltz  iCull,   lTriangleBottom
+
+        iaddiu iOutPtr, iOutPtr,  9
+        iaddi  iRoom,   iRoom,   -3
+        ior    iSlow,   vi01,    iWarp
+        ibne   iSlow,   vi00,    lSlow
+        b lTriangleBottom
+
+        ; --- cut or turbulent: back to the triangle's own output, then the fan ---
+    lSlow:
+
+        isubiu iOutPtr, iOutPtr, 9
+        iaddi  iRoom,   iRoom,   3
 
         ; Did any corner leave the volume, as judged above? About one triangle
-        ; in fifty does; the rest go straight out below.
+        ; in fifty does. Otherwise it is a turbulent batch's triangle, which goes
+        ; out through the fan even when it needs no cut, because its coordinates
+        ; are finished in the clipper's buffer: see WarpCorners. Water is a small
+        ; share of any frame.
         ibne  vi01, vi00, lClipTriangle
 
-        ; A turbulent batch's triangle goes out through the fan even when it
-        ; needs no cut, because its coordinates are finished in the clipper's
-        ; buffer: see WarpCorners. Water is a small share of any frame.
-        ilw.w iWarp, kWindowSpill(vi00)
-        ibne  iWarp, vi00, lWarpWhole
-
-        ; --- every corner inside: emit the triangle as it stands ---
-        EmitVertex{ fPos0, fStq0, fCol0, 0, 1, 2, lEmitUn0 }
-        EmitVertex{ fPos1, fStq1, fCol1, 3, 4, 5, lEmitUn1 }
-        EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitUn2 }
-        StoreTriangleAdc{ }
-
-        iaddiu iOutPtr,    iOutPtr,     9
-        iaddi  iVertsLeft, iVertsLeft, -3
-        b lTriangleAdvance
-
         ; --- turbulent, every corner inside: straight into B, where the fan reads ---
-    lWarpWhole:
-
         ClipSeedTriangle{ iWalk, kClipBufB }
 
         ; The seed's stores have to land before WarpCorners writes over their s
-        ; and t, and nothing here is a block boundary to keep them apart: openvcl
-        ; reorders stores, and it does not see 1(iWalk) and kClipBufB + 1(vi00)
-        ; as one address. On the cut path below, the warp flag's branch does it.
+        ; and t, and nothing here is a block boundary to keep them apart: the
+        ; seed writes through iWalk, WarpCorners through vi00, so the two are
+        ; not the same address register. On the cut path below, the warp flag's
+        ; branch does it.
         --barrier
 
         WarpCorners{ kClipBufB }
@@ -847,13 +873,10 @@
         ClipSeedTriangle{ iWalk, kClipBufA }
 
         ; A turbulent batch's corners are finished before the cut. See WarpCorners.
-        ilw.w iWarp, kWindowSpill(vi00)
         ibeq  iWarp, vi00, lSeedWarped
         WarpCorners{ kClipBufA }
         lSeedWarped:
 
-        ; One plane for now. The other four guard-band sides are the same
-        ; macro with a different selector, and go in next.
         ; Five planes: near, then the four guard-band sides. No far plane -
         ; it was never once straddled across 606,931 clipped triangles.
         ;
@@ -877,10 +900,9 @@
         ; Fan the survivors from corner 0 - (0,1,2), (0,2,3), ... - which is
         ; iCount-2 triangles. Five planes can leave eight corners, so this is
         ; a loop rather than the two triangles one plane could be written out
-        ; by hand. It writes the enclosing loop's iOutPtr and iVertsLeft,
-        ; which is the shape openvcl miscompiles when a window open joins it;
-        ; there is none here, and the two loop-variable checks in the Makefile
-        ; are what say so on every build.
+        ; by hand. It writes the enclosing loop's iOutPtr and iRoom, and no
+        ; window opens inside it: the room test at the top of the triangle
+        ; loop reserved enough for all of it.
         iaddi iLeft, iCount, -2
         ibltz iLeft, lClipDone
         ibeq  iLeft, vi00, lClipDone
@@ -909,8 +931,8 @@
             EmitVertex{ fPos2, fStq2, fCol2, 6, 7, 8, lEmitFan2 }
             WholeTriangleReject{ }
 
-            iaddiu iOutPtr,    iOutPtr,     9
-            iaddi  iVertsLeft, iVertsLeft, -3
+            iaddiu iOutPtr, iOutPtr,  9
+            iaddi  iRoom,   iRoom,   -3
 
             iaddiu iFan,  iFan,  3
             iaddi  iLeft, iLeft, -1
@@ -918,19 +940,10 @@
 
         lClipDone:
 
-    lTriangleAdvance:
-
-        ; The input advances here, at the bottom, and nowhere else - by the stride
-        ; the prologue parked. It is tempting to advance inside each format's block,
-        ; where the stride is a constant, and that is exactly what openvcl gets
-        ; wrong: it sizes a register's life by source order, so a pointer whose last
-        ; write sits mid-loop looks dead from there to the bottom, and it handed
-        ; iInPtr's register to the cull verdict, the ADC word and the clipper's
-        ; walk pointer - with the loop's back edge still to read it. Written last,
-        ; its life spans the whole loop.
-        ilw.y  iStride,   kInputStride(vi00)
-        iadd   iInPtr,    iInPtr,    iStride
-        iaddi  iNumVerts, iNumVerts, -3
+    ; Every path through the loop ends here, with the input and the triangle
+    ; count already advanced: each format's block moves them by its own
+    ; stride, as soon as its loads are issued.
+    lTriangleBottom:
         ibgtz  iNumVerts, lTriangleLoop
 
     ; The last window can be empty - its triangles all culled or clipped

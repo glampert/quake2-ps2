@@ -5,60 +5,66 @@ paths:
   - "src/ps2/renderer/vu1.cpp"
   - "src/ps2/renderer/clip.h"
   - "src/ps2/math/vec_mat.h"
-  - "src/tools/vu-checker/**"
 ---
 
 # VU microprograms and VU0 inline asm
 
 ## Pipeline (Makefile rule `build/vu/%.o`)
 
-`vclpp -I vu1progs -Wundef -Werror -j` → `openvcl` → `openvcl -c` (source names, for the
-regalloc check) → `dvp-as` → `check_vu_code.py` (vu-checker submodule), which deletes the
-`.o` on failure. The output is config-independent and lives in `build/vu/`. There are two
-programs, `textured_triangles.vcl` and `particles.vcl`, with shared `vu_common.i`/`vu_clip.i`.
+`oxide-vcl -G -I vu1progs --vcl-boilerplate --warn-undef --mode=oxide --opt=all
+--warnings-as-errors` → `dvp-as`. oxide-vcl is the `src/tools/oxide-vcl` submodule, built by
+cargo into `build/tools/oxide-vcl/`; its docs (`docs/VCL_REFERENCE.md` there) cover the
+language, the preprocessor and the optimizations. The output is config-independent and lives
+in `build/vu/`, the `.vsm` beside each `.o`. There are two programs, `textured_triangles.vcl`
+and `particles.vcl`, with shared `vu_common.i`/`vu_clip.i`.
 
-- **A failed VU build is easy to miss.** openvcl's messages don't match `error:`. Check
-  `make`'s exit status. If a VU change seems not to take effect, compare the `.vsm` mtime
-  with the `.vcl`.
-- dvp-as's **"operand out of range" warnings are expected**. Branch offsets are 11 bits, and
-  dvp-as keeps the low bits. That is correct only because VU1 micro memory is exactly 2048
-  instructions and the PC wraps. The `branches` check proves each lands mod 2048.
-- The six checks: `crossloop`, `regalloc` (reaching definitions), `loopvar`, `immediates`
-  (dvp-as silently truncates), `latency` (clip flag/Q across branches), `branches`. Each
-  exists because a silent toolchain failure reached the screen.
+- **Check `make`'s exit status.** A failed VU build leaves the previous `.vsm`/`.o` in place.
+  If a VU change seems not to take effect, compare the `.vsm` mtime with the `.vcl`.
+- `--warnings-as-errors` covers the preprocessor (`--warn-undef`: an `#if` on an undefined
+  name) and the compiler alike.
+- dvp-as's **"operand out of range" warning on a branch is harmless**. Branch offsets are 11
+  bits and dvp-as keeps the low bits, which reach the same instruction because VU1 micro
+  memory is exactly 2048 instructions and the PC wraps.
+- **Immediates:** oxide mode's `imm` fix rewrites or rejects an immediate that does not fit
+  its field, where dvp-as would truncate it silently (an `iaddi` of -18 once assembled as
+  +14).
 
-## openvcl traps (all silent or cryptic)
+## Writing VCL for oxide-vcl
 
-- **Masked + unmasked writes to one VF register across a branch are not ordered as written.**
-  `move vCol, vf00` before an `ibeq` and `move.w vCol, x` after it ended with the
-  *initialiser's* `.w`. Keep writes to one register lane-disjoint (`move.xyz` + `move.w`), or
-  write the value once on a path with no second writer.
-- openvcl rejects a read of a lane that isn't written on every path, even an unreachable one
-  (`Read-attempt from uninitialized float register`). The message is trustworthy: it caught
-  an unassigned `.w`. But the obvious fix, an all-lane initialiser, creates the trap above.
-  Mask the initialiser to the lanes the other writer does *not* touch.
-- **A loop-carried value whose last write is mid-loop is treated as dead to the loop bottom.**
-  openvcl sizes live ranges by source order and ignores the back edge, so it handed the
-  pointer's VI to three other values. Keep a loop-carried pointer's update at the loop
-  bottom. Use a spilled stride if the step varies. `regalloc` now catches this.
-- **About 13 allocatable VI registers** (`-j` emits `.init_vi VI02..VI14`, and VI01 usually
-  belongs to `fcand`). Past that you get `Register allocation ran out of registers` with no
-  location. Fixes: merge counters with disjoint live ranges, read verdicts straight from
-  `vi01`, and reuse one register for a running sum and its result.
+- **A register some path leaves unwritten can't be read**, even on a path that never runs
+  (`'x.y' is read before anything writes it`). Write it on every path, as ClipTransform does
+  its colour; the message names the register and lane.
+- **Hold batch state in VI registers.** The allocator gives a value its real live range and
+  has VI01-VI15 (`--vcl-boilerplate` declares `.init_vi_all`; it keeps VI01 free across
+  `fcand`), so a flag read once per batch belongs in a register, not reloaded per triangle.
+  The window state and the clipper's survivor count stay in their spill qwords because they
+  are read once per window or per pass, not because of the allocator.
+- **Let `unswitch` see a mode.** A branch on a register the loop never writes (`iColorMode`,
+  `iFormat`) is decided once before the loop: the triangle loop runs in one of four copies,
+  per colour mode and vertex format. Reloading such a register inside the loop, even from a
+  constant header, makes it a write and keeps the branch.
+- **Keep the hot path one block.** The scheduler packs within a block. A branch in the
+  middle of the usual path splits it, so the triangle is written out before its clip and
+  cull decisions (`EmitTriangle`) and the slow path takes the output advance back; the fan
+  overwrites the same slots.
+- **The clip flags land four cycles after a `clipw`**: judge (`fcand`) in the same block, and
+  carry the verdict in `vi01` from there.
+- **Store order through two address registers**: a store that must land after another to the
+  same qword written through a different base register (the uncut water path's seed and
+  `WarpCorners`) keeps a `--barrier` or a block boundary between them.
 - `clipw.xyz a, b` is rejected. Write `clipw.xyz fJudge, fPos[w]`, with an explicit `[w]`.
 
-## vclpp and linking
+## Linking
 
-- vclpp is the pinned submodule build. An old vclpp on `PATH` mangles macro bodies that
-  contain comments.
-- `#vuprog NAME` → `.name NAME` → openvcl emits `NAME_CodeStart`/`NAME_CodeEnd`. Declare
+- `#vuprog NAME` → `.name NAME` → oxide-vcl emits `NAME_CodeStart`/`NAME_CodeEnd`. Declare
   those with `PS2_DECLARE_VU_MICROPROGRAM` at namespace scope. An `extern "C"` inside an
   anonymous namespace gets internal linkage and won't resolve against `.vudata`. Use
   `u32`/`unsigned int` for the symbol types, not `uint32_t`.
-- Since vclpp 2, `#define`s nest and `#macro`s may invoke each other (recursion is an error).
-  Label-placing macros take one prefix and paste it (`lbl##Loop`, `lbl##NoWarp`). Constant
-  expressions are folded only with `-x`, which the Makefile doesn't pass, so openvcl gets
-  operands like `1010 + 0(vi00)` as written.
+- `#define`s nest and `#macro`s may invoke each other (recursion is an error). Label-placing
+  macros take one prefix and paste it (`lbl##Loop`, `lbl##NoWarp`). Constant expressions are
+  folded only with `--fold-constants`, which the Makefile doesn't pass, so the compiler gets
+  operands like `1010 + 0(vi00)` and `kWindowVerts - kWindowReserve` as written, and
+  evaluates them itself.
 
 ## VU memory layout (vu1.h)
 
@@ -87,15 +93,11 @@ light block starts at 1010. The batch tag block is 7 qwords with no room to grow
   of water was the artifact the user saw (see [gs-renderer.md](gs-renderer.md)). Every
   turbulent triangle now goes through `WarpCorners` in the clipper's buffer, cut or not, and
   out through the fan. A new non-linear per-vertex term belongs there too.
-- **openvcl reorders stores within a block.** It moved a seed's store of corner 2 ahead of
-  corner 0's, and nothing says it sees `1(iWalk)` and `kClipBufB + 1(vi00)` as one address. A
-  store that must land after another to the same qword needs a block boundary or a
-  `--barrier` between them, as the uncut water path has between its seed and `WarpCorners`.
 - Above every non-trivial `#macro` and `#vuprog`, after the prose, add an indented
   `;`-commented **C-like pseudo-code** block: `vec4`/`mat4`/`qword` types, `//` comments, and
   control flow that mirrors the real code (`do/while` for a bottom-tested `ibne` loop).
   `textured_triangles.vcl` sets the format. Comment-only top-level `;` blocks pass through
-  vclpp/openvcl safely.
+  the preprocessor and the compiler safely.
 
 ## Debugging a microprogram
 

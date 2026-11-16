@@ -69,8 +69,11 @@ ended. The save test has quit on its own since 2026-10-12.
 
 For a size or codegen comparison against an older commit without touching the checkout (a test
 may be running from `build/debug`): `git archive <commit> | tar -x -C <scratch>/<commit>`, then
-`cp -R src/tools/{vclpp,vu-checker,miniz}/. <scratch>/<commit>/src/tools/<same>/` (an archive
+`cp -R src/tools/{oxide-vcl,miniz}/. <scratch>/<commit>/src/tools/<same>/` (an archive
 holds no submodule contents), and `make -j4` there. The Makefile's paths are relative, so it
-builds its own `build/tools/vclpp` and ELF. Two such builds took about four minutes each
+builds its own `build/tools/oxide-vcl` and ELF. A commit from before the switch to oxide-vcl
+pins vclpp and vu-checker instead (`git ls-tree <commit> src/tools` lists a commit's pins):
+`git worktree add <scratch>/<commit> <commit>` and
+`git -C <scratch>/<commit> submodule update --init --recursive` check out its own. Two such builds took about four minutes each
 alongside a running map cycle (2026-10-24). `mips64r5900el-ps2-elf-size` on the unstripped ELFs
 then gives text/data/bss per commit.

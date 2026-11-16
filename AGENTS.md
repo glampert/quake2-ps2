@@ -17,7 +17,8 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 ## Toolchain
 
 - EE compiler: `mips64r5900el-ps2-elf-gcc`/`g++` (GCC 15). There is no `ee-gcc`/`ee-g++`, so
-  don't go looking for them. VU tools: `openvcl`, `dvp-as`. Also `bin2c`.
+  don't go looking for them. VU tools: oxide-vcl (a submodule, below) and `dvp-as`. Also
+  `bin2c`. Building oxide-vcl needs a Rust toolchain (`cargo`, a recent stable release).
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.
@@ -29,9 +30,9 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   CI's pin, run the step with its commit instead, from `build/`:
   `../scripts/002-ps2sdk.sh <sha>`. Last rebuilt 2026-10-19 (toolchain, newlib `8881dc4`)
   and 2026-11-04 (ps2sdk `d41ea62`, CI's pin).
-- Submodules: `src/tools/vclpp` (VCL preprocessor, with its own nested `external/parse-utils`),
-  `src/tools/vu-checker` (`check_vu_code.py`), `src/tools/miniz`. The build uses the pinned
-  vclpp it builds into `build/tools/vclpp`, never one on `PATH`.
+- Submodules: `src/tools/oxide-vcl` (the VCL compiler, preprocessor included) and
+  `src/tools/miniz`. The build uses the pinned oxide-vcl it builds into
+  `build/tools/oxide-vcl/release/oxide-vcl`, never one on `PATH`.
 
 ## Build and verify
 
@@ -39,9 +40,9 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   set, `-Werror`) and links the ELF. Don't build host-side stub harnesses just to see whether
   something compiles. ps2sdk headers shadow host libc++ ones, and the GCC-only warnings
   (`-Wlogical-op`, `-Wduplicated-*`) would be missed.
-- **Check `make`'s exit status. Grepping its output for `error:` is not enough.** openvcl's
-  diagnostics don't match that pattern, and a failed VU build leaves the stale `.vsm`/`.o`
-  from the previous run, which then gets linked.
+- **Check `make`'s exit status. Grepping its output for `error:` is not enough.** Not every
+  tool's failure says `error:`, and a failed VU build leaves the previous run's `.vsm` and `.o`
+  in `build/vu/`, so what is there may not be what the sources say.
 - `make` = debug (`-O2`, asserts on) → `build/debug/quake2.elf`. `make release` = `-O3`, no
   asserts, no debug-only code → `build/release/`. `make run` / `make release run` launch PCSX2.
   The symbols are in `quake2_unstripped.elf` next to each stripped ELF.
@@ -68,11 +69,10 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   only when asked.
 - `git fetch` first. The user sometimes commits on GitHub directly, so fast-forward if
   behind.
-- Push submodules before the repo that pins them: **parse-utils → vclpp → quake2-ps2**. A
-  gitlink that reaches GitHub before its submodule commit breaks recursive clones.
+- Push submodules before the repo that pins them: **oxide-vcl → quake2-ps2**. A gitlink that
+  reaches GitHub before its submodule commit breaks recursive clones.
 - Commit subjects are one sentence ending in a period, often prefixed with the area:
-  `CD music: stream the soundtrack from loose SPU2 ADPCM files.`,
-  `vclpp: back to C++17, so GCC 9 builds it; CI on GitHub.`
+  `CD music: stream the soundtrack from loose SPU2 ADPCM files.`
 
 ## Things that bite (details in the rules)
 
@@ -81,7 +81,8 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 - ps2sdk stubs some libc calls to fail (`sysconf` → -1), and some of its register macros
   don't parenthesize their arguments. Verify before trusting either.
 - SIF DMA target buffers need `alignas(64)`.
-- The VU toolchain miscompiles silently. Only `check_vu_code.py` and the screen tell you.
+- A VU program that builds can still be wrong. Only the screen, a console capture or a VU1
+  memory dump tells you (see vu-microprograms.md).
 - GS alpha 1.0 is `0x80`. Normalized ST spans the power-of-two TEX0 extent, not the image.
 - PCSX2 models neither the EE cache nor GS-internal cost. A capture only gates regressions
   for those.
@@ -102,11 +103,10 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [backend-cpp.md](.claude/rules/backend-cpp.md) | `src/ps2`, host tools | naming, types, file style, passing the strict `-Werror` set |
 | [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card |
 | [gs-renderer.md](.claude/rules/gs-renderer.md) | `src/ps2/renderer` | GS/libdraw facts, frame model, CLUTs, VRAM blocks, mipmaps, ST scaling |
-| [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources, vu-checker | openvcl/dvp-as/vclpp traps, VU0 inline asm, VCL comment style, runtime probes |
+| [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources | the oxide-vcl build, writing VCL for it, dvp-as, VU0 inline asm, VCL comment style, runtime probes |
 | [performance.md](.claude/rules/performance.md) | `src/ps2`, frame-log scripts | EE codegen facts, what PCSX2 can measure, capture/A-B/asm-test recipes |
 | [engine-c.md](.claude/rules/engine-c.md) | id's C | editing rules, engine quirks and bugs, registration, save-format duty |
 | [memory-budget.md](.claude/rules/memory-budget.md) | heap, VRAM, assets, MapCycle | the 32 MB picture, map-transition peak, measured budgets |
 | [audio.md](.claude/rules/audio.md) | `src/ps2/audio`, musenc | CD music format and pipeline decisions, costs |
 | [save-games.md](.claude/rules/save-games.md) | `src/ps2/save`, g_save.c, sv_ccmds.c, menu.c | save design and devices, format, the save notice, failure messages, icon, config.cfg policy, how to test |
-| [vclpp-submodule.md](.claude/rules/vclpp-submodule.md) | `src/tools/vclpp` | vclpp/parse-utils conventions, verification recipes, CI, MASP mode, tyra |
 | [ci.md](.claude/rules/ci.md) | `.github` | the two workflows, the pinned ps2sdk image and moving it, checking a Linux build without Docker, runner traps |

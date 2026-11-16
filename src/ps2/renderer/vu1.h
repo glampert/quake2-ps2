@@ -115,14 +115,13 @@ static_assert(kClipScratchAddr + kClipScratchQwords == 1010, "...and ends where 
 
 // The top two qwords of that scratch are not buffer space. They are a spill area for integer
 // state the microprograms deliberately do not keep in VI registers: 1008 the output window's own
-// address and step (see vu_common.i) with the warp flag in .w, 1009 the clipper's survivor count
-// in .x (see vu_clip.i) and the input stride per triangle in .y (see textured_triangles.vcl).
+// address, step and GIF tag block in .xyz (see vu_common.i), 1009 the clipper's survivor count in
+// .x (see vu_clip.i). The other lanes are unused.
 //
-// openvcl allocates the 13 usable VI registers by live interval, so a value that is live across
-// a whole loop but read in only one place is dearer held than parked - it holds a register for
-// the loop's whole length and squeezes everything the loop actually needs. It is also what
-// openvcl gets wrong: a value carried from one loop into a sibling loop can have its register
-// handed to a temporary inside the second one, silently.
+// Each of those is read at one place only - a window's open or close, a clip pass - and would
+// otherwise hold a register across the whole triangle loop, whose clipper needs the VI
+// registers more. State the loop reads every triangle (the warp flag, the vertex format) is held
+// in registers instead.
 constexpr int kWindowSpillAddr = 1008;
 constexpr int kClipSpillAddr   = 1009;
 static_assert(kWindowSpillAddr >= kClipScratchAddr &&

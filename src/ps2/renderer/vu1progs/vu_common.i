@@ -1,8 +1,8 @@
 ;--------------------------------------------------------------------
 ; vu_common.i
 ;
-; Macros every VU1 microprogram shares, included by bare name: vclpp
-; finds this file next to the program including it.
+; Macros every VU1 microprogram shares, included by bare name: oxide-vcl's
+; preprocessor finds this file next to the program including it.
 ;
 ; A macro body is expanded where the macro is invoked, so it may use a
 ; constant each program defines for itself after including this file -
@@ -75,14 +75,13 @@
 #endmacro
 
 ; The same judgement, split, for a program that has to *act* on it as well as
-; record it. Reading the clip flags twice for one triangle is the thing to
-; avoid: openvcl reorders around flag reads (see the note on the backface
-; cull in textured_triangles.vcl), so the two reads are not guaranteed to see
-; the same flags. Judge once, branch on vi01, and store the ADC afterwards.
+; record it: judge once, branch on vi01, and store the ADC wherever the triangle
+; is written. vi01 then carries the verdict, so nothing reads the clip flags a
+; second time.
 ;
 ; Invoke it in the same basic block as the clipw it reads. The flags land four
-; cycles after a clipw and openvcl pads for that only within a block; across a
-; branch or label it reads them early. check_vu_code.py enforces this.
+; cycles after a clipw, and inside one block the scheduler places the fcand
+; after them.
 #macro JudgeTriangleAdc
     fcand  vi01, 0x3FFFF
     iaddiu iADC, vi01, 0x7FFF
@@ -103,25 +102,26 @@
 ; constants in vu1.h.
 ;
 ; The including program must define kGifTags, kWindowVerts (the window's
-; vertex capacity) and kWindowPrimTag (the drawing tag's qword offset
-; inside the window), and must call InitOutputWindows before the first
-; Open.
+; vertex capacity), kWindowReserve (the most vertices one step of its loop
+; can write) and kWindowPrimTag (the drawing tag's qword offset inside the
+; window), and must call InitOutputWindows before the first Open.
+;
+; iRoom counts the vertices a window has left *beyond* kWindowReserve, so
+; "is there room for the next step" is just ibgez iRoom: the test reads a
+; value its loop already has, with nothing to compute first.
 ;
 ; The window's own state - which of the two windows is current, the step
 ; to the other one, and where this batch's GIF tag block sits - lives in
-; a spill qword rather than in VI registers. There are only 13 of those
-; and openvcl hands them out by live interval, so three values that are
-; live across the whole triangle loop but read at one place each cost
-; three registers for the loop's entire length. Parked here they cost
-; two loads at an open and two at a close, which happen once per window
-; rather than once per triangle. See kWindowSpillAddr in vu1.h.
+; a spill qword rather than in VI registers. Each is read at an open or a
+; close only, which happens once per window rather than once per triangle,
+; so in memory they cost two loads there and no register for the length of
+; the triangle loop, whose clipper needs the VI registers more. See
+; kWindowSpillAddr in vu1.h.
 ;
 ;   .x  iWin     the current window's address
 ;   .y  iDelta   +/- the step to the other window; flips on every kick
 ;   .z  iTagPtr  this batch's GIF tag block, iBase + kGifTags
-;   .w  free for the including program's own batch state, for the same reason:
-;       a flag read once per vertex is cheaper reloaded than held, and VI is
-;       what the clipper runs out of first (see the warp flag in textured)
+;   .w  unused
 ; ---------------------------------------------------------------------
 #define kWindowSpill 1008
 
@@ -146,7 +146,8 @@
 #endmacro
 
 ; Starts a packet in the window at iWin: the batch's GIF tag block, then
-; the write cursor and the room left. Every window carries the whole
+; the write cursor and the room left (beyond kWindowReserve, as above).
+; Every window carries the whole
 ; block, the A+D state qwords included; re-latching state the GS already
 ; holds costs six qwords a kick and keeps one code path.
 #macro OpenOutputWindow
@@ -158,7 +159,7 @@
 
     CopyGifTagBlock{ }
 
-    iaddiu iVertsLeft, vi00, kWindowVerts
+    iaddiu iRoom, vi00, kWindowVerts - kWindowReserve
 #endmacro
 
 ; Patches the drawing tag with what was actually written, sends the
@@ -186,8 +187,9 @@
 ; The first instruction below must stay harmless if it lands in a branch
 ; delay slot - callers skip this macro by branching over it.
 #macro CloseOutputWindowAndKick: lblEmpty
-    iaddiu iNloop, vi00,   kWindowVerts
-    isub   iNloop, iNloop, iVertsLeft
+    ; Vertices written: the room the window opened with, less the room left.
+    iaddiu iNloop, vi00,   kWindowVerts - kWindowReserve
+    isub   iNloop, iNloop, iRoom
 
     ; Nothing was written, so there is no packet to send. Worth the test even
     ; though only a clipping program can get here: a window is otherwise closed

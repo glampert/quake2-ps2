@@ -1,8 +1,8 @@
 # PS2 VCL/VU Assembly syntax highlighting for VSCode
 
 Syntax highlighting for the PS2 VU microprograms in this repository:
-`.vcl` sources (openvcl/vclpp dialect, including the `#macro`/`#vuprog`
-preprocessor directives), the `.i` files they `#include`, and the assembled
+`.vcl` sources (VCL, including the `#macro`/`#vuprog` directives of
+oxide-vcl's preprocessor), the `.i` files they `#include`, and the assembled
 `.vsm` output.
 
 The includes are matched by path, as `**/vu1progs/*.i`, rather than by

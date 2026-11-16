@@ -25,8 +25,8 @@
 ; nowhere in this tree - every existing use is an "any bit set" mask -
 ; and a wrong bit position would mis-render in silence. Clamping the
 ; distance and reading the sign of its ftoi4 is the same trick the
-; keyframe backface cull uses, and openvcl cannot reorder it away
-; because the sign travels as data.
+; keyframe backface cull uses: the sign travels as data, in an ordinary
+; register, from the distance that made it to the branch that reads it.
 ;
 ; A macro that places labels takes a prefix for them, which has to be
 ; unique to each invocation.
@@ -51,11 +51,10 @@
 #define kClipBufA   957
 #define kClipBufB   981
 
-; Where the survivor count is parked between the last plane pass and the
-; fan. It cannot stay in a register: openvcl's liveness does not carry a
-; value from one loop into a sibling loop, and it will hand the register
-; to a temporary inside the second one - silently. Everything else the
-; two share is written in both, which is why only this one moves.
+; Where the survivor count is parked between one plane pass and the next,
+; and between the last pass and the fan. In memory it is live nowhere but
+; inside a pass, so the five passes and the fan take no register for it
+; between them. Everything else they share is written in each.
 #define kClipCount 1009
 
 ; Lays the three transformed corners into a buffer, first one repeated at
@@ -98,12 +97,10 @@
 ;   y+     fJp?[y]   w + G*y
 ;
 ; The two endpoints get their own judgement registers - C for cur, N for nxt -
-; which is why the selector is passed twice. Sharing one pair made every
-; instruction of the second endpoint's chain wait on the first's through a
-; write-after-read hazard, and openvcl ran the two strictly in series: 58% of
-; the loop was nops covering FMAC latency that the other endpoint's work
-; should have been filling. The chains are independent; only the register
-; names were not.
+; which is why the selector is passed twice. The two chains are independent,
+; and with a shared pair every instruction of the second would wait on the
+; first's through a write-after-read hazard, running them strictly in series
+; with nops covering the FMAC latency the other's work could fill.
 ;
 ; There is no far plane. Across 606,931 clipped triangles it was never
 ; once straddled, and leaving it out takes a corner off the worst case.
@@ -111,11 +108,8 @@
 ; 'lbl' prefixes the pass's labels: lbl##Loop, lbl##Kept, lbl##NoCut,
 ; lbl##Wrap and lbl##Out.
 ;
-; The corner count travels through kClipCount rather than in a register.
-; Two passes in a row are sibling loops, and openvcl's liveness does not
-; carry a value from one into the next - it hands the register to a
-; temporary inside the second one, with no diagnostic. Reading and writing
-; it here also means the count is live nowhere but inside a pass.
+; The corner count travels through kClipCount rather than in a register,
+; so it is live nowhere but inside a pass. See kClipCount.
 ;
 ; In:  kClipCount  corners in srcBuf, first one repeated at the end
 ; Out: kClipCount  corners in dstBuf, same arrangement. Zero, or three up.
@@ -160,11 +154,9 @@
         ; crossing test below multiplies two of these together, so the
         ; headroom has to cover the product and not just the distance.
         ;
-        ; The two endpoints are interleaved by hand. They are independent, but
-        ; openvcl will not reorder across them on its own - it emitted one
-        ; chain then the other, three nops between every pair, and renaming the
-        ; registers changed nothing because it coalesces them straight back.
-        ; Written alternately, each instruction covers the other's latency.
+        ; The two endpoints are interleaved by hand. They are independent, and
+        ; written alternately each instruction covers the other's latency,
+        ; whatever order the scheduler would have found on its own.
         mul.xyz fJpC,  fCurPos, fClipScale
         mul.xyz fJpN,  fNxtPos, fClipScale
         addw.x  fDCur, vf00,    fCurPos
@@ -187,10 +179,10 @@
         ; different trap.
         ;
         ; The two chains are four deep and independent, and are interleaved by
-        ; hand for the same reason the distances above are: openvcl will not
-        ; overlap them on its own, and run one after the other they are three
-        ; nops in every four. The crossing test used to sit after the keep
-        ; branch, where it could not be overlapped with anything at all.
+        ; hand for the same reason the distances above are: run one after the
+        ; other they would be three nops in every four. The crossing test sits
+        ; here rather than after the keep branch, where nothing would be left
+        ; to overlap it with.
         mul.x   fClipP,    fDCur,   fDNxt
         mini.x  fClipT,    fDCur,   vf00[w]
         mini.x  fClipP,    fClipP,  vf00[w]

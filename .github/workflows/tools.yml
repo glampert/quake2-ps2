@@ -43,7 +43,7 @@ jobs:
             os: windows-latest
     steps:
       - uses: actions/checkout@v5
-      # Only miniz. The other submodules (vclpp, vu-checker) are for the game build.
+      # Only miniz. The other submodule, oxide-vcl, is for the game build.
       - name: Fetch the miniz submodule
         run: git submodule update --init --depth 1 src/tools/miniz
       - name: Configure

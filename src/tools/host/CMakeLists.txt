@@ -30,7 +30,7 @@ endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 # The binaries go to the build directory itself, unless the caller names another place (the
-# Makefile does: build/tools/, beside vclpp and symbolize, with this build tree under it).
+# Makefile does: build/tools/, beside oxide-vcl and symbolize, with this build tree under it).
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
     set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 endif()

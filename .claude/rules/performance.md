@@ -477,6 +477,16 @@ paths:
 - **No GS-internal cost.** CLUT loads, fill rate, texture cache and overdraw are free. Only
   data moved (DMA/GIF qwords) and EE/VU1 instructions are charged. For GS-side changes,
   promise "no regression", never a measurable win.
+- **VU1 microcode scheduling doesn't show either.** The EE never waits on VU1 in PCSX2
+  (GsWait ~9 µs a frame). openvcl against oxide-vcl (2026-11-15, profiling release, the same EE
+  objects, `textured_triangles` 33% fewer instruction pairs) matched within ±0.6% on every
+  column, draw counts identical. Judge a VU program change on a console (GsWait) or by cycle
+  counts. The same A/B on the console (2026-11-16, HDD, NTSC, `build/baselines/oxide_vcl/`):
+  gameplay GsWait 3.68 ms (openvcl) → 1.93 (oxide-vcl, same `.vcl`) → 1.40 (plus the VU
+  program rework), 0.87 → 0.33 µs per triangle; dropped steady frames 30 → 5 → 2, and frames
+  with no margin (EE work 15-16.7 ms) 262 → 16 → 10. Cinematic rows, which skip those
+  programs, held GsWait at 241 µs in all three: a control. So before oxide-vcl, VU1 was what
+  the EE waited on.
 - **PCSX2 charges roughly per instruction** (~2.5-3 cycles per EE instruction seemed to
   apply). Only a net instruction-count cut shows up. An MMI change that swapped 5 memory ops
   for 1 extra instruction measured *slower* (+3.1%) and was reverted, even though it should

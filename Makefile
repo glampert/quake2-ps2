@@ -232,7 +232,7 @@ SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.
 C_OBJS   = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(C_SRC:.c=.o))
 CXX_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(CXX_SRC:.cpp=.o))
 
-# VU microprograms: vclpp -> openvcl -> dvp-as
+# VU microprograms: oxide-vcl (preprocessing and compiling in one run) -> dvp-as
 # Each .vcl assembles into .vudata with <name>_CodeStart/_CodeEnd link symbols
 # (see PS2_DECLARE_VU_MICROPROGRAM in ps2/renderer/vu1.h).
 # None of the EE compiler flags reach this toolchain, so the output is identical
@@ -242,28 +242,27 @@ VCL_FILES = textured_triangles.vcl particles.vcl
 VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
 
 # Shared macro/constant includes. The programs include these by bare name, which
-# vclpp finds next to the including file (and through -I $(VCL_PATH) as well);
+# the preprocessor finds next to the including file (and through -I$(VCL_PATH) as well);
 # they are prerequisites here because the pattern rule below would not otherwise
 # see them change.
 VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
 
-# The openvcl/dvp-as output checks every VU build runs (see the rule below). They
-# come in as a git submodule (https://github.com/glampert/vu-checker), so other
-# PS2 projects can share them.
-VU_CHECK = $(SRC_DIR)/tools/vu-checker/check_vu_code.py
-
-# vclpp is not part of the ps2dev distribution: it comes in as a git submodule
-# (https://github.com/glampert/vclpp) and is built by its own Makefile, so every
-# VU build runs the pinned version rather than whatever is on PATH - an older
-# vclpp silently mangles macro bodies that have comments in them. vclpp has a
-# submodule of its own, parse-utils (https://github.com/glampert/parse-utils),
-# whose lexer it is built with.
-VCLPP_PATH        = $(SRC_DIR)/tools/vclpp
-VCLPP_PARSE_UTILS = $(VCLPP_PATH)/external/parse-utils
-VCLPP             = $(BUILD_DIR)/tools/vclpp
+# oxide-vcl (https://github.com/glampert/oxide-vcl), the VCL compiler the VU
+# programs are built with. It is not part of the ps2dev distribution: it comes in
+# as a git submodule and is built by cargo into build/tools/oxide-vcl/, so every VU
+# build runs the pinned version. -G runs its built-in preprocessor (#macro blocks,
+# #vuprog and the C directives; --vcl-boilerplate adds the .init_*/--enter/--exit
+# frame, --warn-undef warns about an #if on an undefined name); --mode=oxide
+# --opt=all turns on its fixes and every optimization; --warnings-as-errors fails
+# the build on any warning, the preprocessor's or the compiler's.
+OXIDE_VCL_PATH  = $(SRC_DIR)/tools/oxide-vcl
+OXIDE_VCL_BUILD = $(BUILD_DIR)/tools/oxide-vcl
+OXIDE_VCL       = $(OXIDE_VCL_BUILD)/release/oxide-vcl
+OXIDE_VCL_FLAGS = -G -I$(VCL_PATH) --vcl-boilerplate --warn-undef \
+                  --mode=oxide --opt=all --warnings-as-errors
 
 # miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
-# compressed with (ps2/save/working_set.cpp). A git submodule like vclpp; only the raw
+# compressed with (ps2/save/working_set.cpp). A git submodule like oxide-vcl; only the raw
 # deflate/inflate and CRC-32 sources are built, straight from the submodule. Its headers
 # include a miniz_export.h that miniz's CMake would generate: the one in MINIZ_CFG_PATH
 # stands in for it and also carries the build configuration, so the library and every
@@ -466,46 +465,33 @@ $(SAVE_TABLES_C): $(GAME_C_OBJS) $(SAVE_TABLES_GEN)
 $(SAVE_TABLES_O): $(SAVE_TABLES_C)
 	$(EE_CC) $(EE_CFLAGS) -c $< -o $@
 
-# The vclpp submodule, through its own Makefile. That one recompiles on every
-# run, so the up-to-date check is made here instead: it runs again only when the
-# submodule's sources or Makefile change, as checking out a new commit does.
-# BIN_TARGET puts the binary under build/tools/ rather than in the submodule's
-# work tree, where git would report it as untracked content. Every VU program
-# depends on the binary, so a new vclpp rebuilds them all.
-$(VCLPP): $(wildcard $(VCLPP_PATH)/Makefile $(VCLPP_PATH)/src/*.cpp $(VCLPP_PATH)/src/*.hpp $(VCLPP_PARSE_UTILS)/*.hpp)
-	@test -f $(VCLPP_PATH)/Makefile && test -f $(VCLPP_PARSE_UTILS)/lexer.hpp || \
-		{ echo "$(VCLPP_PATH) is incomplete - run 'git submodule update --init --recursive'"; exit 1; }
-	@mkdir -p $(dir $@)
-	@$(MAKE) --no-print-directory -C $(VCLPP_PATH) CXX=$(HOST_CXX) BIN_TARGET=$(abspath $@)
+# The oxide-vcl submodule, through cargo. The up-to-date check is made here, on
+# the crates' sources and manifests, so the rule runs again only when checking
+# out a new commit changes them, and a make with nothing to do never starts
+# cargo. --target-dir keeps cargo's output under build/tools/ rather than in the
+# submodule's work tree, where git would report it as untracked content. Every VU
+# program depends on the binary, so a new oxide-vcl rebuilds them all.
+OXIDE_VCL_SRCS = $(OXIDE_VCL_PATH)/Cargo.toml $(OXIDE_VCL_PATH)/Cargo.lock \
+                 $(shell find $(OXIDE_VCL_PATH)/crates -path '*/tests' -prune -o -type f -print 2>/dev/null)
 
-# The vu-checker submodule. The script needs no build step, so this rule only
-# runs when the file is missing - an uninitialized submodule. Every VU program
-# depends on it, so a new vu-checker checks them all again.
-$(VU_CHECK):
-	@echo "$(patsubst %/,%,$(dir $@)) is incomplete - run 'git submodule update --init --recursive'"; exit 1
+$(OXIDE_VCL): $(wildcard $(OXIDE_VCL_SRCS))
+	@test -f $(OXIDE_VCL_PATH)/Cargo.toml || \
+		{ echo "$(OXIDE_VCL_PATH) is empty - run 'git submodule update --init'"; exit 1; }
+	@cargo build --quiet --release --locked --bin oxide-vcl \
+		--manifest-path $(OXIDE_VCL_PATH)/Cargo.toml --target-dir $(OXIDE_VCL_BUILD)
+	@touch $@
 
-# VU1 microprograms.
-# The checks in check_vu_code.py are not optional, and every one of them exists
-# because the toolchain fails silently. openvcl allocates VI registers by
-# liveness and gets it wrong on control flow past a single counted loop - it
-# hands a live register to a temporary, with no diagnostic, and the microprogram
-# then runs away or reads garbage. It pads a clip flag or Q read for latency only
-# within a basic block. dvp-as truncates an immediate that does not fit its field
-# and says nothing, so a constant one larger than the instruction can hold
-# becomes a different constant. All of them reach the screen rather than the
-# build log.
-# The register allocation check needs a second openvcl run with -c for the source
-# names, and the branch check reads the object, so the checks run once dvp-as is
-# done and a failure deletes the object - otherwise the next make would take the
-# bad object as up to date. The 'operand out of range' warnings from dvp-as are
-# expected; see the branch check for why they are harmless.
-$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(VCLPP) $(VU_CHECK)
+# VU1 microprograms. oxide-vcl preprocesses and compiles in one run; the .vsm is
+# kept beside the object for reading. In oxide mode it rewrites or rejects an
+# immediate that does not fit its field (its 'imm' fix) rather than leaving
+# dvp-as to truncate it. An 'operand out of range' warning from dvp-as on a
+# branch longer than 1023 instructions is harmless: VU1 micro memory is exactly
+# 2048 instructions and the PC wraps, so the low 11 bits dvp-as keeps reach the
+# same instruction.
+$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(OXIDE_VCL)
 	@mkdir -p $(dir $@)
-	$(VCLPP) -I $(VCL_PATH) -Wundef -Werror -j $< $(basename $@).pp.vcl
-	openvcl -o $(basename $@).vsm $(basename $@).pp.vcl
-	@openvcl -c -o $(basename $@).c.vsm $(basename $@).pp.vcl
+	$(OXIDE_VCL) $(OXIDE_VCL_FLAGS) -o$(basename $@).vsm $<
 	dvp-as $(basename $@).vsm -o $@
-	@python3 $(VU_CHECK) $@ || { rm -f $@; exit 1; }
 
 # IOP modules embedded via bin2c.
 $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx

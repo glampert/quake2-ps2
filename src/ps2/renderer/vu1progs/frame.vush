@@ -1,8 +1,13 @@
 #pragma once
+/* ================================================================================================
+ * File: frame.vush
+ * Brief: Shared frame constants.
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
 
 // The frame constants both VU1 programs read: eight qwords at address 0
 // (FrameConstants in vu1.h).
-
 struct Frame
 {
     layout(row_major) mat4 mvp;

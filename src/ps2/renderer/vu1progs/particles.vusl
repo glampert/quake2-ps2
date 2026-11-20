@@ -1,7 +1,12 @@
-// The particle program: a batch of particles, each a camera-facing sprite
-// whose size grows with its distance, written into a GS packet after the
-// batch and sent with one XGKICK. vu1.h is the host's side of the layouts
-// below, checked against the header oxide-vusl generates.
+/* ================================================================================================
+ * File: particles.vusl
+ * Brief: The particle program: a batch of particles, each a camera-facing sprite
+ *        whose size grows with its distance, written into a GS packet after the
+ *        batch and sent with one XGKICK. vu1.h is the host's side of the layouts
+ *        below, checked against the header oxide-vusl generates.
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
 
 #pragma program(VU1Prog_Particles)
 #include "frame.vush"
@@ -64,18 +69,23 @@ void main(layout(address = 0) uniform Frame frame,
     #pragma pipeline(min = 1)
     for (Particle p : batch.particles, out Sprite s : batch.packet.sprites)
     {
-        vec4 c = vec4(p.pos, 1.0) * mvp;
+        vec4 c      = vec4(p.pos, 1.0) * mvp;
         clipflags j = clipw(c.xyz * judgeScale, c.w);
-        float q = 1.0 / c.w;
-        float k = (c.w * batch.quadOffset.w + 1.0) * q;
-        vec3 w0 = frame.gsOffset.xyz + c.xyz * q;
-        vec3 w1 = w0 + quadOffset * k;
-        int16 flag = adc(j);
+        float q     = 1.0 / c.w;
+        float k     = (c.w * batch.quadOffset.w + 1.0) * q;
+        vec3 w0     = frame.gsOffset.xyz + c.xyz * q;
+        vec3 w1     = w0 + quadOffset * k;
+        int16 flag  = adc(j);
 
-        s.color = p.color;  s.q = q;  s.reg = 1;
-        s.uv0  = batch.uv0;          s.uv1  = batch.uv1;
-        s.xyz0 = ftoi4(w0);          s.adc0 = flag;
-        s.xyz1 = ftoi4(w1);          s.adc1 = flag;
+        s.color = p.color;
+        s.q     = q;
+        s.reg   = 1;
+        s.uv0   = batch.uv0;
+        s.uv1   = batch.uv1;
+        s.xyz0  = ftoi4(w0);
+        s.adc0  = flag;
+        s.xyz1  = ftoi4(w1);
+        s.adc1  = flag;
     }
 
     xgkick(batch.packet);

@@ -1,9 +1,14 @@
-// The world and model program: a batch of gouraud-shaded, textured
-// triangles, clipped against the near plane and the guard band. DrawVertex
-// batches carry a packed colour or one computed from the dynamic lights;
-// keyframe batches lerp two MD2 frames and cull back faces; turbulent
-// batches warp their texture coordinates. vu1.h is the host's side of the
-// layouts below, checked against the header oxide-vusl generates.
+/* ================================================================================================
+ * File: textured_triangles.vusl
+ * Brief: The world and model program: a batch of gouraud-shaded, textured
+ *        triangles, clipped against the near plane and the guard band. DrawVertex
+ *        batches carry a packed colour or one computed from the dynamic lights;
+ *        keyframe batches lerp two MD2 frames and cull back faces; turbulent
+ *        batches warp their texture coordinates. vu1.h is the host's side of the
+ *        layouts below, checked against the header oxide-vusl generates.
+ *
+ * This source code is released under the GNU GPL v2 license.
+ * ================================================================================================ */
 
 #pragma program(VU1Prog_TexturedTriangles)
 #include "frame.vush"
@@ -96,7 +101,8 @@ struct Packed
     qword  xyz;
 };
 
-struct Batch {
+struct Batch
+{
     int16  colorMode;
     int16  warp;
     int16  format;

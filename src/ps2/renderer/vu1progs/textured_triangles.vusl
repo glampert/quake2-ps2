@@ -1,0 +1,564 @@
+// The world and model program: a batch of gouraud-shaded, textured
+// triangles, clipped against the near plane and the guard band. DrawVertex
+// batches carry a packed colour or one computed from the dynamic lights;
+// keyframe batches lerp two MD2 frames and cull back faces; turbulent
+// batches warp their texture coordinates. vu1.h is the host's side of the
+// layouts below, checked against the header oxide-vusl generates.
+
+#pragma program(VU1Prog_TexturedTriangles)
+#include "frame.vush"
+
+// The per-draw block at 1010: the dynamic lights, one per lane, for a
+// DrawVertex batch.
+struct Lights
+{
+    vec4 x;  vec4 y;  vec4 z;
+    vec4 negDiv0;  vec4 negDiv1;  vec4 negDiv2;  vec4 negDiv3;   // -colour / radius^2
+    vec4 colour0;  vec4 colour1;  vec4 colour2;  vec4 colour3;
+    vec4 clamp;                                                  // the GS byte range, w the alpha
+};
+
+// The same block for a keyframe batch: the lerp constants, with the cull
+// sign in the last qword's .x and the ST scale in .yz.
+struct Lerp
+{
+    vec4 front;
+    vec4 back;
+    vec4 shadeLight;
+    vec4 stScale;
+};
+
+// The turbulence constants at 1022.
+struct Warp
+{
+    vec4 fold;
+    vec4 poly;
+};
+
+// A DrawVertex: the position (w the lightmap S), then the packed colour,
+// S, T and Q.
+struct DrawVertex
+{
+    vec4 pos;
+    vec4 stq;
+};
+
+struct DrawTriangle
+{
+    DrawVertex corners[3];
+};
+
+// A keyframe vertex: two frames' bytes, then the model's (index, S, T, Q).
+struct KeyVertex
+{
+    ivec4 cur;
+    ivec4 old;
+    vec4  attr;
+};
+
+struct KeyTriangle
+{
+    KeyVertex corners[3];
+};
+
+// An output window: a copy of the batch's 7 GIF tags, then ST, RGBAQ and
+// XYZ2 per vertex.
+struct WindowVertex
+{
+    vec4  st;
+    qword rgbaq;
+    ivec3 xyz;
+    int16 adc;
+};
+
+struct Window
+{
+    qword tags[7];
+    WindowVertex vertices[45];
+};
+
+// The RGBAQ qword: PACKED RGBAQ of a computed colour, or an A+D write of
+// the packed colour with Q beside it.
+struct Computed
+{
+    qword st;
+    ivec4 rgba;
+    qword xyz;
+};
+
+struct Packed
+{
+    qword  st;
+    uint32 rgba;
+    float  q;
+    int16  reg;
+    int16  pad;
+    qword  xyz;
+};
+
+struct Batch {
+    int16  colorMode;
+    int16  warp;
+    int16  format;
+    int16  count;
+
+    vec4   params;     // warp: xy 1 / size, z the scroll
+    qword  tags[7];
+    qword  data[180];  // DrawVertex or keyframe triangles
+    Window windows[2];
+};
+
+// The clipper's corners: position, (packed colour, S, T, Q), colour.
+struct Corner
+{
+    vec4 pos;
+    vec4 stq;
+    vec4 col;
+};
+
+struct CornerColour
+{
+    qword  pos;
+    uint32 rgba;
+    float  s;
+    float  t;
+    float  q;
+    qword  col;
+};
+
+struct ClipBuffers
+{
+    Corner a[8];
+    Corner b[9];
+};
+
+// Where values that do not fit in the registers go (1008-1009).
+struct Scratch
+{
+    qword q[2];
+};
+
+const int16 kWindowVertices = 45;
+
+// The most vertices one clipped triangle can fan out to: five planes leave
+// at most eight corners, six triangles.
+const int16 kWindowReserve = 18;
+
+// A DrawVertex to clip space: its position, its (colour, S, T, Q), and in
+// colour mode 1 the four lights summed at its world position.
+void drawCorner(in Frame frame, in Lights lights, in DrawVertex vertex, int16 colorMode,
+                out vec4 pos, out vec4 stq, out vec4 col, out clipflags judged)
+{
+    pos = vertex.pos;
+    stq = vertex.stq;
+    col.xyz = vec3(0.0);
+    col.w = lights.clamp.w;
+
+    if (colorMode != 0)
+    {
+        vec4 lx = lights.x - pos.x;
+        vec4 ly = lights.y - pos.y;
+        vec4 lz = lights.z - pos.z;
+        vec4 dist = lx * lx + ly * ly + lz * lz;
+        col.xyz = col.xyz + max(lights.negDiv0.xyz * dist.x + lights.colour0.xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negDiv1.xyz * dist.y + lights.colour1.xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negDiv2.xyz * dist.z + lights.colour2.xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negDiv3.xyz * dist.w + lights.colour3.xyz, 0.0);
+        col.xyz = min(col.xyz, lights.clamp.xyz);
+    }
+
+    pos = vec4(pos.xyz, 1.0) * frame.mvp;
+    judged = clipw(pos.xyz * frame.clipScale, pos.w);
+}
+
+// A keyframe vertex to clip space: the two frames lerped, the skin's ST
+// scale, and the colour from the old frame's shade byte.
+void keyCorner(in Frame frame, in Lerp lerp, in KeyVertex vertex,
+               out vec4 pos, out vec4 stq, out vec4 col, out clipflags judged)
+{
+    vec4 cur = itof0(vertex.cur);
+    vec4 old = itof0(vertex.old);
+    stq = vertex.attr;
+    stq.yz = stq.yz * lerp.stScale.yz;
+    col.xyz = clamp(lerp.shadeLight.xyz * old.w, 0.0, frame.colorClamp.xyz);
+    col.w = lerp.shadeLight.w;
+    vec4 lerped = lerp.front * cur + lerp.back * old;
+    pos = vec4(lerped.xyz, 1.0) * frame.mvp;
+    judged = clipw(pos.xyz * frame.clipScale, pos.w);
+}
+
+// Projects a clip-space vertex into a window vertex. In colour mode 0 its
+// colour is the packed one in the bits of stq.x.
+void emitVertex(out WindowVertex to, in Frame frame, vec4 pos, vec4 stq, vec4 col, int16 colorMode)
+{
+    float q = 1.0 / pos.w;
+    vec4 stqScaled = stq * q;
+    vec3 projected = frame.gsOffset.xyz + pos.xyz * q * frame.gsScale.xyz;
+    vec4 st = mr32(stqScaled);
+    st.z = q;
+    to.st = st;
+    to.xyz = ftoi4(projected);
+
+    if (colorMode != 0)
+    {
+        ref<Computed> computed = ref<Computed>(to);
+        computed.rgba = ftoi0(col);
+    }
+    else
+    {
+        ref<Packed> packed = ref<Packed>(to);
+        packed.rgba = floatBitsToUint(stq.x);
+        packed.q = q;
+        packed.reg = 1;
+    }
+}
+
+// A triangle's three corners projected into the window at `to`, with the
+// ADC bit from `adc`.
+void emitTriangle(ref<WindowVertex> to, in Frame frame,
+                  vec4 pos0, vec4 stq0, vec4 col0, vec4 pos1, vec4 stq1, vec4 col1,
+                  vec4 pos2, vec4 stq2, vec4 col2, int16 colorMode, int16 adc)
+{
+    emitVertex(to[0], frame, pos0, stq0, col0, colorMode);
+    emitVertex(to[1], frame, pos1, stq1, col1, colorMode);
+    emitVertex(to[2], frame, pos2, stq2, col2, colorMode);
+    to[0].adc = adc;
+    to[1].adc = adc;
+    to[2].adc = adc;
+}
+
+// ref_gl's EmitWaterPolys on one corner: its raw texels pushed around by a
+// sine of the other axis plus time, then the scroll and the texel-to-image
+// divide.
+vec2 warpTexels(in Frame frame, in Warp warp, in Batch batch, vec4 stq)
+{
+    vec4 fold = warp.fold;
+    vec4 poly = warp.poly;
+    vec4 params = batch.params;
+    vec2 half = vec2(fold.y);
+    vec2 negHalf = -half;
+    vec4 raw = mr32(stq);
+    vec2 phase = raw.xy * fold.z + frame.warpPhase;
+    vec2 bias = phase + fold.x;
+    vec2 trunc = itof0(ftoi0(bias));
+    vec2 frac = bias - trunc - fold.y;
+    vec2 t = max(min(frac, half - frac), negHalf - frac);
+    vec2 tsq = t * t;
+    vec2 p = tsq * poly.w + poly.z;
+    p = p * tsq + poly.y;
+    p = p * tsq + poly.x;
+    vec2 ripple = p * t;
+    vec2 uv;
+    uv.x = raw.x + ripple.y;
+    uv.y = raw.y + ripple.x;
+    uv.x = uv.x + params.z;
+    uv = uv * params.xy;
+    return uv;
+}
+
+// A turbulent triangle's coordinates finished in the clipper's buffer:
+// each corner warped, then the triangle brought down by corner 0's whole
+// repeats, over the S and T of its (colour, S, T, Q), the wrap included.
+void warpCorners(in Frame frame, in Warp warp, in Batch batch, ref<Corner> corners,
+                 vec4 stq0, vec4 stq1, vec4 stq2)
+{
+    // In S and T's lanes, y and z.
+    layout(lane = y) vec2 cut;
+    vec2 uv = warpTexels(frame, warp, batch, stq0);
+    cut.x = uv.x;
+    cut.y = uv.y;
+    layout(lane = y) vec2 shift = itof0(ftoi0(cut));
+    cut = cut - shift;
+    corners[0].stq.yz = cut;
+    corners[3].stq.yz = cut;
+    uv = warpTexels(frame, warp, batch, stq1);
+    cut.x = uv.x;
+    cut.y = uv.y;
+    cut = cut - shift;
+    corners[1].stq.yz = cut;
+    uv = warpTexels(frame, warp, batch, stq2);
+    cut.x = uv.x;
+    cut.y = uv.y;
+    cut = cut - shift;
+    corners[2].stq.yz = cut;
+}
+
+// A corner's distance inside plane `plane` (0 near, 1 x-, 2 x+, 3 y-, 4
+// y+): w shrunk so a cut lands strictly inside, plus the plane's term,
+// scaled so the sign survives the product of two distances.
+float planeDistance(in Frame frame, vec4 pos, int16 plane)
+{
+    vec3 jp = pos.xyz * frame.clipScale;
+    vec3 jn = -jp;
+    float d = 0.0 + pos.w;
+    d = d * frame.gsScale.w;
+    if (plane == 0)
+        d = d + jn.z;
+    else if (plane == 1)
+        d = d + jn.x;
+    else if (plane == 2)
+        d = d + jp.x;
+    else if (plane == 3)
+        d = d + jn.y;
+    else
+        d = d + jp.y;
+    return d * frame.gsOffset.w;
+}
+
+// The sign of a distance, read through FTOI4 of it clamped to [-1, 1].
+int16 sign(float d)
+{
+    return int16(ftoi4(clamp(d, -1.0, 1.0)));
+}
+
+// One Sutherland-Hodgman pass over `corners` corners in `from` against
+// plane `plane`, the survivors into `to` with the first again after the
+// last. A cut's packed colour is its edge's first corner's.
+int16 clipPass(in Frame frame, int16 corners, ref<Corner> from, ref<Corner> to, int16 plane)
+{
+    int16 count = 0;
+    if (corners >= 3)
+    {
+        ref<Corner> walk = from;
+        ref<Corner> cursor = to;
+        do
+        {
+            vec4 curPos = walk.pos;
+            vec4 curStq = walk.stq;
+            vec4 curCol = walk.col;
+            vec4 nxtPos = walk[1].pos;
+            vec4 nxtStq = walk[1].stq;
+            vec4 nxtCol = walk[1].col;
+            float dCur = planeDistance(frame, curPos, plane);
+            float dNxt = planeDistance(frame, nxtPos, plane);
+            int16 signCur = sign(dCur);
+            int16 signCut = sign(dCur * dNxt);
+
+            if (signCur >= 0)
+            {
+                cursor.pos = curPos;
+                cursor.stq = curStq;
+                cursor.col = curCol;
+                cursor += 1;
+                count++;
+            }
+            if (signCut < 0)
+            {
+                float t = dCur / (dCur - dNxt);
+                cursor.pos = curPos + (nxtPos - curPos) * t;
+                cursor.stq = curStq + (nxtStq - curStq) * t;
+                cursor.col = curCol + (nxtCol - curCol) * t;
+                ref<CornerColour> cut = ref<CornerColour>(cursor);
+                cut.rgba = floatBitsToUint(curStq.x);
+                cursor += 1;
+                count++;
+            }
+
+            walk += 1;
+            corners--;
+        } while (corners > 0);
+
+        if (count >= 3)
+        {
+            cursor.pos = to.pos;
+            cursor.stq = to.stq;
+            cursor.col = to.col;
+        }
+        else
+        {
+            count = 0;
+        }
+    }
+
+    return count;
+}
+
+void main(layout(address = 0) uniform Frame frame,
+          layout(address = 1010) uniform Lights lights,
+          layout(address = 1010, alias = lights) uniform Lerp lerp,
+          layout(address = 1022) uniform Warp warp,
+          layout(xtop, vif_base = 8, vif_offset = 474) inout Batch batch,
+          layout(address = 957) inout ClipBuffers clip,
+          layout(address = 1008, spill) inout Scratch scratch)
+{
+    // The batch's modes, held for the whole batch: nothing in the loop
+    // writes them, so oxide-vcl copies the loop per colour mode and vertex
+    // format, and the warp flag costs a register instead of a load. A -1.0
+    // held the same way would cost more than the LOI it saves: the cull and
+    // the clipper's signs make theirs where they need it.
+    int16 colorMode = batch.colorMode;
+    bool warped = batch.warp != 0;
+    int16 format = batch.format;
+
+    // The first window, opened through the batch, whose address is held,
+    // rather than through `window`, which is not.
+    ref<Window> window = ref<Window>(batch.windows);
+    batch.windows[0].tags = batch.tags;
+    ref<WindowVertex> cursor = ref<WindowVertex>(window.vertices);
+
+    // The vertices left beyond the 18 a clipped triangle can fan out to.
+    int16 room = kWindowVertices - kWindowReserve;
+    ref<qword> input = ref<qword>(batch.data);
+    int16 left = batch.count;
+    do
+    {
+        // Room for the most a clipped triangle fans out to, asked once.
+        if (room < 0)
+        {
+            int16 written = kWindowVertices - kWindowReserve - room;
+            if (written != 0)
+            {
+                window.tags[6].x = written + 0x8000;
+                xgkick(window);
+                // The other window: the two addresses' sum less this one.
+                int16 both = int16(ref<Window>(batch.windows)) + int16(ref<Window>(batch.windows) + 1);
+                window = ref<Window>(batch.windows, both - int16(window));
+            }
+
+            window.tags = batch.tags;
+            cursor = ref<WindowVertex>(window.vertices);
+            room = kWindowVertices - kWindowReserve;
+        }
+
+        vec4 pos0; vec4 stq0; vec4 col0;
+        vec4 pos1; vec4 stq1; vec4 col1;
+        vec4 pos2; vec4 stq2; vec4 col2;
+        int16 outside;
+
+        // A cut or turbulent triangle goes through the clipper's buffers.
+        bool slow;
+
+        // Each format's side transforms its corners, judges them, and writes
+        // the triangle out before it is known to go out as it stands, so
+        // the transform and the stores share one block. A triangle the
+        // clipper takes goes back over it, and a culled one leaves it past
+        // what the window's tag counts.
+        if (format == 0)
+        {
+            ref<DrawTriangle> triangle = ref<DrawTriangle>(input);
+            clipflags j0; clipflags j1; clipflags j2;
+            drawCorner(frame, lights, triangle.corners[0], colorMode, pos0, stq0, col0, j0);
+            drawCorner(frame, lights, triangle.corners[1], colorMode, pos1, stq1, col1, j1);
+            drawCorner(frame, lights, triangle.corners[2], colorMode, pos2, stq2, col2, j2);
+            bool cut = any(j0, j1, j2);
+            outside = adc(j0, j1, j2);
+            input = input + 6;
+            left -= 3;
+            emitTriangle(cursor, frame, pos0, stq0, col0, pos1, stq1, col1, pos2, stq2, col2,
+                         colorMode, outside);
+            cursor += 3;
+            room -= 3;
+            slow = cut || warped;
+        }
+        else
+        {
+            ref<KeyTriangle> triangle = ref<KeyTriangle>(input);
+            clipflags j0; clipflags j1; clipflags j2;
+            keyCorner(frame, lerp, triangle.corners[0], pos0, stq0, col0, j0);
+            keyCorner(frame, lerp, triangle.corners[1], pos1, stq1, col1, j1);
+            keyCorner(frame, lerp, triangle.corners[2], pos2, stq2, col2, j2);
+            bool cut = any(j0, j1, j2);
+            outside = adc(j0, j1, j2);
+            input = input + 9;
+            left -= 3;
+
+            // Back faces go no further: the sign of det[x y w] of the
+            // corners, through the draw's cull sign.
+            vec4 edge1 = pos1 - pos0;
+            vec4 edge2 = pos2 - pos0;
+            edge1.z = edge1.w;
+            edge2.z = edge2.w;
+            vec3 eye;
+            eye.xy = pos0.xy;
+            eye.z = pos0.w;
+            float area = dot(cross(edge1.xyz, edge2.xyz), eye);
+            int16 cull = sign(area * lerp.stScale.x);
+            emitTriangle(cursor, frame, pos0, stq0, col0, pos1, stq1, col1, pos2, stq2, col2,
+                         colorMode, outside);
+
+            slow = false;
+            if (cull >= 0)
+            {
+                cursor += 3;
+                room -= 3;
+                slow = cut || warped;
+            }
+        }
+        if (slow)
+        {
+            // Back to the triangle's own output, which the fan writes over.
+            cursor -= 3;
+            room += 3;
+
+            // Seeded into A when a corner is outside, straight into B
+            // when only the warp brings it here.
+            int16 seedAt = int16(ref<Corner>(clip.b));
+            if (outside < 0)
+            {
+                seedAt = int16(ref<Corner>(clip.a));
+            }
+
+            ref<Corner> seed = ref<Corner>(clip, seedAt);
+            seed[0].pos = pos0;  seed[0].stq = stq0;  seed[0].col = col0;
+            seed[1].pos = pos1;  seed[1].stq = stq1;  seed[1].col = col1;
+            seed[2].pos = pos2;  seed[2].stq = stq2;  seed[2].col = col2;
+            seed[3].pos = pos0;  seed[3].stq = stq0;  seed[3].col = col0;
+
+            #pragma barrier
+
+            if (warped)
+            {
+                warpCorners(frame, warp, batch, seed, stq0, stq1, stq2);
+            }
+
+            int16 count = 3;
+            if (outside < 0)
+            {
+                ref<Corner> bufferA = ref<Corner>(clip.a);
+                ref<Corner> bufferB = ref<Corner>(clip.b);
+                count = clipPass(frame, 3, bufferA, bufferB, 0);
+                count = clipPass(frame, count, bufferB, bufferA, 1);
+                count = clipPass(frame, count, bufferA, bufferB, 2);
+                count = clipPass(frame, count, bufferB, bufferA, 3);
+                count = clipPass(frame, count, bufferA, bufferB, 4);
+            }
+
+            // Fan the survivors from corner 0.
+            int16 fans = count - 2;
+            if (fans > 0)
+            {
+                vec4 firstPos = clip.b[0].pos;
+                vec4 firstStq = clip.b[0].stq;
+                vec4 firstCol = clip.b[0].col;
+                ref<Corner> fan = ref<Corner>(clip.b) + 1;
+                do
+                {
+                    vec4 secondPos = fan.pos;
+                    vec4 secondStq = fan.stq;
+                    vec4 secondCol = fan.col;
+                    vec4 thirdPos = fan[1].pos;
+                    vec4 thirdStq = fan[1].stq;
+                    vec4 thirdCol = fan[1].col;
+                    clipflags j0 = clipw(firstPos.xyz * frame.clipScale, firstPos.w);
+                    clipflags j1 = clipw(secondPos.xyz * frame.clipScale, secondPos.w);
+                    clipflags j2 = clipw(thirdPos.xyz * frame.clipScale, thirdPos.w);
+                    int16 reject = adc(j0, j1, j2);
+                    emitTriangle(cursor, frame, firstPos, firstStq, firstCol, secondPos, secondStq,
+                                 secondCol, thirdPos, thirdStq, thirdCol, colorMode, reject);
+                    cursor += 3;
+                    room -= 3;
+                    fan += 1;
+                    fans--;
+                } while (fans > 0);
+            }
+        }
+    } while (left != 0);
+
+    // The last window, unless every triangle was culled or clipped away.
+    int16 written = kWindowVertices - kWindowReserve - room;
+    if (written != 0)
+    {
+        window.tags[6].x = written + 0x8000;
+        xgkick(window);
+    }
+}

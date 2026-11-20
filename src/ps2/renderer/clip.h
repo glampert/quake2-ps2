@@ -3,7 +3,7 @@
  * File: clip.h
  * Brief: Triangle clipping against the clip volume the VU1 microprogram judges, on the EE.
  *
- *  The microprogram clips for itself now (vu_clip.i), against near and the four
+ *  The microprogram clips for itself now (textured_triangles.vusl), against near and the four
  *  guard-band sides, and every world and model triangle is cut there. This EE
  *  clipper remains for sky alone, whose faces are single quads spanning ninety
  *  degrees - the heaviest possible user of the VU's clipper, which would need

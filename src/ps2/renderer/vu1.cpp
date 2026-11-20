@@ -19,8 +19,8 @@
 
 namespace ps2::vu1 {
 
-PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_TexturedTriangles);
-PS2_DECLARE_VU_MICROPROGRAM(VU1Prog_Particles);
+VUSL_DECLARE_PROGRAM(VU1Prog_TexturedTriangles);
+VUSL_DECLARE_PROGRAM(VU1Prog_Particles);
 
 namespace {
 
@@ -56,6 +56,11 @@ void Init()
         { VU1Prog_Particles_Code(),         VU1Prog_Particles_InstructionCount()         },
     };
     static_assert(ArrayLength(programs) == ArrayLength(s_progAddr), "Register new VU1 programs here!");
+    // Their sizes are known when they are compiled (the generated headers' kInstructions), so
+    // whether they fit is a build error as well as the run-time check below. Each rounds up to
+    // even, as the upload does.
+    static_assert(((tri::kInstructions + 1u) & ~1u) + ((prt::kInstructions + 1u) & ~1u) <= kMicroMemMaxInstructions,
+                  "Microprograms overflow VU1 micro memory!");
 
     // Built into the command buffer like every other VIF1 transfer, which is why vu1::Init has to
     // run after cmdbuf::Init - see the ordering note in PS2_RefInit. Synchronous: the KickAndWait

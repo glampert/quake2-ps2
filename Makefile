@@ -12,7 +12,7 @@
 #    make music       -> encode baseq2/music/trackNN.wav into the trackNN.adp files the game streams
 #    make pkz         -> convert baseq2/pakN.pak into the compressed pakN.pkz the game prefers
 #    make clean       -> remove build artifacts (both configs)
-#    make clean_vu    -> remove only assembled VU microprograms
+#    make clean_vu    -> remove only the compiled VU microprograms and their headers
 #
 #  Header dependencies are tracked automatically (-MMD), so editing a header
 #  rebuilds just the affected objects; no more `make clean` after header edits.
@@ -232,34 +232,34 @@ SIZE_OPT_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(SIZE_OPT_CXX_SRC:.cpp=.
 C_OBJS   = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(C_SRC:.c=.o))
 CXX_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(CXX_SRC:.cpp=.o))
 
-# VU microprograms: oxide-vcl (preprocessing and compiling in one run) -> dvp-as
-# Each .vcl assembles into .vudata with <name>_CodeStart/_CodeEnd link symbols
-# (see PS2_DECLARE_VU_MICROPROGRAM in ps2/renderer/vu1.h).
-# None of the EE compiler flags reach this toolchain, so the output is identical
-# in both configs: build it once into build/vu/ and share it.
-VCL_PATH  = $(SRC_DIR)/ps2/renderer/vu1progs
-VCL_FILES = textured_triangles.vcl particles.vcl
-VU_OBJS   = $(addprefix $(BUILD_DIR)/vu/, $(VCL_FILES:.vcl=.o))
+# VU microprograms, written in VUSL: oxide-vusl -> dvp-as. Each .vusl compiles
+# into a .vsm, assembled into .vudata with <name>_CodeStart/_CodeEnd link symbols
+# (see PS2_DECLARE_VU_MICROPROGRAM in ps2/renderer/vu1.h), and a C++ header,
+# <name>.vusl.h, with the program's memory layout: vu1.h includes it and checks
+# the host's structs and constants against it. None of the EE compiler flags
+# reach this toolchain, so the output is identical in both configs: build it
+# once into build/vu/ and share it.
+VUSL_PATH    = $(SRC_DIR)/ps2/renderer/vu1progs
+VUSL_FILES   = textured_triangles.vusl particles.vusl
+VU_OBJS      = $(addprefix $(BUILD_DIR)/vu/, $(VUSL_FILES:.vusl=.o))
+VU_HEADERS   = $(addprefix $(BUILD_DIR)/vu/, $(VUSL_FILES:.vusl=.vusl.h))
 
-# Shared macro/constant includes. The programs include these by bare name, which
-# the preprocessor finds next to the including file (and through -I$(VCL_PATH) as well);
-# they are prerequisites here because the pattern rule below would not otherwise
-# see them change.
-VCL_INCS  = $(wildcard $(VCL_PATH)/*.i)
+# Shared include files (frame.vush). The programs include these by bare name,
+# which the preprocessor finds next to the including file; they are prerequisites
+# here because the pattern rule below would not otherwise see them change.
+VUSL_INCS    = $(wildcard $(VUSL_PATH)/*.vush)
 
-# oxide-vcl (https://github.com/glampert/oxide-vcl), the VCL compiler the VU
-# programs are built with. It is not part of the ps2dev distribution: it comes in
-# as a git submodule and is built by cargo into build/tools/oxide-vcl/, so every VU
-# build runs the pinned version. -G runs its built-in preprocessor (#macro blocks,
-# #vuprog and the C directives; --vcl-boilerplate adds the .init_*/--enter/--exit
-# frame, --warn-undef warns about an #if on an undefined name); --mode=oxide
-# --opt=all turns on its fixes and every optimization; --warnings-as-errors fails
-# the build on any warning, the preprocessor's or the compiler's.
-OXIDE_VCL_PATH  = $(SRC_DIR)/tools/oxide-vcl
-OXIDE_VCL_BUILD = $(BUILD_DIR)/tools/oxide-vcl
-OXIDE_VCL       = $(OXIDE_VCL_BUILD)/release/oxide-vcl
-OXIDE_VCL_FLAGS = -G -I$(VCL_PATH) --vcl-boilerplate --warn-undef \
-                  --mode=oxide --opt=all --warnings-as-errors
+# oxide-vusl (https://github.com/glampert/oxide-vcl), the VUSL compiler the VU
+# programs are built with: it compiles VUSL to VCL and hands that to oxide-vcl in
+# the same process, in oxide mode with every fix and optimization. It is not part
+# of the ps2dev distribution: it comes in as the oxide-vcl git submodule and is
+# built by cargo into build/tools/oxide-vcl/, so every VU build runs the pinned
+# version. --warnings-as-errors fails the build on any warning, the
+# preprocessor's or the compiler's.
+OXIDE_VCL_PATH   = $(SRC_DIR)/tools/oxide-vcl
+OXIDE_VCL_BUILD  = $(BUILD_DIR)/tools/oxide-vcl
+OXIDE_VUSL       = $(OXIDE_VCL_BUILD)/release/oxide-vusl
+OXIDE_VUSL_FLAGS = --warnings-as-errors
 
 # miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
 # compressed with (ps2/save/working_set.cpp). A git submodule like oxide-vcl; only the raw
@@ -336,6 +336,9 @@ endif
 COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS)
 
 EE_INCS += -I$(SRC_DIR)
+
+# The VU programs' generated headers (see VU_HEADERS), included by vu1.h by bare name.
+EE_INCS += -I$(BUILD_DIR)/vu
 
 # The C side of the build is now just id's C89 engine sources, the vendored
 # dlmalloc and the bin2c IRX blobs - everything of ours is C++. Under GCC 15
@@ -465,33 +468,41 @@ $(SAVE_TABLES_C): $(GAME_C_OBJS) $(SAVE_TABLES_GEN)
 $(SAVE_TABLES_O): $(SAVE_TABLES_C)
 	$(EE_CC) $(EE_CFLAGS) -c $< -o $@
 
-# The oxide-vcl submodule, through cargo. The up-to-date check is made here, on
-# the crates' sources and manifests, so the rule runs again only when checking
-# out a new commit changes them, and a make with nothing to do never starts
+# oxide-vusl, from the oxide-vcl submodule, through cargo. The up-to-date check is
+# made here, on the crates' sources and manifests, so the rule runs again only when
+# checking out a new commit changes them, and a make with nothing to do never starts
 # cargo. --target-dir keeps cargo's output under build/tools/ rather than in the
 # submodule's work tree, where git would report it as untracked content. Every VU
-# program depends on the binary, so a new oxide-vcl rebuilds them all.
+# program depends on the binary, so a new oxide-vusl rebuilds them all.
 OXIDE_VCL_SRCS = $(OXIDE_VCL_PATH)/Cargo.toml $(OXIDE_VCL_PATH)/Cargo.lock \
                  $(shell find $(OXIDE_VCL_PATH)/crates -path '*/tests' -prune -o -type f -print 2>/dev/null)
 
-$(OXIDE_VCL): $(wildcard $(OXIDE_VCL_SRCS))
+$(OXIDE_VUSL): $(wildcard $(OXIDE_VCL_SRCS))
 	@test -f $(OXIDE_VCL_PATH)/Cargo.toml || \
 		{ echo "$(OXIDE_VCL_PATH) is empty - run 'git submodule update --init'"; exit 1; }
-	@cargo build --quiet --release --locked --bin oxide-vcl \
+	@cargo build --quiet --release --locked --bin oxide-vusl \
 		--manifest-path $(OXIDE_VCL_PATH)/Cargo.toml --target-dir $(OXIDE_VCL_BUILD)
 	@touch $@
 
-# VU1 microprograms. oxide-vcl preprocesses and compiles in one run; the .vsm is
-# kept beside the object for reading. In oxide mode it rewrites or rejects an
-# immediate that does not fit its field (its 'imm' fix) rather than leaving
-# dvp-as to truncate it. An 'operand out of range' warning from dvp-as on a
-# branch longer than 1023 instructions is harmless: VU1 micro memory is exactly
-# 2048 instructions and the PC wraps, so the low 11 bits dvp-as keeps reach the
-# same instruction.
-$(BUILD_DIR)/vu/%.o: $(VCL_PATH)/%.vcl $(VCL_INCS) $(OXIDE_VCL)
+# VU1 microprograms. oxide-vusl writes the listing and the header together, or
+# neither when the program has an error; the .vsm is kept beside the object for
+# reading. In oxide mode oxide-vcl rewrites or rejects an immediate that does not
+# fit its field (its 'imm' fix) rather than leaving dvp-as to truncate it. An
+# 'operand out of range' warning from dvp-as on a branch longer than 1023
+# instructions is harmless: VU1 micro memory is exactly 2048 instructions and the
+# PC wraps, so the low 11 bits dvp-as keeps reach the same instruction.
+#
+# One recipe makes both targets: a pattern rule with two targets is run once for
+# the pair.
+$(BUILD_DIR)/vu/%.o $(BUILD_DIR)/vu/%.vusl.h: $(VUSL_PATH)/%.vusl $(VUSL_INCS) $(OXIDE_VUSL)
 	@mkdir -p $(dir $@)
-	$(OXIDE_VCL) $(OXIDE_VCL_FLAGS) -o$(basename $@).vsm $<
-	dvp-as $(basename $@).vsm -o $@
+	$(OXIDE_VUSL) $(OXIDE_VUSL_FLAGS) --header=$(BUILD_DIR)/vu/$*.vusl.h -o$(BUILD_DIR)/vu/$*.vsm $<
+	dvp-as $(BUILD_DIR)/vu/$*.vsm -o $(BUILD_DIR)/vu/$*.o
+
+# vu1.h includes the generated headers, so no C++ object can be built before them.
+# Order-only: once an object exists, its -MMD dependency file names the headers it
+# really includes, and that is what rebuilds it when one changes.
+$(CXX_OBJS): | $(VU_HEADERS)
 
 # IOP modules embedded via bin2c.
 $(OUTPUT_DIR)/irx/%.o: $(IRX_PATH)/%.irx

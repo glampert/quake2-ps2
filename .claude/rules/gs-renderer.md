@@ -169,7 +169,7 @@ The README's "Rendering" section is the architecture overview. The renderer file
   the ripple's phase is a function of them, with a 16pi-texel period that no whole number of
   64-texel repeats is a multiple of. On a console its texture wobbled as the camera turned,
   most visibly on the triangles the camera stood in (2026-10-11). So VU1 shifts the *output*
-  by whole repeats, per triangle, after the warp (`WarpCorners` in textured_triangles.vcl).
+  by whole repeats, per triangle, after the warp (`warpCorners` in textured_triangles.vusl).
   Confirmed on hardware 2026-10-11: the wobble and the cut triangles' distortion were gone.
 
 ## CLUTs and palettized textures

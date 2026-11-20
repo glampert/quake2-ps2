@@ -1261,7 +1261,7 @@ void DrawParticles(const math::Mat4 & mvp, const tex::Texture & texture,
 
     // Transformed once for the whole call, as a direction (w = 0). Being orthogonal to the view
     // axis, its clip z and w both come out zero, which is what lets the microprogram reuse the
-    // centre's depth and 1/w for both corners - see particles.vcl.
+    // centre's depth and 1/w for both corners - see particles.vusl.
     const math::Vec4 clipOffset = math::Transform(
         math::Vec4{ quadOffset.x, quadOffset.y, quadOffset.z, 0.0f }, mvp);
 

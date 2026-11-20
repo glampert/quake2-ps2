@@ -17,8 +17,9 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 ## Toolchain
 
 - EE compiler: `mips64r5900el-ps2-elf-gcc`/`g++` (GCC 15). There is no `ee-gcc`/`ee-g++`, so
-  don't go looking for them. VU tools: oxide-vcl (a submodule, below) and `dvp-as`. Also
-  `bin2c`. Building oxide-vcl needs a Rust toolchain (`cargo`, a recent stable release).
+  don't go looking for them. VU tools: oxide-vusl (from the oxide-vcl submodule, below) and
+  `dvp-as`. Also `bin2c`. Building oxide-vusl needs a Rust toolchain (`cargo`, a recent stable
+  release).
 - `$PS2DEV` = `~/ps2dev`, `$PS2SDK` = `~/ps2dev/ps2sdk` (EE headers in `ee/include`). The
   SDK's C sources, for checking what a library really does, are under
   `~/ps2dev/src/ps2dev/build/ps2sdk/ee/<lib>/src/`. gsKit is at `~/ps2dev/gsKit`.
@@ -30,9 +31,9 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   CI's pin, run the step with its commit instead, from `build/`:
   `../scripts/002-ps2sdk.sh <sha>`. Last rebuilt 2026-10-19 (toolchain, newlib `8881dc4`)
   and 2026-11-04 (ps2sdk `d41ea62`, CI's pin).
-- Submodules: `src/tools/oxide-vcl` (the VCL compiler, preprocessor included) and
-  `src/tools/miniz`. The build uses the pinned oxide-vcl it builds into
-  `build/tools/oxide-vcl/release/oxide-vcl`, never one on `PATH`.
+- Submodules: `src/tools/oxide-vcl` (oxide-vusl, the VUSL compiler the VU programs are written
+  for, and the VCL compiler under it) and `src/tools/miniz`. The build uses the pinned
+  oxide-vusl it builds into `build/tools/oxide-vcl/release/oxide-vusl`, never one on `PATH`.
 
 ## Build and verify
 
@@ -103,7 +104,7 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | [backend-cpp.md](.claude/rules/backend-cpp.md) | `src/ps2`, host tools | naming, types, file style, passing the strict `-Werror` set |
 | [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card |
 | [gs-renderer.md](.claude/rules/gs-renderer.md) | `src/ps2/renderer` | GS/libdraw facts, frame model, CLUTs, VRAM blocks, mipmaps, ST scaling |
-| [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources | the oxide-vcl build, writing VCL for it, dvp-as, VU0 inline asm, VCL comment style, runtime probes |
+| [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources | the oxide-vusl build and its generated headers, writing VUSL for these programs, dvp-as, VU0 inline asm, runtime probes |
 | [performance.md](.claude/rules/performance.md) | `src/ps2`, frame-log scripts | EE codegen facts, what PCSX2 can measure, capture/A-B/asm-test recipes |
 | [engine-c.md](.claude/rules/engine-c.md) | id's C | editing rules, engine quirks and bugs, registration, save-format duty |
 | [memory-budget.md](.claude/rules/memory-budget.md) | heap, VRAM, assets, MapCycle | the 32 MB picture, map-transition peak, measured budgets |

@@ -1,0 +1,82 @@
+// The particle program: a batch of particles, each a camera-facing sprite
+// whose size grows with its distance, written into a GS packet after the
+// batch and sent with one XGKICK. vu1.h is the host's side of the layouts
+// below, checked against the header oxide-vusl generates.
+
+#pragma program(VU1Prog_Particles)
+#include "frame.vush"
+
+struct Particle
+{
+    uint32 color;
+    vec3   pos;
+};
+
+struct Sprite
+{
+    uint32 color;
+    float  q; 
+    int16  reg;
+    vec4   uv0;
+    ivec3  xyz0;
+    int16  adc0;
+    vec4   uv1;
+    ivec3  xyz1;
+    int16  adc1;
+};
+
+struct Packet
+{
+    qword  tags[7];
+    Sprite sprites[];
+};
+
+struct Batch
+{
+    layout(lane = w) int16 count;
+    vec4     quadOffset;
+    vec4     uv0, uv1;
+    qword    tags[7];
+    Particle particles[count];
+    Packet   packet;
+};
+
+void main(layout(address = 0) uniform Frame frame,
+          layout(xtop, vif_base = 8, vif_offset = 474) inout Batch batch)
+{
+    mat4 mvp = frame.mvp;
+
+    #pragma unroll
+    for (int16 r = 0; r < 4; ++r)
+    {
+        mvp[r].xyz *= frame.gsScale.xyz;
+    }
+
+    vec3 quadOffset = batch.quadOffset.xyz * frame.gsScale.xyz;
+    vec3 judgeScale;
+
+    judgeScale.x = frame.clipScale.x / frame.gsScale.x;
+    judgeScale.y = frame.clipScale.y / frame.gsScale.y;
+    judgeScale.z = frame.clipScale.z / frame.gsScale.z;
+
+    batch.packet.tags = batch.tags;
+
+    #pragma pipeline(min = 1)
+    for (Particle p : batch.particles, out Sprite s : batch.packet.sprites)
+    {
+        vec4 c = vec4(p.pos, 1.0) * mvp;
+        clipflags j = clipw(c.xyz * judgeScale, c.w);
+        float q = 1.0 / c.w;
+        float k = (c.w * batch.quadOffset.w + 1.0) * q;
+        vec3 w0 = frame.gsOffset.xyz + c.xyz * q;
+        vec3 w1 = w0 + quadOffset * k;
+        int16 flag = adc(j);
+
+        s.color = p.color;  s.q = q;  s.reg = 1;
+        s.uv0  = batch.uv0;          s.uv1  = batch.uv1;
+        s.xyz0 = ftoi4(w0);          s.adc0 = flag;
+        s.xyz1 = ftoi4(w1);          s.adc1 = flag;
+    }
+
+    xgkick(batch.packet);
+}

@@ -487,6 +487,10 @@ paths:
   with no margin (EE work 15-16.7 ms) 262 → 16 → 10. Cinematic rows, which skip those
   programs, held GsWait at 241 µs in all three: a control. So before oxide-vcl, VU1 was what
   the EE waited on.
+  The switch to VUSL (2026-11-20, debug `ps2_perftest`, `build/baselines/vusl-head-perf` against
+  `vusl-new-perf`): every column within ±1%, draw counts identical, the same 21045 frames.
+  Its VU1 cost is measured on oxide-vcl's scenes instead (see
+  [vu-microprograms.md](vu-microprograms.md)): identical packets, +1.4% cycles.
 - **PCSX2 charges roughly per instruction** (~2.5-3 cycles per EE instruction seemed to
   apply). Only a net instruction-count cut shows up. An MMI change that swapped 5 memory ops
   for 1 extra instruction measured *slower* (+3.1%) and was reverted, even though it should

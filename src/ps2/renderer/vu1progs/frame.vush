@@ -1,0 +1,14 @@
+#pragma once
+
+// The frame constants both VU1 programs read: eight qwords at address 0
+// (FrameConstants in vu1.h).
+
+struct Frame
+{
+    layout(row_major) mat4 mvp;
+    vec4  gsScale;
+    vec4  gsOffset;
+    vec3  clipScale;
+    float warpPhase;
+    vec4  colorClamp;
+};

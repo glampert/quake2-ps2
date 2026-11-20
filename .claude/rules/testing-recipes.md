@@ -70,7 +70,10 @@ ended. The save test has quit on its own since 2026-10-12.
 For a size or codegen comparison against an older commit without touching the checkout (a test
 may be running from `build/debug`): `git archive <commit> | tar -x -C <scratch>/<commit>`, then
 `cp -R src/tools/{oxide-vcl,miniz}/. <scratch>/<commit>/src/tools/<same>/` (an archive
-holds no submodule contents), and `make -j4` there. The Makefile's paths are relative, so it
+holds no submodule contents), and `make -j4` there. When the commit pins another oxide-vcl than
+the checkout's, take that one instead: `git -C src/tools/oxide-vcl archive <its pin> | tar -x -C
+<scratch>/<commit>/src/tools/oxide-vcl` (a commit from before VUSL builds its `.vcl` programs
+with oxide-vcl). The Makefile's paths are relative, so it
 builds its own `build/tools/oxide-vcl` and ELF. A commit from before the switch to oxide-vcl
 pins vclpp and vu-checker instead (`git ls-tree <commit> src/tools` lists a commit's pins):
 `git worktree add <scratch>/<commit> <commit>` and

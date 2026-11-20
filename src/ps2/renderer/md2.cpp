@@ -13,7 +13,7 @@
  *  one part of the file the hunk still holds verbatim.
  *
  *  The interpolation itself runs on VU1 (the keyframe format of
- *  textured_triangles.vcl): the expansion streams the two keyframes'
+ *  textured_triangles.vusl): the expansion streams the two keyframes'
  *  dtrivertx_t bytes verbatim and the microprogram converts and lerps them,
  *  with the pose's uniform 'move' translation folded into the MVP's row 3 so
  *  only the two scale vectors ride with each draw.

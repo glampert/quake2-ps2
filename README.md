@@ -73,9 +73,9 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 
    Note the toolchain prefix is `mips64r5900el-ps2-elf-*`, not the older `ee-gcc`.
 
-   The VU microprograms are compiled by [oxide-vcl](https://github.com/glampert/oxide-vcl),
-   which the build makes from its submodule (below), so the toolchain's `openvcl` is not
-   used.
+   The VU microprograms are written in VUSL and compiled by `oxide-vusl`, from
+   [oxide-vcl](https://github.com/glampert/oxide-vcl), which the build makes from its submodule
+   (below), so the toolchain's `openvcl` is not used.
 
    On macOS, ps2dev's `build-all.sh` also needs Homebrew's `pkgconf`, and GNU sed ahead of
    the system one, or its ps2sdk-ports step fails:
@@ -141,15 +141,15 @@ at a small number of well defined seams — `refexport_t`, `SNDDMA_*`, `IN_*`, `
 ### Building
 
 Two dependencies come in as git submodules: [oxide-vcl](https://github.com/glampert/oxide-vcl),
-the VCL compiler the VU microprograms are built with, preprocessor included, at
+whose `oxide-vusl` compiles the VU microprograms from VUSL, at
 [src/tools/oxide-vcl/](src/tools/oxide-vcl/), and [miniz](https://github.com/richgel999/miniz),
 the deflate codec the save games are compressed with, at [src/tools/miniz/](src/tools/miniz/)
 (its sources are compiled straight into the game). Clone with `--recursive`, or run
 `git submodule update --init --recursive` in an existing clone.
 
 oxide-vcl is Rust: the build runs `cargo` (a recent stable release, from
-[rustup](https://rustup.rs)) to make it into `build/tools/oxide-vcl/`, once, and again only
-when the submodule moves to a new commit.
+[rustup](https://rustup.rs)) to make `oxide-vusl` into `build/tools/oxide-vcl/`, once, and
+again only when the submodule moves to a new commit.
 
 ```sh
 make            # debug build -> build/debug/quake2.elf (+ host tools)
@@ -540,13 +540,13 @@ src/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc, pakzip)
     scripts/                      Python helpers (symbolize, compile_commands.json generator, gen_save_tables - the save games' function/animation name tables) and make_github_release.sh
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
-    oxide-vcl/                    VCL compiler and preprocessor for the VU microprograms (git submodule)
+    oxide-vcl/                    VUSL and VCL compilers, for the VU microprograms (git submodule)
     miniz/                        deflate codec for the save games and the compressed packs (git submodule)
     vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
     renderer/                     GS front-end, VRAM heap, textures, models, VU1 path
-      vu1progs/                   VU1 microprograms (.vcl)
+      vu1progs/                   VU1 microprograms (.vusl) and their shared frame.vush
     audio/                        SNDDMA_* seam, audsrv device, mix ring, CD music streaming
     input/                        IN_* seam, DualShock pad and rumble, USB keyboard
     math/                         vector/matrix math for the renderer
@@ -661,14 +661,16 @@ constants) unpacked to fixed VU addresses, then chunks of up to 90 vertices (60 
 unpacked into a double buffer with `MSCAL` to run the microprogram. It transforms, clips,
 builds the GS packet in one of two output windows and `XGKICK`s each window over PATH1 as it
 fills, alternating between them. `XTOP` flips on every `MSCAL`, so the VIF unpacks the next
-chunk while VU1 still works on the current one. There are two microprograms, written in VCL:
+chunk while VU1 still works on the current one. There are two microprograms, written in
+[VUSL](https://github.com/glampert/oxide-vcl/blob/main/docs/VUSL.md), a GLSL-like language for
+VU1:
 
-- `textured_triangles.vcl` — every triangle but the sky's: gouraud-shaded textured triangle
+- `textured_triangles.vusl` — every triangle but the sky's: gouraud-shaded textured triangle
   lists, with the batch header choosing the per-vertex work. A vertex is either a plain
   `DrawVertex` or two byte-quantized MD2 keyframes lerped on the VU (with a back-face cull);
   its colour arrives packed or is computed on the VU, from four dynamic lights or from the
   model's shade; and turbulent surfaces warp their texture coordinates there too.
-- `particles.vcl` — camera-facing billboards expanded to GS sprites: the soft round sprite
+- `particles.vusl` — camera-facing billboards expanded to GS sprites: the soft round sprite
   through the alpha ramp, or with `r_particles 2` the classic flat squares of `ref_gl`'s
   `GL_POINTS`, the same sprite untextured.
 
@@ -687,7 +689,8 @@ Each batch's A+D block programs `TEST`, `ALPHA` and `ZBUF` alongside `TEX0`/`TEX
 batch draws with the right z-test, blend equation and depth-write mask regardless of what
 the surrounding 2D packets left behind.
 
-**Clipping** ([vu_clip.i](src/ps2/renderer/vu1progs/vu_clip.i)). The microprogram clips
+**Clipping** ([textured_triangles.vusl](src/ps2/renderer/vu1progs/textured_triangles.vusl),
+`clipPass`). The microprogram clips
 in clip space, Sutherland-Hodgman against the near plane and the four guard-band sides, and
 fans the survivors out as triangles. The guard band is as wide as the GS 12.4 window
 coordinates allow, so only the roughly 2% of triangles that leave it are cut; the GS scissor
@@ -695,14 +698,18 @@ does the on-screen trim. The far plane is judged but not cut, since it was never
 straddled across the perf demos. The sky is the one thing still cut on the EE
 ([clip.h](src/ps2/renderer/clip.h)): its faces are single quads spanning ninety degrees.
 
-The microprograms are compiled by [oxide-vcl](https://github.com/glampert/oxide-vcl) in its
-oxide mode with every optimization (`--mode=oxide --opt=all`), its built-in preprocessor
-first, and assembled by `dvp-as`. Its scheduler pipelines the particle loop and gives the
-triangle loop one copy per colour mode and vertex format (*unswitching*), so each copy runs
-from the input loads to the output stores without a test in between. Measured on a console
-over the two demos' gameplay frames, against the openvcl build of the earlier sources, the
-time the EE waits on the GS and VU1 fell from 3.68 ms to 1.40 ms a frame (0.87 to 0.33 µs a
-triangle).
+The microprograms are compiled by `oxide-vusl`, which turns VUSL into VCL and hands it to
+[oxide-vcl](https://github.com/glampert/oxide-vcl) in its oxide mode with every optimization,
+and assembled by `dvp-as`. Each program's memory is plain structs bound to `main`'s parameters,
+and the compiler writes a C++ header of them beside the listing (`build/vu/<name>.vusl.h`):
+[vu1.h](src/ps2/renderer/vu1.h) takes its VU addresses and batch limits from it and checks its
+own structs against it, so the two sides of a layout cannot drift apart. oxide-vcl's scheduler
+pipelines the particle loop and gives the triangle loop one copy per colour mode and vertex
+format (*unswitching*), so each copy runs from the input loads to the output stores without a
+test in between. Measured on a console over the two demos' gameplay frames, against the
+openvcl build of the earlier VCL sources, the time the EE waits on the GS and VU1 fell from
+3.68 ms to 1.40 ms a frame (0.87 to 0.33 µs a triangle). The VUSL programs draw the same
+packets as those VCL ones, in 1.4% more VU1 cycles over oxide-vcl's test scenes.
 
 **Frame pass order** ([view.cpp](src/ps2/renderer/view.cpp)), following
 `ref_gl`'s `R_RenderView`: PVS + frustum culled world surfaces and the skybox, opaque

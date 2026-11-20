@@ -44,7 +44,7 @@ jobs:
       # checkout, which would otherwise download a tarball with no submodules in it.
       - name: Install the host build tools
         run: apk add --no-cache build-base cmake python3 git rustup
-      # Rust for oxide-vcl, the VCL compiler (src/tools/oxide-vcl), which needs a recent stable
+      # Rust for oxide-vusl, the VUSL compiler (src/tools/oxide-vcl), which needs a recent stable
       # release (edition 2024): Alpine's rustup installs one for the musl host, and its bin
       # directory goes on PATH for the steps after this one. oxide-vcl has no crate
       # dependencies, so the build downloads nothing else.

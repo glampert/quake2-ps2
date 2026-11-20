@@ -470,7 +470,7 @@ void SetupFrame(const refdef_t & viewDef)
     s_frameTime        = viewDef.time;
     s_textureAnimFrame = static_cast<int>(viewDef.time * 2.0f);
 
-    // Turbulent surfaces animate on the VU (the warp block of textured_triangles.vcl), so the frame's two animation
+    // Turbulent surfaces animate on the VU (the warp block of textured_triangles.vusl), so the frame's two animation
     // terms go over once here rather than being folded into every vertex.
     //
     // The phase travels in turns and pre-wrapped, which keeps it precise however long the session
@@ -1140,7 +1140,7 @@ void DrawAnimatedWaterPolys(const mod::ModelSurface & surf, const SurfaceDrawSta
         //
         // The raw texels stay raw all the way to VU1, large as they are: the
         // ripple's phase is a function of them, so the loader cannot rebase them
-        // the way it does a wall's (ps2_st_rebase). WarpCorners does it after the
+        // the way it does a wall's (ps2_st_rebase). warpCorners does it after the
         // warp instead, per triangle, and warps the corners before any cut.
         const int numTriangles = poly->numVerts - 2;
         const mod::PolyVertex * const src = poly->vertexes;
@@ -2348,7 +2348,7 @@ void DrawNullModelEntity(const refdef_t & viewDef, const entity_t & entity)
 // Each particle is a sprite anchored at its origin and spanning the camera's
 // (up + right), scaled. Because up and right are orthogonal to forward, every
 // corner shares the anchor's depth, so the quad projects to an axis-aligned
-// screen rectangle and draws as a single GS sprite (see particles.vcl). The
+// screen rectangle and draws as a single GS sprite (see particles.vusl). The
 // distance blow-up that keeps far particles a pixel wide rides along in the
 // microprogram.
 //

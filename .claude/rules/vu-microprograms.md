@@ -11,67 +11,97 @@ paths:
 
 ## Pipeline (Makefile rule `build/vu/%.o`)
 
-`oxide-vcl -G -I vu1progs --vcl-boilerplate --warn-undef --mode=oxide --opt=all
---warnings-as-errors` → `dvp-as`. oxide-vcl is the `src/tools/oxide-vcl` submodule, built by
-cargo into `build/tools/oxide-vcl/`; its docs (`docs/VCL_REFERENCE.md` there) cover the
-language, the preprocessor and the optimizations. The output is config-independent and lives
-in `build/vu/`, the `.vsm` beside each `.o`. There are two programs, `textured_triangles.vcl`
-and `particles.vcl`, with shared `vu_common.i`/`vu_clip.i`.
+`oxide-vusl --warnings-as-errors --header=build/vu/<name>.vusl.h` → `dvp-as`. oxide-vusl comes
+from the `src/tools/oxide-vcl` submodule, built by cargo into `build/tools/oxide-vcl/`; it
+compiles VUSL to VCL and hands that to oxide-vcl in oxide mode with every optimization. Its
+docs, there: `docs/VUSL.md` (the language, the cost of each construct, the header) and
+`docs/VUSL_COMPILER.md`. The output is config-independent and lives in `build/vu/`: the `.vsm`
+and `.o`, and the header. There are two programs, `textured_triangles.vusl` and
+`particles.vusl`, which share `frame.vush`.
 
-- **Check `make`'s exit status.** A failed VU build leaves the previous `.vsm`/`.o` in place.
-  If a VU change seems not to take effect, compare the `.vsm` mtime with the `.vcl`.
-- `--warnings-as-errors` covers the preprocessor (`--warn-undef`: an `#if` on an undefined
-  name) and the compiler alike.
+- **Check `make`'s exit status.** oxide-vusl writes all its files or none, but a failed VU
+  build leaves the previous `.vsm`/`.o` in place. If a VU change seems not to take effect,
+  compare the `.vsm` mtime with the `.vusl`.
+- **The header is the binding.** vu1.h includes `<name>.vusl.h` and takes the programs' VU
+  addresses, batch offsets and the particle ceiling (`kBatchMaxCount`, solved by the compiler
+  from the layout) from it, and static-asserts its own structs (FrameConstants, DrawVertex,
+  LightConstants, LerpConstants, WarpConstants, ParticleVertex) against the generated ones. A
+  layout changed in a `.vusl` fails the build there, not on screen. The C++ objects wait for
+  the headers on a clean build (an order-only prerequisite), and `-MMD` tracks them after.
+  vu1.cpp also asserts that both programs' `kInstructions` fit micro memory.
+- `--warnings-as-errors` covers the preprocessor and the compiler alike. The notes oxide-vusl
+  prints for values kept in the work area (`'iwindow_5' does not fit in the VI registers`)
+  are not warnings.
+- `--emit-vcl=FILE` writes the generated VCL, for reading what a construct became:
+  `build/tools/oxide-vcl/release/oxide-vusl --emit-vcl=/tmp/t.vcl -o /tmp/t.vsm src/ps2/renderer/vu1progs/textured_triangles.vusl`.
 - dvp-as's **"operand out of range" warning on a branch is harmless**. Branch offsets are 11
   bits and dvp-as keeps the low bits, which reach the same instruction because VU1 micro
-  memory is exactly 2048 instructions and the PC wraps.
+  memory is exactly 2048 instructions and the PC wraps. textured_triangles' copies of its
+  loop put some branches 1071 instructions back.
 - **Immediates:** oxide mode's `imm` fix rewrites or rejects an immediate that does not fit
   its field, where dvp-as would truncate it silently (an `iaddi` of -18 once assembled as
   +14).
 
-## Writing VCL for oxide-vcl
+## Writing VUSL for these programs
 
-- **A register some path leaves unwritten can't be read**, even on a path that never runs
-  (`'x.y' is read before anything writes it`). Write it on every path, as ClipTransform does
-  its colour; the message names the register and lane.
-- **Hold batch state in VI registers.** The allocator gives a value its real live range and
-  has VI01-VI15 (`--vcl-boilerplate` declares `.init_vi_all`; it keeps VI01 free across
-  `fcand`), so a flag read once per batch belongs in a register, not reloaded per triangle.
-  The window state and the clipper's survivor count stay in their spill qwords because they
-  are read once per window or per pass, not because of the allocator.
-- **Let `unswitch` see a mode.** A branch on a register the loop never writes (`iColorMode`,
-  `iFormat`) is decided once before the loop: the triangle loop runs in one of four copies,
-  per colour mode and vertex format. Reloading such a register inside the loop, even from a
-  constant header, makes it a write and keeps the branch.
-- **Keep the hot path one block.** The scheduler packs within a block. A branch in the
-  middle of the usual path splits it, so the triangle is written out before its clip and
-  cull decisions (`EmitTriangle`) and the slow path takes the output advance back; the fan
-  overwrites the same slots.
-- **The clip flags land four cycles after a `clipw`**: judge (`fcand`) in the same block, and
-  carry the verdict in `vi01` from there.
-- **Store order through two address registers**: a store that must land after another to the
-  same qword written through a different base register (the uncut water path's seed and
-  `WarpCorners`) keeps a `--barrier` or a block boundary between them.
-- `clipw.xyz a, b` is rejected. Write `clipw.xyz fJudge, fPos[w]`, with an explicit `[w]`.
+Measured against the hand-written VCL these programs replaced (2026-11-20), on oxide-vcl's
+test scenes for them (`crates/oxide-vcl/tests/support/scenes.rs`, run in its VU model): the
+packets are identical and the cycles 1.4% more over the triangle scenes, +0.9% for particles.
+What moved the triangle program, each from its own A/B:
+
+- **Hold the batch's modes in locals before the loop**: `int16 colorMode`, `int16 format`,
+  and the warp flag as `bool warped = batch.warp != 0`. A mode nothing in the loop writes is
+  what lets oxide-vcl's `unswitch` copy the loop per colour mode and vertex format. A `bool`
+  pays its compare once; an `int16 warped` tested `warped != 0` in the loop paid an `isub` per
+  triangle (60 cycles over the 30-triangle wall).
+- **Write the triangle out before its clip and cull decisions**, in the same block as the
+  transform, and let the slow path take the output back (`cursor -= 3`). The stores fill the
+  transform's empty slots. Branching to the fast path first cost the wall +54%.
+- **Leave the slow path's test a flag** set on each format's side, with one `if (slow)` after
+  them. `continue` out of the format sides stopped `unswitch` copying the loop per mode (1190
+  instructions instead of 1806), and the model scene lost 10%.
+- **Don't hoist a constant across the loop.** A `-1.0` held in a local for the clamps cost
+  the keyframe path 5%: one more VF register live across the loop. A literal costs a `loi`
+  where it is used.
+- **Open the first window through `batch.windows[0]`**, a constant offset from XTOP. Through
+  the `window` ref, which lives in the work area, each of the seven tag stores reloaded it.
+- Changes that should save instructions often don't: these blocks are bound by their
+  dependency chains, and the schedule moves by ±30 cycles with any edit. Measure each one.
+- **The clip flags land four cycles after a `clipw`**: `any()` and `adc()` read them, and
+  the compiler requires the `clipw`s to be the last ones in the same block.
+- **A cut must interpolate what the GS would have.** Anything per-vertex that is not linear
+  across the triangle (the water warp) has to be evaluated at the corners before the clipper
+  runs, so the cut lerps finished values, as GL's clipper does. Warping the vertex the cut
+  made samples the ripple where no neighbour does: on a 64-unit leaf's edges, computed, 3.2
+  texels off the neighbours at the median and 8 at worst. The water warp did that until
+  2026-10-11. Fixing it alone changed nothing visible on the console, where the large S/T
+  of water was the artifact the user saw (see [gs-renderer.md](gs-renderer.md)). Every
+  turbulent triangle goes through `warpCorners` in the clipper's buffer, cut or not, and out
+  through the fan. A new non-linear per-vertex term belongs there too.
+- **Store order through two refs**: the seed's stores and `warpCorners`, which writes over
+  their S and T through another base, keep a `#pragma barrier` between them.
+
+To A/B a program change, compile both versions and run them on the scenes: the programs suite
+in oxide-vcl (`crates/vusl/tests/programs.rs`, whose `report` test prints cycles per scene)
+does it for its own copies of these programs, against the corpus VCL. PCSX2 shows none of it
+(see [performance.md](performance.md)).
 
 ## Linking
 
-- `#vuprog NAME` → `.name NAME` → oxide-vcl emits `NAME_CodeStart`/`NAME_CodeEnd`. Declare
-  those with `PS2_DECLARE_VU_MICROPROGRAM` at namespace scope. An `extern "C"` inside an
-  anonymous namespace gets internal linkage and won't resolve against `.vudata`. Use
-  `u32`/`unsigned int` for the symbol types, not `uint32_t`.
-- `#define`s nest and `#macro`s may invoke each other (recursion is an error). Label-placing
-  macros take one prefix and paste it (`lbl##Loop`, `lbl##NoWarp`). Constant expressions are
-  folded only with `--fold-constants`, which the Makefile doesn't pass, so the compiler gets
-  operands like `1010 + 0(vi00)` and `kWindowVerts - kWindowReserve` as written, and
-  evaluates them itself.
+- `#pragma program(NAME)` → oxide-vusl emits `NAME_CodeStart`/`NAME_CodeEnd`. Declare those
+  with `PS2_DECLARE_VU_MICROPROGRAM` at namespace scope. An `extern "C"` inside an anonymous
+  namespace gets internal linkage and won't resolve against `.vudata`. Use `u32`/`unsigned int`
+  for the symbol types, not `uint32_t`.
 
 ## VU memory layout (vu1.h)
 
 Chunks are up to 90 vertices (60 for MD2) in a double buffer, `XTOP` flips per `MSCAL`, and
-there are two output windows XGKICKed alternately. The clip scratch is 956..1009, and the
+there are two output windows XGKICKed alternately. The clip scratch is 956..1009: the
+clipper's buffers from 957 and the program's work area (its `layout(spill)` parameter) at
+1008-1009, where oxide-vcl keeps the VI values that do not fit in registers. 956 is spare. The
 light block starts at 1010. The batch tag block is 7 qwords with no room to grow (see
-[gs-renderer.md](gs-renderer.md)).
+[gs-renderer.md](gs-renderer.md)). The programs' `main` parameters are where these addresses
+are written; vu1.h takes them from the generated headers.
 
 - **A write past the program's half breaks only on a console.** VIF1 unpacks the next batch
   into the other half while the program runs, so an overrun from the lower half lands on that
@@ -82,35 +112,19 @@ light block starts at 1010. The batch tag block is 7 qwords with no room to grow
   copies to the packet head. A full batch made the next count 0x7FFF, and the first
   big particle burst hung the frame on hardware. Size a layout from the program's last write.
 
-## Writing VCL
-
-- **A cut must interpolate what the GS would have.** Anything per-vertex that is not linear
-  across the triangle (the water warp) has to be evaluated at the corners before the clipper
-  runs, so the cut lerps finished values, as GL's clipper does. Warping the vertex the cut
-  made samples the ripple where no neighbour does: on a 64-unit leaf's edges, computed, 3.2
-  texels off the neighbours at the median and 8 at worst. The water warp did that until
-  2026-10-11. Fixing it alone changed nothing visible on the console, where the large S/T
-  of water was the artifact the user saw (see [gs-renderer.md](gs-renderer.md)). Every
-  turbulent triangle now goes through `WarpCorners` in the clipper's buffer, cut or not, and
-  out through the fan. A new non-linear per-vertex term belongs there too.
-- Above every non-trivial `#macro` and `#vuprog`, after the prose, add an indented
-  `;`-commented **C-like pseudo-code** block: `vec4`/`mat4`/`qword` types, `//` comments, and
-  control flow that mirrors the real code (`do/while` for a bottom-tested `ibne` loop).
-  `textured_triangles.vcl` sets the format. Comment-only top-level `;` blocks pass through
-  the preprocessor and the compiler safely.
-
 ## Debugging a microprogram
 
-Read the generated `.vsm` as a hypothesis, not as evidence. Four disassembly theories failed
-in a row on one bug, and two probes settled it:
+Read the generated VCL and `.vsm` as a hypothesis, not as evidence. Four disassembly theories
+failed in a row on one bug, and two probes settled it:
 
-- **Readout channel:** paint a value into the vertex colour (`addw.xyz vCol, vf00, <reg>`) and
-  read the grey level on screen. A value that saturates the blend hides what's behind it.
-- **Byte dump:** `sq` the register to a scratch qword nothing else writes (the spare qword of
-  clip scratch), then print it from the EE with
-  `ps2::debug::DumpVu1DataMemory(what, addrQw, count)` (`debug/pipeline_dump.h`, debug only),
-  gated to every N frames. A probe inside a macro lands in *every* expansion, so check the
-  shape of the data before trusting a sample.
+- **Readout channel:** paint a value into the vertex colour (in mode 1, `col.xyz` of
+  `drawCorner`) and read the grey level on screen. A value that saturates the blend hides
+  what's behind it.
+- **Byte dump:** store the value to a scratch qword nothing else writes (956, the clip
+  scratch's spare qword, as a `layout(address = 956) inout` parameter), then print it from the
+  EE with `ps2::debug::DumpVu1DataMemory(what, addrQw, count)` (`debug/pipeline_dump.h`, debug
+  only), gated to every N frames. A probe in a function lands in *every* call, since each is
+  inlined, so check the shape of the data before trusting a sample.
 
 ## VU0 macro-mode inline asm (GCC 15)
 

@@ -7,8 +7,8 @@ paths:
 
 - **`ps2.yml`** runs `make`, then `make release`, on Linux inside the ps2dev project's
   `ghcr.io/ps2dev/ps2sdk` image, for every push or PR that changes more than the docs or
-  editor settings. So it also builds oxide-vcl (`src/tools/oxide-vcl`, with cargo), the VU
-  programs and the host tools. It is a compile check and keeps no ELF: releases are packaged from local builds
+  editor settings. So it also builds oxide-vusl (from `src/tools/oxide-vcl`, with cargo), the
+  VU programs and their headers, and the host tools. It is a compile check and keeps no ELF: releases are packaged from local builds
   (`make_github_release.sh`), and the IOP modules an ELF embeds come from the SDK that built it.
 - **`tools.yml`** builds the host tools alone, with GCC, Apple clang and MSVC, when they or the
   headers they share with the game change. It keeps the Windows `.exe` files as an artifact.
@@ -35,7 +35,7 @@ paths:
   and August 2026 still resolved in October.
 - **`v2.0.0`, the only release tag since 2021, could not build this tree** while openvcl
   compiled the VU programs: openvcl and masp joined ps2toolchain-dvp on 2026-05-18, two days
-  after it. The build now takes only dvp-as from the dvp toolchain (oxide-vcl compiles); whether
+  after it. The build now takes only dvp-as from the dvp toolchain (oxide-vusl compiles); whether
   v2.0.0 builds the tree since is unchecked.
 - The pin, as of 2026-11-04: `latest` as built on 2026-11-03, which is ps2sdk `d41ea62` (the
   first with audsrv's `thpri=`, PR #952), GCC 15.2.0, binutils 2.45.1, newlib 4.6.0 (`8881dc4`,
@@ -68,8 +68,9 @@ paths:
 - **`stable` is not pinned**, unlike the image: a new Rust release reaches CI unannounced. It
   changes how oxide-vcl is built, not what it generates. If a release ever breaks the build,
   pin it with `--default-toolchain 1.NN`.
-- The Makefile builds oxide-vcl into `build/tools/oxide-vcl/` (cargo's `--target-dir`), once
-  for both configs: `make release` reuses the debug run's.
+- The Makefile builds oxide-vusl into `build/tools/oxide-vcl/` (cargo's `--target-dir`), once
+  for both configs: `make release` reuses the debug run's, and the VU programs and headers in
+  `build/vu/` with it.
 
 ## Checking a Linux build without Docker
 

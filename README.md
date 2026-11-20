@@ -542,7 +542,7 @@ src/
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     oxide-vcl/                    VUSL and VCL compilers, for the VU microprograms (git submodule)
     miniz/                        deflate codec for the save games and the compressed packs (git submodule)
-    vscode_extensions/            VCL/VU assembly syntax highlighting for VSCode
+    vscode_extensions/            VUSL, VCL and VU assembly syntax highlighting for VSCode
   ps2/                            the PS2 backend - all new C++ code
     system/                       main() entry point, Sys_* seam, IOP boot, dlmalloc heap
     renderer/                     GS front-end, VRAM heap, textures, models, VU1 path

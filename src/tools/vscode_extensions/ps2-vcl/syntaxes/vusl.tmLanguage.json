@@ -1,0 +1,190 @@
+{
+    "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+    "name": "VUSL",
+    "scopeName": "source.vusl",
+    "patterns": [
+        { "include": "#comments" },
+        { "include": "#preprocessor" },
+        { "include": "#layout" },
+        { "include": "#statements" }
+    ],
+    "repository": {
+        "statements": {
+            "patterns": [
+                { "include": "#comments" },
+                { "include": "#layout" },
+                { "include": "#structs" },
+                { "include": "#refs" },
+                { "include": "#keywords" },
+                { "include": "#types" },
+                { "include": "#builtins" },
+                { "include": "#functions" },
+                { "include": "#literals" },
+                { "include": "#swizzles" },
+                { "include": "#names" },
+                { "include": "#operators" }
+            ]
+        },
+        "comments": {
+            "patterns": [
+                { "name": "comment.line.double-slash.vusl", "match": "//.*$" },
+                { "name": "comment.block.vusl", "begin": "/\\*", "end": "\\*/" }
+            ]
+        },
+        "preprocessor": {
+            "patterns": [
+                {
+                    "match": "^\\s*(#\\s*include)\\s+(\"[^\"]*\"|<[^>]*>)",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.include.vusl" },
+                        "2": { "name": "string.quoted.double.include.vusl" }
+                    }
+                },
+                {
+                    "match": "^\\s*(#\\s*(?:define|undef|ifdef|ifndef))\\s+([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.vusl" },
+                        "2": { "name": "entity.name.function.preprocessor.vusl" }
+                    }
+                },
+                {
+                    "begin": "^\\s*(#\\s*pragma)\\s+(once|program|pipeline|nopipeline|unroll|nounroll|barrier|library)\\b",
+                    "beginCaptures": {
+                        "1": { "name": "keyword.control.directive.pragma.vusl" },
+                        "2": { "name": "keyword.other.pragma.vusl" }
+                    },
+                    "end": "(?=//|/\\*)|$",
+                    "patterns": [
+                        { "include": "#arguments" }
+                    ]
+                },
+                {
+                    "match": "^\\s*(#\\s*pragma)\\s+([A-Za-z_]\\w*)",
+                    "captures": {
+                        "1": { "name": "keyword.control.directive.pragma.vusl" },
+                        "2": { "name": "invalid.deprecated.unknown-pragma.vusl" }
+                    }
+                },
+                { "name": "keyword.control.directive.vusl", "match": "^\\s*#\\s*\\w+" }
+            ]
+        },
+        "layout": {
+            "begin": "\\b(layout)\\s*(\\()",
+            "beginCaptures": {
+                "1": { "name": "storage.modifier.layout.vusl" },
+                "2": { "name": "punctuation.parenthesis.open.vusl" }
+            },
+            "end": "\\)",
+            "endCaptures": {
+                "0": { "name": "punctuation.parenthesis.close.vusl" }
+            },
+            "patterns": [
+                { "include": "#arguments" }
+            ]
+        },
+        "arguments": {
+            "patterns": [
+                { "include": "#comments" },
+                {
+                    "name": "entity.other.attribute-name.vusl",
+                    "match": "\\b(?:address|xtop|xitop|vif_base|vif_offset|spill|alias|lane|offset|unpack|unsigned|row_major|column_major|min|safe|extra|abs|vf|vi|saved_vf|saved_vi|save)\\b"
+                },
+                {
+                    "name": "constant.language.unpack-format.vusl",
+                    "match": "\\b(?:[sv][1-4]?_(?:8|16|32)|v4_5)\\b"
+                },
+                {
+                    "match": "(?<==)\\s*([xyzw])\\b",
+                    "captures": {
+                        "1": { "name": "constant.language.lane.vusl" }
+                    }
+                },
+                { "include": "#literals" },
+                { "include": "#names" },
+                { "name": "keyword.operator.assignment.vusl", "match": "=" }
+            ]
+        },
+        "structs": {
+            "match": "\\b(struct)\\s+([A-Za-z_]\\w*)",
+            "captures": {
+                "1": { "name": "storage.type.struct.vusl" },
+                "2": { "name": "entity.name.type.struct.vusl" }
+            }
+        },
+        "refs": {
+            "match": "\\b(ref)\\s*(<)\\s*([A-Za-z_]\\w*)\\s*(>)",
+            "captures": {
+                "1": { "name": "storage.type.ref.vusl" },
+                "2": { "name": "punctuation.definition.typeparameters.begin.vusl" },
+                "3": {
+                    "patterns": [
+                        { "include": "#types" },
+                        { "name": "entity.name.type.vusl", "match": ".+" }
+                    ]
+                },
+                "4": { "name": "punctuation.definition.typeparameters.end.vusl" }
+            }
+        },
+        "keywords": {
+            "patterns": [
+                {
+                    "name": "keyword.control.vusl",
+                    "match": "\\b(?:if|else|for|while|do|break|continue|return|yield)\\b"
+                },
+                {
+                    "name": "storage.modifier.vusl",
+                    "match": "\\b(?:const|precise|export|uniform|inout|in|out)\\b"
+                }
+            ]
+        },
+        "types": {
+            "name": "storage.type.vusl",
+            "match": "\\b(?:void|bool|float|vec[234]|mat[34]|int16|int32|uint32|[iu]vec[234]|qword|clipflags)\\b"
+        },
+        "builtins": {
+            "match": "\\b(dot|cross|normalize|length|sqrt|rsqrt|min|max|abs|clamp|ftoi(?:0|4|12|15)|itof(?:0|4|12|15)|mr32|clipw|any|adc|clipped|e(?:sadd|rsadd|leng|rleng|sum|rcpr|sqrt|rsqrt|sin|atan|exp)|xgkick|xtop|xitop|floatBitsTo(?:Uint|Int)|(?:uint|int)BitsToFloat)\\s*(?=\\()",
+            "captures": {
+                "1": { "name": "support.function.builtin.vusl" }
+            }
+        },
+        "functions": {
+            "match": "\\b([A-Za-z_]\\w*)\\s*(?=\\()",
+            "captures": {
+                "1": { "name": "entity.name.function.vusl" }
+            }
+        },
+        "literals": {
+            "patterns": [
+                { "name": "constant.language.boolean.vusl", "match": "\\b(?:true|false)\\b" },
+                { "name": "constant.numeric.hex.vusl", "match": "\\b0[xX][0-9A-Fa-f]+\\b" },
+                { "name": "constant.numeric.binary.vusl", "match": "\\b0[bB][01]+\\b" },
+                {
+                    "name": "constant.numeric.float.vusl",
+                    "match": "(?<![\\w.])(?:\\d+\\.\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?[fF]?\\b|(?<![\\w.])\\d+[eE][-+]?\\d+[fF]?\\b"
+                },
+                { "name": "constant.numeric.integer.vusl", "match": "(?<![\\w.])\\d+\\b" }
+            ]
+        },
+        "swizzles": {
+            "match": "(?<=\\.)[xyzw]{1,4}\\b",
+            "name": "variable.other.property.swizzle.vusl"
+        },
+        "names": {
+            "patterns": [
+                { "name": "variable.other.constant.vusl", "match": "\\bk[A-Z]\\w*\\b" },
+                { "name": "entity.name.type.vusl", "match": "\\b[A-Z]\\w*\\b" }
+            ]
+        },
+        "operators": {
+            "patterns": [
+                { "name": "keyword.operator.increment.vusl", "match": "\\+\\+|--" },
+                { "name": "keyword.operator.comparison.vusl", "match": "==|!=|<=|>=|<|>" },
+                { "name": "keyword.operator.logical.vusl", "match": "&&|\\|\\||!" },
+                { "name": "keyword.operator.assignment.compound.vusl", "match": "[-+*/]=" },
+                { "name": "keyword.operator.assignment.vusl", "match": "=" },
+                { "name": "keyword.operator.arithmetic.vusl", "match": "[-+*/]" },
+                { "name": "keyword.operator.range.vusl", "match": ":" }
+            ]
+        }
+    }
+}

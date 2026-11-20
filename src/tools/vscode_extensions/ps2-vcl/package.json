@@ -1,7 +1,7 @@
 {
     "name": "ps2-vcl",
-    "displayName": "PS2 VCL/VU Assembly",
-    "description": "Syntax highlighting for PlayStation 2 VU microprograms written in VCL (with oxide-vcl's preprocessor directives), their shared .i includes, and raw VU assembly (.vsm).",
+    "displayName": "PS2 VCL, VUSL and VU Assembly",
+    "description": "Syntax highlighting for PlayStation 2 VU microprograms: VUSL sources (.vusl) and their includes (.vush), VCL (with oxide-vcl's preprocessor directives) and its shared .i includes, and raw VU assembly (.vsm).",
     "version": "0.1.0",
     "publisher": "PS2_QUAKE",
     "engines": {
@@ -26,6 +26,18 @@
                     "**/vu1progs/*.i"
                 ],
                 "configuration": "./language-configuration.json"
+            },
+            {
+                "id": "vusl",
+                "aliases": [
+                    "VUSL",
+                    "VU Shading Language"
+                ],
+                "extensions": [
+                    ".vusl",
+                    ".vush"
+                ],
+                "configuration": "./vusl-language-configuration.json"
             }
         ],
         "grammars": [
@@ -33,6 +45,11 @@
                 "language": "ps2-vcl",
                 "scopeName": "source.vcl.ps2",
                 "path": "./syntaxes/vcl.tmLanguage.json"
+            },
+            {
+                "language": "vusl",
+                "scopeName": "source.vusl",
+                "path": "./syntaxes/vusl.tmLanguage.json"
             }
         ]
     }

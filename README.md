@@ -702,8 +702,9 @@ The microprograms are compiled by `oxide-vusl`, which turns VUSL into VCL and ha
 [oxide-vcl](https://github.com/glampert/oxide-vcl) in its oxide mode with every optimization,
 and assembled by `dvp-as`. Each program's memory is plain structs bound to `main`'s parameters,
 and the compiler writes a C++ header of them beside the listing (`build/vu/<name>.vusl.h`):
-[vu1.h](src/ps2/renderer/vu1.h) takes its VU addresses and batch limits from it and checks its
-own structs against it, so the two sides of a layout cannot drift apart. oxide-vcl's scheduler
+[vu1.h](src/ps2/renderer/vu1.h) takes its VU addresses, batch limits and constant blocks from
+it, and checks its two vertex formats against it, so the two sides of a layout cannot drift
+apart. oxide-vcl's scheduler
 pipelines the particle loop and gives the triangle loop one copy per colour mode and vertex
 format (*unswitching*), so each copy runs from the input loads to the output stores without a
 test in between. Measured on a console over the two demos' gameplay frames, against the

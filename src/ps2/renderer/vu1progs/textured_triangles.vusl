@@ -17,10 +17,10 @@
 // DrawVertex batch.
 struct Lights
 {
-    vec4 x;  vec4 y;  vec4 z;
-    vec4 negDiv0;  vec4 negDiv1;  vec4 negDiv2;  vec4 negDiv3;   // -colour / radius^2
-    vec4 colour0;  vec4 colour1;  vec4 colour2;  vec4 colour3;
-    vec4 clamp;                                                  // the GS byte range, w the alpha
+    vec4 posX;  vec4 posY;  vec4 posZ;   // the four lights' positions, one light per lane
+    vec4 negColorDivR2[4];               // -colour / radius^2
+    vec4 color[4];
+    vec4 clamp;                          // the GS byte range, w the alpha
 };
 
 // The same block for a keyframe batch: the lerp constants, with the cull
@@ -30,7 +30,7 @@ struct Lerp
     vec4 front;
     vec4 back;
     vec4 shadeLight;
-    vec4 stScale;
+    vec4 cullStScale;
 };
 
 // The turbulence constants at 1022.
@@ -162,14 +162,14 @@ void drawCorner(in Frame frame, in Lights lights, in DrawVertex vertex, int16 co
 
     if (colorMode != 0)
     {
-        vec4 lx = lights.x - pos.x;
-        vec4 ly = lights.y - pos.y;
-        vec4 lz = lights.z - pos.z;
+        vec4 lx = lights.posX - pos.x;
+        vec4 ly = lights.posY - pos.y;
+        vec4 lz = lights.posZ - pos.z;
         vec4 dist = lx * lx + ly * ly + lz * lz;
-        col.xyz = col.xyz + max(lights.negDiv0.xyz * dist.x + lights.colour0.xyz, 0.0);
-        col.xyz = col.xyz + max(lights.negDiv1.xyz * dist.y + lights.colour1.xyz, 0.0);
-        col.xyz = col.xyz + max(lights.negDiv2.xyz * dist.z + lights.colour2.xyz, 0.0);
-        col.xyz = col.xyz + max(lights.negDiv3.xyz * dist.w + lights.colour3.xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negColorDivR2[0].xyz * dist.x + lights.color[0].xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negColorDivR2[1].xyz * dist.y + lights.color[1].xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negColorDivR2[2].xyz * dist.z + lights.color[2].xyz, 0.0);
+        col.xyz = col.xyz + max(lights.negColorDivR2[3].xyz * dist.w + lights.color[3].xyz, 0.0);
         col.xyz = min(col.xyz, lights.clamp.xyz);
     }
 
@@ -185,7 +185,7 @@ void keyCorner(in Frame frame, in Lerp lerp, in KeyVertex vertex,
     vec4 cur = itof0(vertex.cur);
     vec4 old = itof0(vertex.old);
     stq = vertex.attr;
-    stq.yz = stq.yz * lerp.stScale.yz;
+    stq.yz = stq.yz * lerp.cullStScale.yz;
     col.xyz = clamp(lerp.shadeLight.xyz * old.w, 0.0, frame.colorClamp.xyz);
     col.w = lerp.shadeLight.w;
     vec4 lerped = lerp.front * cur + lerp.back * old;
@@ -478,7 +478,7 @@ void main(layout(address = 0) uniform Frame frame,
             eye.xy = pos0.xy;
             eye.z = pos0.w;
             float area = dot(cross(edge1.xyz, edge2.xyz), eye);
-            int16 cull = sign(area * lerp.stScale.x);
+            int16 cull = sign(area * lerp.cullStScale.x);
             emitTriangle(cursor, frame, pos0, stq0, col0, pos1, stq1, col1, pos2, stq2, col2,
                          colorMode, outside);
 

@@ -13,7 +13,7 @@
 
 struct Particle
 {
-    uint32 color;
+    uint32 rgba;
     vec3   pos;
 };
 
@@ -77,7 +77,7 @@ void main(layout(address = 0) uniform Frame frame,
         vec3 w1     = w0 + quadOffset * k;
         int16 flag  = adc(j);
 
-        s.color = p.color;
+        s.color = p.rgba;
         s.q     = q;
         s.reg   = 1;
         s.uv0   = batch.uv0;

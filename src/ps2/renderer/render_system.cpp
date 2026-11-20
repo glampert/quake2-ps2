@@ -1010,11 +1010,11 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
     constants->gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
                               depthOffset, vu1::kVuClipDistScale };
-    // .xyz is the constant guard band scale; .w is the turbulent animation phase, which only
-    // a warped batch reads. See the note on vu1::kClipScale.
-    constants->clipScale   = vu1::kClipScale;
-    constants->clipScale.w = s_warpPhaseTurns;
-    constants->colorClamp  = vu1::kColorClamp;
+    // The constant guard band scale, then in its qword's spare lane the turbulent animation
+    // phase, which only a warped batch reads. See vu1::FrameConstants.
+    constants->clipScale  = vu1::kClipScale;
+    constants->warpPhase  = s_warpPhaseTurns;
+    constants->colorClamp = vu1::kColorClamp;
 
     AddUnpackData(vu1::kFrameConstantsAddr, constants, kFrameConstantsQwords, false);
 
@@ -1227,7 +1227,7 @@ void DrawLerpedTriangles(const math::Mat4 & mvp, const tex::Texture & texture,
     const vu1::LerpConstants lerp = {
         { frontv.x, frontv.y, frontv.z, 0.0f },
         { backv.x,  backv.y,  backv.z,  0.0f },
-        shadeLight,
+        { shadeLight.x, shadeLight.y, shadeLight.z, shadeLight.w },
         { CullSignFor(faceCull), stScaleS, stScaleT, 1.0f }
     };
 

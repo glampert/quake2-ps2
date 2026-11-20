@@ -244,42 +244,33 @@ constexpr float kVuClipShrink = 0.001f;
 // clipper walks twice per edge and five times per triangle.
 constexpr float kVuClipDistScale = 2048.0f * 2048.0f;
 
-// Values FrameConstants::clipScale and ::colorClamp are always set to. clipScale's .w is the
-// exception: no program reads it as part of the clip judgement, so the turbulent animation phase
-// rides there instead and BeginDrawChain fills it per frame (see rs::SetWarpAnimation).
-constexpr math::Vec4 kClipScale  = { kGuardBandScale, kGuardBandScale, 1.0f, 0.0f };
-constexpr math::Vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
+// The values FrameConstants::clipScale and ::colorClamp are always set to.
+constexpr vusl::vec3 kClipScale  = { kGuardBandScale, kGuardBandScale, 1.0f };
+constexpr vusl::vec4 kColorClamp = { 255.0f, 255.0f, 255.0f, 255.0f };
 
-// Unpacked to kFrameConstantsAddr when a draw opens its chain. Built in a span of the
-// command buffer itself rather than in a static the REF tag points at: once submission is one
-// kick per frame, a static would be rewritten by the next draw long before the DMAC had read it
-// for this one. It is the same bytes on the wire either way - the block was always REF'd.
-struct alignas(16) FrameConstants
-{
-    math::Mat4 mvp;
-    math::Vec4 gsScale;
-    math::Vec4 gsOffset;
+// frame.vush's Frame, unpacked to kFrameConstantsAddr when a draw opens its chain:
+//
+//   mvp         the row-major transform
+//   gsScale     the screen mapping's scale; .w is the clipper's plane shrink (kVuClipShrink)
+//   gsOffset    the screen mapping's offset; .w is the clipper's distance scale (kVuClipDistScale)
+//   clipScale   the guard band scale (kClipScale)
+//   warpPhase   the frame's turbulent animation phase, in turns, which only a warped batch reads.
+//               It rides in clipScale's spare lane rather than a ninth qword, because this block
+//               cannot grow without moving the double buffers (see rs::SetWarpAnimation).
+//   colorClamp  the ceiling a computed vertex color is clamped to before ftoi0 packs it into GS
+//               bytes. A frame constant rather than a batch one because it is the same 255 for
+//               everybody, and qword 7 was reserved anyway.
+//
+// Built in a span of the command buffer itself rather than in a static the REF tag points at:
+// once submission is one kick per frame, a static would be rewritten by the next draw long before
+// the DMAC had read it for this one. It is the same bytes on the wire either way - the block was
+// always REF'd.
+using FrameConstants = tri::Frame;
 
-    // .xyz is the guard band scale (kClipScale); .w is the frame's turbulent animation phase,
-    // in turns, which only a warped batch reads. A spare lane rather than a ninth qword
-    // because this block cannot grow without moving the double buffers.
-    math::Vec4 clipScale;
-
-    // The ceiling a computed vertex color is clamped to before ftoi0 packs it
-    // into GS bytes. A frame constant rather than a batch one because it is the
-    // same 255 for everybody, and qword 7 was reserved anyway.
-    math::Vec4 colorClamp;
-};
-// Exactly the 8 qwords below kDoubleBufferBase, so this block cannot grow again
-// without moving the buffers. Both programs include one frame.vush, so their Frame is one type.
+// Both programs include one frame.vush, so their Frame is one type. It is exactly the 8 qwords
+// below kDoubleBufferBase, so it cannot grow again without moving the buffers.
 static_assert(std::is_same_v<tri::Frame, prt::Frame>, "Both programs read one Frame");
-static_assert(sizeof(FrameConstants) == sizeof(tri::Frame) &&
-              offsetof(FrameConstants, gsScale) == offsetof(tri::Frame, gsScale) &&
-              offsetof(FrameConstants, gsOffset) == offsetof(tri::Frame, gsOffset) &&
-              offsetof(FrameConstants, clipScale) == offsetof(tri::Frame, clipScale) &&
-              offsetof(FrameConstants, clipScale) + 12 == offsetof(tri::Frame, warpPhase) &&
-              offsetof(FrameConstants, colorClamp) == offsetof(tri::Frame, colorClamp),
-              "FrameConstants must match frame.vush's Frame");
+static_assert(sizeof(FrameConstants::mvp) == sizeof(math::Mat4), "The transform is copied in from a math::Mat4");
 static_assert(QwordsOf(sizeof(FrameConstants)) == kDoubleBufferBase - kFrameConstantsAddr,
               "The frame constants fill the qwords below the double buffers");
 
@@ -369,6 +360,11 @@ constexpr u64 kVertexRegList = (u64(GIF_REG_ST)   << 0) |
 // programs that raw-copy a packed colour, and through an explicit store into the ST qword for
 // the ones that compute their colour. So a producer with no lightmap coordinates to park here
 // simply leaves both alone.
+//
+// Unlike the blocks below, this is not an alias of the program's struct. The program reads each
+// qword as one vec4 (DrawVertex's pos and stq), lanes it gives no names of their own, and naming
+// them in the .vusl would split each read into lanes. So the host names them here, and the
+// asserts below pin them to the program's qwords.
 struct alignas(16) DrawVertex
 {
     math::Vec3 position;   // model space
@@ -417,7 +413,7 @@ Q_ALWAYS_INLINE void CopyDrawVertex(DrawVertex & dst, const DrawVertex & src)
 // A warped batch is an ordinary DrawVertex batch with BatchWarp::On in its header - same layout,
 // same chunk emitter, same chain budget. What it adds is what the warp block reads: the parameter
 // qword carries this batch's texture size and scroll (AddBatchChunk fills it),
-// FrameConstants::clipScale.w the frame's phase, and the block below the shape of the sine itself.
+// FrameConstants::warpPhase the frame's phase, and the block below the shape of the sine itself.
 
 // ref_gl's r_turbsin amplitude (gl_warp.c, values in warpsin.h): 8*sin(i*2pi/256), halved once at
 // startup by R_Init, so the effective amplitude is 4 texels. Folded into the polynomial terms
@@ -449,18 +445,16 @@ constexpr float kTurbPoly7 = -kTurbSinAmplitude * (kTurbTau * kTurbTau * kTurbTa
 // VU data address of the warp constant block: the last two qwords of VU1 data memory.
 constexpr int kWarpConstBlockAddr = static_cast<int>(tri::kWarpAddress);
 
-// The warp constants as the microprogram reads them. Uploaded once by Init and never rewritten -
-// everything here is a compile-time constant; what varies per frame or per batch travels in
-// FrameConstants::clipScale.w and the batch header.
-struct alignas(16) WarpConstants
-{
-    math::Vec4 fold; // (phase bias, 0.5, turns per texel, unused)
-    math::Vec4 poly; // the four odd sine terms, amplitude folded in
-};
-static_assert(sizeof(WarpConstants) == sizeof(tri::Warp) &&
-              offsetof(WarpConstants, poly) == offsetof(tri::Warp, poly),
-              "WarpConstants must match the program's Warp");
-static_assert(kWarpConstBlockAddr + 2 == 1024, "Warp constants must be the last two qwords of VU1 data memory");
+// The warp constants, the program's Warp:
+//
+//   fold  (phase bias, 0.5, turns per texel, unused)
+//   poly  the four odd sine terms, amplitude folded in
+//
+// Uploaded once by Init and never rewritten - everything here is a compile-time constant; what
+// varies per frame or per batch travels in FrameConstants::warpPhase and the batch header.
+using WarpConstants = tri::Warp;
+static_assert(kWarpConstBlockAddr + QwordsOf(sizeof(WarpConstants)) == 1024,
+              "Warp constants must be the last two qwords of VU1 data memory");
 
 constexpr WarpConstants kWarpConstants = {
     { kTurbPhaseBias, 0.5f, kTurbTurnsPerTexel, 0.0f },
@@ -510,18 +504,13 @@ static_assert((kMaxLerpVertsPerBatch % 2) == 0, "Lerp chunk position slices must
 // lights, and every draw uploads one block or the other, so the two never need to coexist.
 constexpr int kLerpBlockAddr = static_cast<int>(tri::kLerpAddress);
 
-struct alignas(16) LerpConstants
-{
-    math::Vec4 frontv;      // current frame scale * (1 - backlerp); .w 0, which rides through the lerp
-    math::Vec4 backv;       // old frame scale * backlerp; .w 0
-    math::Vec4 shadeLight;  // the entity's light over 128 (it meets a quantized shade), alpha in .w
-    math::Vec4 cullStScale; // .x the backface cull sign (rs::CullSignFor), .yz the skin's ST scale
-};
-static_assert(sizeof(LerpConstants) == sizeof(tri::Lerp) &&
-              offsetof(LerpConstants, backv) == offsetof(tri::Lerp, back) &&
-              offsetof(LerpConstants, shadeLight) == offsetof(tri::Lerp, shadeLight) &&
-              offsetof(LerpConstants, cullStScale) == offsetof(tri::Lerp, stScale),
-              "LerpConstants must match the program's Lerp");
+// The program's Lerp:
+//
+//   front        current frame scale * (1 - backlerp); .w 0, which rides through the lerp
+//   back         old frame scale * backlerp; .w 0
+//   shadeLight   the entity's light over 128 (it meets a quantized shade), alpha in .w
+//   cullStScale  .x the backface cull sign (rs::CullSignFor), .yz the skin's ST scale
+using LerpConstants = tri::Lerp;
 
 // The two keyframes' quantized positions of one vertex, interleaved: the current frame's
 // dtrivertx_t bytes then the old frame's, copied verbatim from the MD2 frame data (the VIF widens
@@ -553,7 +542,9 @@ static_assert((sizeof(LerpPosChunk) % 16) == 0, "LerpPosChunk must be a whole nu
 //
 // This is mod::AliasVertex (see model.h): the loader bakes a model's attributes in exactly this
 // shape, so they go to the DMA where they lie rather than being gathered first. Lane 0 is
-// whatever the source left there and the microprogram never reads it.
+// whatever the source left there and the microprogram never reads it. The program reads the qword
+// whole, as KeyVertex::attr, so the lanes are named here rather than in the .vusl (see
+// DrawVertex).
 struct alignas(16) LerpDrawAttrib
 {
     u32 index;     // the source's own business; the microprogram does not read it
@@ -613,19 +604,15 @@ constexpr u64 kParticleRegList = (u64(GIF_REG_AD)   <<  0) |
                                  (u64(GIF_REG_UV)   << 12) |
                                  (u64(GIF_REG_XYZ2) << 16);
 
-// One particle billboard, 1 qword. The packed color must sit in the first word
-// for the same reason DrawVertex's does: the microprogram raw-copies it into an
-// A+D RGBAQ qword, and only word 0 is reachable that way. The position takes the
-// remaining three words and the microprogram reads it from .yzw.
-struct alignas(16) ParticleVertex
-{
-    u32   rgba;    // packed color, use PackColorRGBA()
-    float x, y, z; // world-space position of the billboard's anchor corner
-};
-static_assert(sizeof(ParticleVertex) == sizeof(prt::Particle), "ParticleVertex must be exactly 1 qword");
-static_assert(offsetof(ParticleVertex, rgba) == offsetof(prt::Particle, color) &&
-              offsetof(ParticleVertex, x) == offsetof(prt::Particle, pos),
-              "ParticleVertex must match the program's Particle: the colour in .x, the position in .yzw");
+// One particle billboard, 1 qword: the program's Particle.
+//
+//   rgba  packed color, use PackColorRGBA()
+//   pos   world-space position of the billboard's anchor corner
+//
+// The packed color must sit in the first word for the same reason DrawVertex's does: the
+// microprogram raw-copies it into an A+D RGBAQ qword, and only word 0 is reachable that way. The
+// position takes the remaining three words and the microprogram reads it from .yzw.
+using ParticleVertex = prt::Particle;
 
 // ------------------------------------------------------------------------------------------------
 // Dynamic point lights: BatchColorMode::Computed on a DrawVertex batch
@@ -670,26 +657,23 @@ struct DynamicLight
     float      radius; // world units; attenuation is zero beyond it.
 };
 
-// The light block as the microprogram reads it. Positions are transposed - all
-// four lights' X in one quadword, all four Y in the next - so one SIMD lane
-// carries one light and the whole four-light distance calculation is three
-// subtracts and three multiply-accumulates. That transposition is the whole
-// trick; see the light sum in textured_triangles.vusl's drawCorner.
-struct alignas(16) LightConstants
-{
-    math::Vec4 posX;
-    math::Vec4 posY;
-    math::Vec4 posZ;
-    math::Vec4 negColorDivR2[kMaxDynamicLights]; // -(color / radius^2), GS units
-    math::Vec4 color[kMaxDynamicLights];         // color, GS units
-    math::Vec4 clamp;                            // (255, 255, 255, 128)
-};
-static_assert(sizeof(LightConstants) == sizeof(tri::Lights) &&
-              offsetof(LightConstants, negColorDivR2) == offsetof(tri::Lights, negDiv0) &&
-              offsetof(LightConstants, color) == offsetof(tri::Lights, colour0) &&
-              offsetof(LightConstants, clamp) == offsetof(tri::Lights, clamp),
-              "LightConstants must match the program's Lights");
-static_assert(kLightBlockAddr + 12 == kWarpConstBlockAddr, "Light block must sit between the clip scratch and the warp constants");
+// The light block, the program's Lights:
+//
+//   posX, posY, posZ  the lights' positions, transposed
+//   negColorDivR2     -(color / radius^2), GS units
+//   color             color, GS units
+//   clamp             (255, 255, 255, 128)
+//
+// Positions are transposed - all four lights' X in one quadword, all four Y in the next - so one
+// SIMD lane carries one light and the whole four-light distance calculation is three subtracts
+// and three multiply-accumulates. That transposition is the whole trick; see the light sum in
+// textured_triangles.vusl's drawCorner.
+using LightConstants = tri::Lights;
+static_assert(sizeof(LightConstants::color) / sizeof(LightConstants::color[0]) == kMaxDynamicLights &&
+              sizeof(LightConstants::negColorDivR2) / sizeof(LightConstants::negColorDivR2[0]) == kMaxDynamicLights,
+              "The light block holds kMaxDynamicLights lights");
+static_assert(kLightBlockAddr + QwordsOf(sizeof(LightConstants)) == kWarpConstBlockAddr,
+              "Light block must sit between the clip scratch and the warp constants");
 static_assert(kLerpBlockAddr == kLightBlockAddr && sizeof(LerpConstants) <= sizeof(LightConstants),
               "A lerp draw's constants take the light block's place, and must fit in it");
 

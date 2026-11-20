@@ -24,9 +24,11 @@ and `.o`, and the header. There are two programs, `textured_triangles.vusl` and
   compare the `.vsm` mtime with the `.vusl`.
 - **The header is the binding.** vu1.h includes `<name>.vusl.h` and takes the programs' VU
   addresses, batch offsets and the particle ceiling (`kBatchMaxCount`, solved by the compiler
-  from the layout) from it, and static-asserts its own structs (FrameConstants, DrawVertex,
-  LightConstants, LerpConstants, WarpConstants, ParticleVertex) against the generated ones. A
-  layout changed in a `.vusl` fails the build there, not on screen. The C++ objects wait for
+  from the layout) from it. FrameConstants, LightConstants, LerpConstants, WarpConstants and
+  ParticleVertex are aliases of the generated structs, so the `.vusl` names their members.
+  DrawVertex and LerpDrawAttrib stay vu1.h's own, static-asserted against the generated ones:
+  the program reads each of their qwords as one vec4, whose lanes only the host names. A layout
+  changed in a `.vusl` fails the build there, not on screen. The C++ objects wait for
   the headers on a clean build (an order-only prerequisite), and `-MMD` tracks them after.
   vu1.cpp also asserts that both programs' `kInstructions` fit micro memory.
 - `--warnings-as-errors` covers the preprocessor and the compiler alike. The notes oxide-vusl

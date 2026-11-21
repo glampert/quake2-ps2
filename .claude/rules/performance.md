@@ -468,6 +468,20 @@ paths:
   rejected, because asm memory operands push register-promoted locals back to memory (+56%
   instructions in `DrawAliasMD2Entity`). The reasons are recorded in `vec_mat.h`'s header.
 - `__builtin_ctz/clz` are libgcc calls on the EE. A per-batch ctz cost TexChains +9%.
+- **GCC models the R5900 FPU as having no NaN or Inf**, so `-fno-math-errno` is already
+  implied: GCC 15.2 emits a bare `sqrt.s` for `sqrtf`/`std::sqrt`, `abs.s` for `fabsf`,
+  `min.s` for `fminf` and `rsqrt.s` for `1.0f / sqrtf(x)`, with or without the flag. (The
+  header of `math_c.h` says otherwise; it predates this check.)
+- **`-fno-signed-zeros` is the FP flag that pays** (in the Makefile's `EE_FPFLAGS` since
+  2026-11-21, with `-fno-math-errno -fno-trapping-math`). It turns every float clamp written
+  as compare-and-select into branchless `min.s`/`max.s`, and folds `x + 0.0f`. Release: 140
+  functions changed, -1065 instructions, -4.2 KB of text; that flag alone accounted for
+  -1050. `-fno-trapping-math` alone gave -69, `-fno-math-errno` +20 (rescheduling around
+  `atan2f`). The debug `ps2_perftest` A/B over the demo rows (`build/baselines/fpflags-*`):
+  EE work -0.49%, Particles -13.75% (the per-particle alpha clamp in `RenderParticles`:
+  0.198 → 0.171 µs per particle), EntCull -4.2%, ClScene -1.0%, View -0.5%, the rest within
+  ±0.4%. On hardware the gain should be larger: the removed branches were `bc1t` pairs with
+  `nop`s in their delay slots, and PCSX2 charges per instruction.
 
 ## What a PCSX2 capture can and can't show
 
@@ -502,6 +516,14 @@ paths:
   re-run, and if needed against a variant with HEAD's section sizes (`objdump -h`).
 - Quote per-item ratios (e.g. EntGeom per triangle), not the EE mean. Run-to-run spread on
   the EE mean is about ±2%.
+- **Any change to EE time per frame changes the demo's counts, not only its times.** Demo
+  playback advances `cl.time` by whole milliseconds of wall time, so a few µs more or less
+  of work moves some frames across a millisecond, which shifts particle lifetimes and entity
+  lerps. Two runs of one ELF match row for row (0 differing rows). A build that changed no
+  math, only adding a ~60 µs spin per frame, had a different `particles` count in 4052 of
+  7661 demo rows, and different `tris` in 467 (2026-11-21). The FP flags' A/B showed the same
+  (3987 and 235). Demo boundaries (`FLOG#map,4183`, `7913`) don't move. So changed counts
+  alone don't mean a change altered behaviour: compare per item.
 - PCSX2 timing ≠ hardware for I/O and FPU latency either.
 
 ## The first console capture (2026-10-10, debug build, USB)

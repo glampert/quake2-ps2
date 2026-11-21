@@ -27,7 +27,11 @@ The detail lives in four files this one points to. Read the one you need before 
 - Every launch overwrites `emulog.txt`. Copy it out before the next launch if you need it.
 - **`PCSX2 -batch` exits 30-90 s after the game quits.** The quit writes config.cfg, then
   restarts the EE, which emulog shows as `# Restart.` (only then, never at boot). A script can
-  close PCSX2 at that line.
+  close PCSX2 at that line, but must match it exactly (`grep -E '\] # Restart\.$'`): every
+  boot logs `# Restart Without Memory Clear.`, which a substring match takes for the quit.
+  A `ps2_perftest` series closed that way (2026-11-21) left `Mcd001.ps2` 8 KB different from
+  its backup, and `Mcd002.ps2` stamped at the same second, so back the card up before such
+  runs and restore it after.
 - **A `baseq2/pak0.pkz` (from `make pkz`) is loaded instead of `pak0.pak`.** The log says
   `Added packfile host:/baseq2/pak0.pkz (3307 files, compressed)`. To test the `.pak` path,
   move the pkz out of `baseq2/`. Don't leave a stale pkz behind after changing the pak.

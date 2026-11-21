@@ -340,6 +340,17 @@ EE_INCS += -I$(SRC_DIR)
 # The VU programs' generated headers (see VU_HEADERS), included by vu1.h by bare name.
 EE_INCS += -I$(BUILD_DIR)/vu
 
+# Floating-point semantics, for the engine C and the backend C++ alike. GCC already models
+# the EE FPU as having no NaN or Inf (sqrtf is a bare sqrt.s, fabsf an abs.s), so what is
+# left to give up is the sign of zero: -fno-signed-zeros lets GCC turn each float clamp
+# (x < lo ? lo : x) into a branchless min.s/max.s and fold x + 0.0f away. The perf test
+# measured Particles -13.7% (the per-particle alpha clamp) and EntCull -4.2%. The other two
+# are near no-ops kept for intent: -fno-math-errno is already implied, -fno-trapping-math
+# moves a few dozen instructions. The EE has no FP exceptions either way. Nothing may depend
+# on the sign of a zero result: x / -0.0f saturates to -FLT_MAX, x / 0.0f to +FLT_MAX.
+# Override with EE_FPFLAGS= (and a separate OUTPUT_DIR) for an A/B.
+EE_FPFLAGS ?= -fno-math-errno -fno-trapping-math -fno-signed-zeros
+
 # The C side of the build is now just id's C89 engine sources, the vendored
 # dlmalloc and the bin2c IRX blobs - everything of ours is C++. Under GCC 15
 # that C needs C89 forced, -fcommon restored, and the constructs GCC 14+
@@ -357,7 +368,7 @@ EE_CFLAGS += -std=gnu89 -fcommon -fno-strict-aliasing -fsingle-precision-constan
 	-Wno-implicit-function-declaration -Wno-missing-braces -Wno-int-conversion \
 	-Wno-pointer-sign -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast \
 	-Wno-unused-but-set-variable -Wno-unused-variable -Wno-unused-function \
-	-Wno-switch -MMD -MP
+	-Wno-switch $(EE_FPFLAGS) -MMD -MP
 
 # Strict, portable, warnings-as-errors for the new C++ backend (applies ONLY to
 # our .cpp - the untouched engine C above stays lenient). The set targets
@@ -383,7 +394,7 @@ EE_CXX_SYSINCS = -isystem $(PS2SDK)/ee/include -isystem $(PS2SDK)/common/include
 
 # Lean, embedded C++ for the new backend.
 EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
-	-fno-strict-aliasing $(COMMON_DEFS) \
+	-fno-strict-aliasing $(EE_FPFLAGS) $(COMMON_DEFS) \
 	$(EE_CXX_WARNFLAGS) $(EE_CXX_SYSINCS) \
 	-MMD -MP
 

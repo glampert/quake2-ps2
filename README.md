@@ -208,12 +208,16 @@ with `STRIP_ELF=0` to ship the unstripped ELF as `quake2.elf` instead.
 | `make clean` | Removes all build artifacts, every config. |
 | `make clean_vu` | Removes only the assembled VU microprograms (`build/vu/`). |
 
-To cut a release, [make_github_release.sh](src/tools/scripts/make_github_release.sh)
-`[-f] [-u] [version]` runs `make clean`, `make` and `make release`, then packages each
-config's `quake2.elf` with `LICENSE`, [RELEASE_NOTES.txt](misc/RELEASE_NOTES.txt) (its
-`@VERSION@` and `@COMMIT@` filled in, so it points to the exact source), an empty `baseq2/`
-tree and the committed `config.cfg` into `github_rel_<version>/` (one zip per config). `-u`
-adds `quake2_unstripped.elf`. `version` defaults to `VERSION` in `src/common/q_common.h`.
+To cut a release, [make_github_release.sh](src/tools/scripts/make_github_release.sh) `[-f] [-u]
+[version]` runs `make clean`, `make`, `make release`, `make BUILD=iso_debug` and `make
+BUILD=iso_release`, then packages each config's `quake2.elf` and its disc build (as
+`quake2_disc.elf`) with [make_iso.py](src/tools/scripts/make_iso.py), `LICENSE`,
+[RELEASE_NOTES.txt](misc/RELEASE_NOTES.txt) (its `@VERSION@` and `@COMMIT@` filled in, so it points
+to the exact source), an empty `baseq2/` tree and the committed `config.cfg` into
+`github_rel_<version>/` (one zip per config), so a player can make a disc image from their own
+`baseq2/` (`python3 make_iso.py --elf quake2_disc.elf --data baseq2 -o quake2.iso`). `-u` adds
+`quake2_unstripped.elf` and `quake2_disc_unstripped.elf`. `version` defaults to `VERSION` in
+`src/common/q_common.h`.
 
 The host tools and the assembled VU microprograms are config-independent (no EE compiler
 flag reaches either), so they are built once and shared, outside `build/<config>/`.

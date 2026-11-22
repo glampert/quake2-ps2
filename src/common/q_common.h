@@ -959,7 +959,7 @@ void Sys_SaveMenuDrawProblem(void);
 
 qboolean Sys_SaveTargetIsCard(void);     // Saves go to the memory card, not the boot drive.
 const char * Sys_SaveDeviceName(void);   // Where saves go: "memory card", "USB drive", "hard disk", "host files".
-const char * Sys_SaveDriveName(void);    // The boot drive's name: the Game menu's other save device.
+const char * Sys_SaveDriveName(void);    // The boot drive's name: the Game menu's other save device; NULL on a disc build.
 void Sys_SaveUseCard(qboolean card);     // The Game menu's save device: the card, or the boot drive.
 const char * Sys_SaveDeviceStatus(void); // Where saves go, or why they can't, for the menus.
 const char * Sys_SaveSwitchAdvice(void); // How to use the other device instead, for a failure's message box.

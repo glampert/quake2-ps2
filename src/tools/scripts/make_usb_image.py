@@ -8,7 +8,8 @@
 # The game loads a compressed pakN.pkz in place of pakN.pak (ps2/fs/pkz_pack.h), so of a pair only
 # the pkz is copied, or only the pak with --uncompressed-paks, for comparing the two on a console.
 # The unpacked baseq2/pak0 tree is redundant when pak0.pak or pak0.pkz is available, so that
-# directory is omitted in that case. Music includes only ADP tracks. No build is run by this script.
+# directory is omitted in that case. Music includes the ADP tracks, and a track's WAV only when it has
+# no ADP (the game plays the WAV then). No build is run by this script.
 #
 # This source code is released under the GNU GPL v2 license.
 # Check the accompanying LICENSE file for details.
@@ -19,8 +20,9 @@
 Image layout:
     quake2_debug.elf
     quake2_release.elf
-    baseq2/                   (working copy, including config.cfg; ADP music only; of a
-                               pakN.pak/pakN.pkz pair, the pkz unless --uncompressed-paks)
+    baseq2/                   (working copy, including config.cfg; ADP music, and the WAV of
+                               a track without one; of a pakN.pak/pakN.pkz pair, the pkz
+                               unless --uncompressed-paks)
 
 Run `make` and `make release` first. In PCSX2, select this .img as the USB Mass Storage
 Device backing image, then launch either ELF from uLaunchELF. Exit PCSX2 before replacing
@@ -91,8 +93,13 @@ def StageFiles(repoRoot, gameData, staging, uncompressedPaks=False):
         if directory == gameData:
             ignored.extend(name for name in names if name in omittedPacks)
         if directory == musicDirectory or musicDirectory in directory.parents:
+            # A track's .adp, or its .wav when it has no .adp: the game plays the .wav then.
+            lowerNames = {name.lower() for name in names}
+            def MusicFileWanted(name):
+                path = Path(name.lower())
+                return path.suffix == ".adp" or (path.suffix == ".wav" and path.stem + ".adp" not in lowerNames)
             ignored.extend(name for name in names
-                           if not (directory / name).is_dir() and Path(name).suffix.lower() != ".adp")
+                           if not (directory / name).is_dir() and not MusicFileWanted(name))
         return ignored
 
     shutil.copytree(gameData, staging / "baseq2", ignore=IgnoreSourceFiles)

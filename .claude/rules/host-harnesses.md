@@ -11,7 +11,7 @@ paths:
 
 Companion to [testing-pcsx2.md](testing-pcsx2.md). These check runtime logic only; `make`
 stays the compile check (ps2sdk headers shadow host libc++ ones, and the GCC-only warnings
-would be missed). The boot and log-file harnesses are in
+would be missed). The boot, log-file and disc device harnesses are in
 [testing-storage-boot.md](testing-storage-boot.md).
 
 - **Renderer sources:** in the scratchpad, make a `fakeinc/` with four headers and compile

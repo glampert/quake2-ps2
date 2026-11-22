@@ -60,3 +60,9 @@ jobs:
       # Reuses oxide-vcl, the VU microprograms and the host tools the debug build made.
       - name: Build release
         run: make release -j"$(nproc)"
+      # The disc builds (PS2_QUAKE_ISO), the ELFs alone: `make iso` would also make the disc
+      # image, out of game data that CI hasn't got.
+      - name: Build the disc builds
+        run: |
+          make BUILD=iso_debug -j"$(nproc)"
+          make BUILD=iso_release -j"$(nproc)"

@@ -37,8 +37,8 @@ int main(int argc, char ** argv)
     // is found, which can take seconds on a console. It stays up until the game's first frame.
     ps2::splash::Show();
 
-    // Locate the game data - host: first, HDD/PFS next, USB mass: last - before
-    // Qcommon_Init runs FS_InitFilesystem. On HDD/USB it sits next to the ELF,
+    // Locate the game data - host: first, HDD/PFS next, USB mass: last, or on a disc
+    // build the disc - before Qcommon_Init runs FS_InitFilesystem. On HDD/USB it sits next to the ELF,
     // whose directory (and HDD partition) comes from the path the
     // loader passes as argv[0]. A build with -DPS2_FS_BASE_PATH=\"...\" pins
     // the base path and skips the detection, for debugging.
@@ -50,8 +50,9 @@ int main(int argc, char ** argv)
 
     FS_SetDefaultBasePath(basePath);
 
-    // The log file goes next to baseq2/, and starts now so it covers all of Qcommon_Init.
-    ps2::debug::LogFileOpen(basePath);
+    // The log file goes next to baseq2/ (a disc build's to the emulator's host:, if any), and
+    // starts now so it covers all of Qcommon_Init.
+    ps2::debug::LogFileOpen(ps2::sys::DebugOutputBasePath(), basePath);
 
     Qcommon_Init(argc, argv);
 

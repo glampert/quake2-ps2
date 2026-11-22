@@ -8,6 +8,9 @@
 #    make release     -> optimized   -> build/release/quake2.elf
 #    make run         -> build + launch in PCSX2  (VSCode: F5)
 #    make release run -> the same, with the release build
+#    make iso         -> disc build (release) + build/iso_release/quake2.iso from baseq2/
+#    make iso_dbg     -> disc build (debug)   + build/iso_debug/quake2.iso
+#    make iso run     -> the same, then boot the image in PCSX2 (iso_dbg run likewise)
 #    make tools       -> build host tools (imgdump, unpak, bspinfo, musenc, pakzip) into build/tools/
 #    make music       -> encode baseq2/music/trackNN.wav into the trackNN.adp files the game streams
 #    make pkz         -> convert baseq2/pakN.pak into the compressed pakN.pkz the game prefers
@@ -27,24 +30,46 @@ PCSX2  ?= /Applications/PCSX2.app/Contents/MacOS/PCSX2
 #  Build configuration
 # ----------------------------------------------------------------------------
 #
-#  Picked by the `release` goal, or by BUILD= on the command line:
+#  Picked by the `release`, `iso` or `iso_dbg` goal, or by BUILD= on the command line:
 #
-#      make          -> debug   -O2, DWARF info, asserts and debug-only code IN
-#      make release  -> release -O3, no DWARF, asserts and debug-only code OUT
+#      make          -> debug       -O2, DWARF info, asserts and debug-only code IN
+#      make release  -> release     -O3, no DWARF, asserts and debug-only code OUT
+#      make iso      -> iso_release the release build, reading its data off a disc
+#      make iso_dbg  -> iso_debug   the debug build, the same
+#
+#  The disc builds (PS2_QUAKE_ISO=1) load the game data from the CD/DVD drive
+#  (ps2/fs/cdvd_device.h) - a disc image booted by Open PS2 Loader or PCSX2 -
+#  instead of host:, the HDD or USB, and save to the memory card only. Their
+#  goals also make the image, build/<config>/quake2.iso, from ISO_DATA (baseq2/
+#  by default) with src/tools/scripts/make_iso.py; `make BUILD=iso_release`
+#  builds the ELF alone. The repository has no game data to put on one.
 #
 #  Each config owns its object tree under build/<config>/, so alternating
-#  between the two neither mixes objects built with different flags nor forces
+#  between them neither mixes objects built with different flags nor forces
 #  a full rebuild.
 
-ifneq ($(filter release,$(MAKECMDGOALS)),)
+CONFIG_GOALS = $(filter release iso iso_dbg,$(MAKECMDGOALS))
+ifneq ($(word 2,$(CONFIG_GOALS)),)
+    $(error Pick one of release, iso and iso_dbg, not '$(CONFIG_GOALS)')
+endif
+
+ifeq ($(CONFIG_GOALS),release)
     BUILD := release
+else ifeq ($(CONFIG_GOALS),iso)
+    BUILD := iso_release
+else ifeq ($(CONFIG_GOALS),iso_dbg)
+    BUILD := iso_debug
 else
     BUILD ?= debug
 endif
 
-ifeq ($(filter $(BUILD),debug release),)
-    $(error BUILD must be 'debug' or 'release', got '$(BUILD)')
+ifeq ($(filter $(BUILD),debug release iso_debug iso_release),)
+    $(error BUILD must be 'debug', 'release', 'iso_debug' or 'iso_release', got '$(BUILD)')
 endif
+
+# 1 for the disc builds. RELEASE_FLAGS picks the optimized flags below for either kind of release.
+ISO_BUILD     = $(if $(filter iso_%,$(BUILD)),1,0)
+RELEASE_FLAGS = $(if $(filter release iso_release,$(BUILD)),1,0)
 
 # Strip the linked ELF - in BOTH configs, since the debug build is what gets
 # iterated on and DWARF dominates its size (7.7 MB -> 1.7 MB). Costs nothing at
@@ -143,6 +168,11 @@ PS2_CXX_SRC =                         \
 	ps2/builtin/conback.cpp           \
 	ps2/builtin/backtile.cpp          \
 	ps2/builtin/m_main_logo.cpp
+
+# The disc builds' game data device: a read-only ISO9660 file system over the CD/DVD drive.
+ifeq ($(ISO_BUILD),1)
+PS2_CXX_SRC += ps2/fs/cdvd_device.cpp
+endif
 
 # Doug Lea's allocator: vendored third-party C, left as C on purpose (see the
 # note at the top of dlmalloc.c). Everything else of ours is C++.
@@ -302,11 +332,17 @@ TOOLS_BINS = $(TOOLS_CXX_BINS) $(TOOLS_PY_BINS)
 # by ps2/system/iop_boot.cpp when the game data isn't on host:,
 # the USB keyboard driver started on demand by ps2/input/keyboard.cpp, and the
 # sound driver pair (libsd under audsrv) started by ps2/audio/audsrv_device.cpp.
+# A disc build reads its data through the IOP's own CD drivers (the boot ROM's, or OPL's) and has
+# no keyboard, so it carries only the sound driver pair.
 IRX_PATH  = $(PS2SDK)/iop/irx
+ifeq ($(ISO_BUILD),1)
+IRX_FILES = libsd.irx audsrv.irx
+else
 IRX_FILES = iomanX.irx fileXio.irx \
             ps2dev9.irx ps2atad.irx ps2hdd.irx ps2fs.irx \
             bdm.irx bdmfs_fatfs.irx usbd.irx usbmass_bd.irx \
             ps2kbd.irx libsd.irx audsrv.irx
+endif
 
 IRX_OBJS  = $(addprefix $(OUTPUT_DIR)/irx/, $(IRX_FILES:.irx=.o))
 
@@ -321,9 +357,10 @@ DEPS    = $(C_OBJS:.o=.d) $(CXX_OBJS:.o=.d) $(MINIZ_OBJS:.o=.d)
 # Makefile.eeglobal_cpp defaults them with ?= (to -O2 and -gdwarf-2 -gz), so
 # whatever is set here wins - including setting the debug info to empty.
 #
-# PS2_QUAKE_DEBUG, PS2_QUAKE_ASSERTS and PS2_QUAKE_PROFILE are always defined to 0 or 1,
-# never undefined.
-ifeq ($(BUILD),release)
+# PS2_QUAKE_DEBUG, PS2_QUAKE_ASSERTS, PS2_QUAKE_PROFILE and PS2_QUAKE_ISO are always defined
+# to 0 or 1, never undefined. PS2_QUAKE_ISO comes after CONFIG_DEFS, so a CONFIG_DEFS given on
+# the command line (performance.md's profiling builds) keeps it.
+ifeq ($(RELEASE_FLAGS),1)
     EE_OPTFLAGS     = -O3
     EE_DBGINFOFLAGS =
     CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=0 -DPS2_QUAKE_ASSERTS=0 -DPS2_QUAKE_PROFILE=0 -DNDEBUG
@@ -333,7 +370,7 @@ else
     CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=1 -DPS2_QUAKE_ASSERTS=1 -DPS2_QUAKE_PROFILE=1
 endif
 
-COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS)
+COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS) -DPS2_QUAKE_ISO=$(ISO_BUILD)
 
 EE_INCS += -I$(SRC_DIR)
 
@@ -404,16 +441,37 @@ EE_CXXFLAGS += -std=gnu++20 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
 # so leaving it on the line for both configs costs nothing.
 EE_LIBS += -lkernel -ldraw -lgraph -lpacket2 -ldma -lpad -lkbd -laudsrv -lpatches -lfileXio -lmc -leedebug
 
+# The disc builds read the drive through libcdvd. fileXio stays on the line: they call none of it,
+# so none of it is linked.
+ifeq ($(ISO_BUILD),1)
+EE_LIBS += -lcdvd
+endif
+
 # ----------------------------------------------------------------------------
 #  Rules
 # ----------------------------------------------------------------------------
 
-.PHONY: all release run tools host_tools music pkz clean clean_vu compiledb
+.PHONY: all release iso iso_dbg iso_image run tools host_tools music pkz clean clean_vu compiledb
 
 all: $(GAME_ELF) tools
 
-# `release` only selects the config (see BUILD above); the build itself is `all`.
+# `release` only selects the config (see BUILD above); the build itself is `all`. `iso` and
+# `iso_dbg` select a disc build, and make its image too.
 release: all
+iso iso_dbg: iso_image
+
+# The disc image of a disc build, from your own game data: make_iso.py picks what goes on it (the
+# pkz over its pak, the music's .adp tracks, no saves or logs) and copies it; ~0.5 s for 290 MB.
+# It runs on every make, as make can't see a change in ISO_DATA. ISO_FLAGS passes it more, e.g.
+# --uncompressed-paks.
+ISO_DATA  ?= baseq2
+ISO_FLAGS ?=
+ISO_IMAGE  = $(OUTPUT_DIR)/quake2.iso
+MAKE_ISO   = $(SCRIPTS_PATH)/make_iso.py
+
+iso_image: all
+	@test "$(ISO_BUILD)" = 1 || { echo "iso_image needs a disc build: make iso or make iso_dbg"; exit 1; }
+	python3 $(MAKE_ISO) --force --elf $(GAME_ELF) --data $(ISO_DATA) -o $(ISO_IMAGE) $(ISO_FLAGS)
 
 # Records which STRIP_ELF setting the current $(GAME_ELF) was made with. make
 # compares timestamps, not recipes, so without this a `make STRIP_ELF=0` over an
@@ -596,17 +654,28 @@ $(OUTPUT_DIR)/baseq2:
 	@mkdir -p $(dir $@)
 	ln -sfn $(abspath baseq2) $@
 
+# A disc build boots its image as a disc, the way PCSX2 boots any game. PCSX2 then serves host:
+# from the image's directory, where a disc build writes quake2.log, and the baseq2 link takes its
+# frame and I/O logs and screenshots to the repo's baseq2/, as on the other builds.
+ifeq ($(ISO_BUILD),1)
+run: iso_image $(OUTPUT_DIR)/baseq2
+	$(PCSX2) -batch -- $(abspath $(ISO_IMAGE))
+else
 run: all $(OUTPUT_DIR)/baseq2
 	$(PCSX2) -batch -elf $(abspath $(GAME_ELF))
+endif
 
 # Regenerate compile_commands.json so the editor's IntelliSense uses the exact
-# per-file compile flags. Run after adding/removing source files.
+# per-file compile flags. Run after adding/removing source files. The debug build's
+# lines, then the disc debug build's for the sources only it has (the generator keeps
+# the first line it sees for each source).
 compiledb:
-	@$(MAKE) -Bnk | python3 $(SCRIPTS_PATH)/gen_compile_commands.py
+	@{ $(MAKE) -Bnk BUILD=debug; $(MAKE) -Bnk BUILD=iso_debug; } | python3 $(SCRIPTS_PATH)/gen_compile_commands.py
 
-# Both configs, not just the selected one.
+# Every config, not just the selected one.
 clean:
-	rm -rf $(BUILD_DIR)/debug $(BUILD_DIR)/release $(BUILD_DIR)/vu $(BUILD_DIR)/tools
+	rm -rf $(BUILD_DIR)/debug $(BUILD_DIR)/release $(BUILD_DIR)/iso_debug $(BUILD_DIR)/iso_release \
+		$(BUILD_DIR)/vu $(BUILD_DIR)/tools
 
 clean_vu:
 	rm -rf $(BUILD_DIR)/vu

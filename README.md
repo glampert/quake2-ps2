@@ -155,6 +155,7 @@ again only when the submodule moves to a new commit.
 make            # debug build -> build/debug/quake2.elf (+ host tools)
 make release    # optimized   -> build/release/quake2.elf
 make run        # build, then launch it in PCSX2
+make iso        # disc build + disc image, see "From a disc image" below
 ```
 
 Header dependencies are tracked automatically (`-MMD`), so editing a header rebuilds only
@@ -163,8 +164,9 @@ the affected objects.
 [CI](.github/workflows/ps2.yml) runs `make` and `make release` on Linux for every push and pull
 request that changes more than the documentation, inside the ps2dev project's
 [`ps2sdk` container image](https://github.com/ps2dev/ps2sdk/pkgs/container/ps2sdk), pinned to
-one build of it. It checks that both configs compile and link, and keeps no ELF: releases are
-packaged from local builds, as described below.
+one build of it, and then builds the two disc builds' ELFs. It checks that every config
+compiles and links, and keeps no ELF: releases are packaged from local builds, as described
+below.
 
 #### Debug and release
 
@@ -180,6 +182,11 @@ neither mixes objects built with different flags nor forces a full rebuild. `rel
 just a config selector, so it composes: `make release run` builds and launches the release
 ELF. `BUILD=debug` / `BUILD=release` does the same thing from the command line.
 
+The disc builds are two more configs, `iso_release` and `iso_debug` (`make iso`, `make iso_dbg`,
+or `BUILD=iso_release` / `BUILD=iso_debug` for the ELF alone), with the release and debug flags
+and `PS2_QUAKE_ISO=1`, which every config defines to 0 or 1. See
+[From a disc image](#from-a-disc-image-open-ps2-loader-pcsx2).
+
 Both configs **strip** the linked ELF, which is mostly about the debug build — DWARF
 dominates its size, and stripping saves several MB of file size. Nothing is lost: the
 PS2 loader only reads program headers, and the full symbols stay next to it in
@@ -192,12 +199,13 @@ with `STRIP_ELF=0` to ship the unstripped ELF as `quake2.elf` instead.
 | --- | --- |
 | `make` / `make all` | Builds `build/debug/quake2.elf` and the host tools. |
 | `make release` | The same, optimized, into `build/release/quake2.elf`. |
-| `make run` | Builds, symlinks `build/<config>/baseq2` → `baseq2/`, and launches PCSX2 with the ELF. |
+| `make run` | Builds, symlinks `build/<config>/baseq2` → `baseq2/`, and launches PCSX2 with the ELF (a disc build: boots its image). |
+| `make iso` / `make iso_dbg` | Builds the release or debug disc build and makes its disc image, `build/iso_<config>/quake2.iso`, from `baseq2/` (`ISO_DATA=`, `ISO_FLAGS=`). |
 | `make tools` | Builds the host-side command line tools into `build/tools/` (see below). |
 | `make music` | Encodes every `baseq2/music/trackNN.wav` into the `trackNN.adp` file beside it, skipping up-to-date ones. |
 | `make pkz` | Converts every `baseq2/pakN.pak` into the compressed `pakN.pkz` beside it, skipping up-to-date ones. |
 | `make compiledb` | Regenerates `compile_commands.json` from the Makefile, for IntelliSense/clangd. Run after adding or removing source files. |
-| `make clean` | Removes all build artifacts, both configs. |
+| `make clean` | Removes all build artifacts, every config. |
 | `make clean_vu` | Removes only the assembled VU microprograms (`build/vu/`). |
 
 To cut a release, [make_github_release.sh](src/tools/scripts/make_github_release.sh)
@@ -430,6 +438,64 @@ attached), the launch folder on all of them before their roots, so the data need
 the first partition or drive. The folder can be up to 50 characters long, which keeps the
 game's paths within their 128-byte limit. A `baseq2/` at a volume's root is the fallback.
 
+#### From a disc image (Open PS2 Loader, PCSX2)
+
+A **disc build** reads its game data off a CD/DVD instead: in practice a disc image that
+[Open PS2 Loader](https://github.com/ps2homebrew/Open-PS2-Loader) (OPL) runs from a USB drive,
+the HDD or a network share, or that PCSX2 boots like any game. The repository ships no game
+data, so the image is made from your own:
+
+```sh
+make iso        # disc build (release) -> build/iso_release/quake2.elf + quake2.iso
+make iso_dbg    # disc build (debug)   -> build/iso_debug/quake2.elf + quake2.iso
+make iso run    # the same, then boot the image in PCSX2
+```
+
+The image comes from `baseq2/` (`ISO_DATA=` for another folder; `ISO_FLAGS=--uncompressed-paks`
+puts the `.pak` on it instead of the `.pkz`) through
+[make_iso.py](src/tools/scripts/make_iso.py), which also runs on its own:
+`make_iso.py --elf quake2.elf --data /path/to/baseq2 -o quake2.iso`. It is a small ISO9660
+writer in plain Python, so nothing needs installing, and it picks the files as the USB image
+script does: of a `pakN.pak`/`pakN.pkz` pair the pkz, the music's `.adp` tracks (a track's
+`.wav` only when it has no `.adp`, which the game then plays instead), the videos and the player
+skins, and none of what a run leaves behind (`save/`, screenshots, logs). With the `.pkz` and the
+whole soundtrack as `.adp` the image is about 290 MiB, a CD's worth; with it as 44.1 kHz `.wav`
+files, about 530 MiB. It refuses an ELF that isn't a disc build, which would look for its data on `host:`, the
+HDD and USB.
+
+The disc's `SYSTEM.CNF` boots `cdrom0:\Q2PS_319.00;1`: OPL takes the boot file's name as the
+game's ID, the key of its per-game settings, virtual memory card and cheats. Copy the image into
+OPL's `CD` folder (`DVD` for one over 700 MiB) on the USB drive, HDD or share. OPL wants the
+image in one piece on a USB drive, so a freshly formatted one is the easy way: on macOS,
+[format_usb_drive.sh](src/tools/scripts/format_usb_drive.sh) `[-i quake2.iso] diskN` erases a
+USB drive to FAT32 with 32 KB clusters, makes OPL's folders and copies the image in. It refuses
+any disk that isn't an external USB one, and asks you to type the disk's name first.
+
+What a disc build does differently:
+
+- **Its data comes off the disc**, through a read-only ISO9660 device of the game's own on top
+  of libcdvd's sector reads ([cdvd_device.h](src/ps2/fs/cdvd_device.h)), mounted as `cdrom0:`.
+  OPL swaps the IOP's CD drivers for its own, which answer those reads out of the image on its
+  drive, so the game can't tell an image from a disc. Names match whatever their case, any
+  number of files can be open, and nothing else of the game changes: the pkz, the background
+  loader and the music read the disc like any other drive.
+- **The boot resets the IOP once**, as a disc game does, and then loads no storage drivers at
+  all. OPL catches the reset and loads its own modules again, and only from that second reboot
+  on its virtual memory card and pad emulation. The ELF carries no HDD, USB or keyboard
+  drivers, which makes it about 210 KB smaller (172 KB more memory for levels).
+- **Saves go to the memory card only**, and the Game menu has no "save device" row. config.cfg
+  is the card's, and the disc's `baseq2/config.cfg` stands in for one the card hasn't got.
+- **No USB keyboard**: OPL running an image from USB has its own USB driver on the IOP, which a
+  second one would collide with.
+- **No log or screenshots on a console**, which have nowhere to go: a crash still shows on the
+  screen and goes to stdout. Under PCSX2 with the host filesystem on, `quake2.log` lands next to
+  the image and the frame and I/O logs and screenshots under `baseq2/` there (`make iso run`
+  links it to the repo's).
+
+PCSX2 emulates the drive's timing, so a level loads there at about a disc's pace: in a debug
+build base1 took 22.6 s and base2 12.0 s, against 6.1 s for base1 from `host:`, and much as a
+console's USB stick loads them (22.4 s for base1).
+
 ### Testing HDD or USB storage in PCSX2
 
 Set `HostFs = false` to exercise the console storage paths. The HDD settings are:
@@ -487,7 +553,8 @@ mass:/
 ```
 
 `baseq2/` copies the working directory, including the current `config.cfg`, players, saves
-and videos. Music includes only `.adp` tracks; `.wav` files are omitted. Of a `pakN.pak` and
+and videos. Music includes the `.adp` tracks, and a track's `.wav` only when it has no `.adp`
+(the game plays the `.wav` then). Of a `pakN.pak` and
 `pakN.pkz` pair only the `.pkz` is copied, since the game loads it in the pak's place;
 `--uncompressed-paks` copies the `.pak` instead, for comparing the two. The decompressed
 `baseq2/pak0/` directory is omitted when `baseq2/pak0.pak` or `pak0.pkz` exists. Only the
@@ -538,7 +605,7 @@ src/
   null/                           id's null driver stubs - none are built any more
   tools/
     host/                         host-side C++ command line tools (imgdump, unpak, bspinfo, musenc, pakzip)
-    scripts/                      Python helpers (symbolize, compile_commands.json generator, gen_save_tables - the save games' function/animation name tables) and make_github_release.sh
+    scripts/                      Python helpers (symbolize, compile_commands.json generator, gen_save_tables - the save games' function/animation name tables, make_usb_image and make_iso - test and disc images), make_github_release.sh and format_usb_drive.sh
       frame_log/                  frame-log capture analysis (summarize, compare, frame budget)
     oxide-vcl/                    VUSL and VCL compilers, for the VU microprograms (git submodule)
     miniz/                        deflate codec for the save games and the compressed packs (git submodule)
@@ -552,7 +619,7 @@ src/
     math/                         vector/matrix math for the renderer
     net/                          NET_* seam (loopback only)
     save/                         Sys_Save* seam: save working set, slot archives, memory card, boot drive, the save notice
-    fs/                           compressed game packs (pakN.pkz) for the engine's file system
+    fs/                           compressed game packs (pakN.pkz), the background loader, and the disc builds' CD/DVD device
     builtin/                      images baked into the ELF (font, palette, HUD tiles, id logo)
     debug/                        simple on-screen printing for fatal errors, stack trace, HW exception handling
     tests/                        standalone bring-up scenes and tests (test cube, cinematics, map cycle, save games, perf run)
@@ -937,6 +1004,16 @@ mostly reads, so the changes are all about reading less, less often:
   draw, never drawn as a placeholder; a missing one behaves as before). The design is
   [background-loading.md](misc/docs/plans/background-loading.md), and `ps2_testaio 1` is its
   self-test. Tag `Aio`.
+- **Disc builds** (`make iso`, `PS2_QUAKE_ISO`) read the game data off a CD/DVD, or the disc
+  image Open PS2 Loader serves in its place, through
+  [cdvd_device.cpp](src/ps2/fs/cdvd_device.cpp): the disc's ISO9660 directories are read into an
+  index at boot (7 KB, 75 ms in PCSX2), and the device is put in front of newlib's file calls as
+  `cdrom0:`, so `fopen`, `open`, `read`, `lseek` and `stat` reach it as they reach any drive.
+  It reads with libcdvd's `sceCdRead`, straight into the caller's memory when it is aligned for
+  DMA and through a 64 KB buffer otherwise, and sleeps on the drive in 1 ms steps rather than
+  spin in `sceCdSync(0)`, which would keep the threads below the reader off the CPU. Not the
+  SDK's `cdfs.irx` (4 open files, 16 KB per read) nor the ROM's `cdrom0:` (upper-case 8.3 names
+  with `;1`).
 - **Cinematics and demos stream through it** ([readahead_stream.h](src/ps2/fs/readahead_stream.h)).
   `FS_FOpenFile` on a `.cin` or `.dm2` whose source can be read by range (a pak, a stored pkz entry,
   a loose file) returns an unbuffered `fopencookie` stream over a ring of 32 KB slots, every slot a
@@ -994,7 +1071,7 @@ The engine and game still write id's save files through stdio, but not into
   the drive the game booted from instead, in `baseq2/save/` there
   ([drive.cpp](src/ps2/save/drive.cpp)): the USB drive (`usb`), the hard disk (`hdd`), or under
   PCSX2 the host filesystem (`host`). Every device holds the same archives, and loading reads
-  the selected device only.
+  the selected device only. A disc build saves to the card only, and has no "save device" row.
 
 Whenever the game reads or writes a save device - a save, the autosave of a level change, a
 load, the load and save menus listing their slots, the settings - it shows the notice PS2 games
@@ -1293,7 +1370,13 @@ against a release ELF you get function names from the symbol table but no file o
 
 **Build and project**
 
-- Package a ready-to-run **`.iso`/ELF release** so it can be tried without a toolchain.
+- Package a ready-to-run **ELF release** with the disc build in it, so it can be tried without a
+  toolchain (the disc image itself has to be made from the player's own data, with make_iso.py).
+- **Disc builds on hardware:** OPL from USB, the HDD and a share, with its virtual memory card
+  and pad emulation on (both load a ps2sdk SIO2MAN, which the ROM's PADMAN and MCMAN that the
+  game loads may not link against), and a burned disc on a console that boots one. On a real
+  drive every switch between the music's file and a level's reads is a seek: larger music reads
+  may be needed there.
 - Faster loads: lay a pack's data out in the order levels load it, so reads run forward
   through the pack (the HDD then serves more of them from its read-ahead, and small files on
   USB share commands); deflate a sample delta instead of raw PCM for sounds (about 71% of

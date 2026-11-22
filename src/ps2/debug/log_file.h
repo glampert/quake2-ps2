@@ -14,11 +14,13 @@
 
 namespace ps2::debug {
 
-// Points the log at "<basePath>/quake2.log". Called once, from main() as soon as the game data
-// has been found, so the log covers the whole of Qcommon_Init. The file is emptied by the first
-// line written to it, and a file that can't be created leaves the log off, with a warning on
-// stdout.
-void LogFileOpen(const char * basePath);
+// Points the log at "<logDir>/quake2.log", its header naming the game data's base path. Called
+// once, from main() as soon as the game data has been found, so the log covers the whole of
+// Qcommon_Init. logDir is ps2::sys::DebugOutputBasePath(): the game data's base, or on a disc
+// build the emulator's host: filesystem, or null for nowhere (a disc build on a console), which
+// leaves the log off. The file is emptied by the first line written to it, and a file that can't
+// be created leaves the log off, with a warning on stdout.
+void LogFileOpen(const char * logDir, const char * basePath);
 
 // Registers ps2_logfile, which turns the log off and on (from Sys_Init). Until then the log
 // follows the cvar's default.

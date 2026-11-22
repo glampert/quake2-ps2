@@ -5,7 +5,9 @@ paths:
 
 # CI (GitHub Actions)
 
-- **`ps2.yml`** runs `make`, then `make release`, on Linux inside the ps2dev project's
+- **`ps2.yml`** runs `make`, then `make release`, then the disc builds' ELFs
+  (`make BUILD=iso_debug`, `make BUILD=iso_release`: no image, as CI has no game data), on
+  Linux inside the ps2dev project's
   `ghcr.io/ps2dev/ps2sdk` image, for every push or PR that changes more than the docs or
   editor settings. So it also builds oxide-vusl (from `src/tools/oxide-vcl`, with cargo), the
   VU programs and their headers, and the host tools. It is a compile check and keeps no ELF: releases are packaged from local builds

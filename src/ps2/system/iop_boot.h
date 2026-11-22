@@ -34,10 +34,25 @@ namespace ps2::sys {
 // folder. A successful HDD mount stays live; missing HDD hardware falls back to USB.
 // Sys_Errors when no game data can be found anywhere.
 //
+// A disc build (PS2_QUAKE_ISO) looks nowhere else: it resets the IOP once, as a disc game does
+// (Open PS2 Loader reloads its own modules then), mounts the disc (fs/cdvd_device.h) and returns
+// "cdrom0:", or Sys_Errors when the disc can't be read or has no game data.
+//
 // Must run from main() BEFORE Qcommon_Init: FS_InitFilesystem opens pak files
 // during Qcommon_Init (before Sys_Init), and every driver started after this - sound,
 // pad, memory card, keyboard, see below - goes on top of the IOP it leaves.
 const char * DetectBasePathAndBootIop(const char * elfPath);
+
+// Where the files the game writes for its developer go - quake2.log, the frame and I/O logs,
+// screenshots, debug dumps: the game data's base path, as DetectBasePathAndBootIop returned it.
+// A disc build (PS2_QUAKE_ISO) can't write to its disc, so it writes them to the emulator's host:
+// filesystem when PCSX2 has one, and nowhere (null) on a console, where a crash still shows on
+// the screen and goes to stdout. Looked for once, at the first call, after the boot.
+const char * DebugOutputBasePath();
+
+// The game directory's counterpart: FS_Gamedir() ("<base>/baseq2", or a mod's), or on a disc
+// build the same directory under DebugOutputBasePath() ("host:/baseq2"). Null for nowhere.
+const char * DebugOutputGamedir();
 
 // Prints what DetectBasePathAndBootIop did, with times from main(): what the launcher
 // left running, whether the IOP was reset and why, each module reused or loaded and how

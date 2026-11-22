@@ -47,6 +47,10 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
 - `make` = debug (`-O2`, asserts on) → `build/debug/quake2.elf`. `make release` = `-O3`, no
   asserts, no debug-only code → `build/release/`. `make run` / `make release run` launch PCSX2.
   The symbols are in `quake2_unstripped.elf` next to each stripped ELF.
+- `make iso` / `make iso_dbg` are the disc builds (`PS2_QUAKE_ISO=1`, `build/iso_release/`,
+  `build/iso_debug/`): data off a CD/DVD image for Open PS2 Loader or PCSX2, saves to the card
+  only. They also make `quake2.iso` from `baseq2/` with `make_iso.py`; `make BUILD=iso_debug`
+  builds the ELF alone. Code that differs tests `#if PS2_QUAKE_ISO`.
 - The host tools (`src/tools/host`) are a CMake project, which `make` configures into
   `build/tools/cmake/` and builds on every run. CMake tracks their dependencies, so the
   Makefile doesn't.
@@ -98,11 +102,11 @@ recipe), record it in the matching rule file below, so it travels with the repo.
 | --- | --- | --- |
 | [testing-pcsx2.md](.claude/rules/testing-pcsx2.md) | always | PCSX2 setup and logs, scripting a session and its traps, built-in tests, the known TLB flake; points to the four below |
 | [testing-recipes.md](.claude/rules/testing-recipes.md) | `src/ps2/tests`, debug menu, menu.c | scripted screenshot sessions, driving menus without keys, building an older commit beside the tree |
-| [testing-storage-boot.md](.claude/rules/testing-storage-boot.md) | iop_boot, `src/ps2/fs`, log_file, make_usb_image.py | USB/HDD boot in PCSX2, launcher states, the loader test, boot and log harnesses |
+| [testing-storage-boot.md](.claude/rules/testing-storage-boot.md) | iop_boot, `src/ps2/fs`, log_file, make_usb_image.py, make_iso.py | USB/HDD boot in PCSX2, disc builds and images, launcher states, the loader test, boot, log and disc harnesses |
 | [crash-triage.md](.claude/rules/crash-triage.md) | `src/ps2/debug` | the pipeline hang report, VU1 dump forensics, the exception handler and testing it |
 | [host-harnesses.md](.claude/rules/host-harnesses.md) | renderer, input, fs, audio, math | fake-header recipes per subsystem, ASan tricks, seeded mutants |
 | [backend-cpp.md](.claude/rules/backend-cpp.md) | `src/ps2`, host tools | naming, types, file style, passing the strict `-Werror` set |
-| [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card |
+| [ps2-platform.md](.claude/rules/ps2-platform.md) | `src/ps2` | ps2sdk traps, EE FPU, SIF DMA, IOP modules, ROM FILEIO, memory card, libcdvd and OPL |
 | [gs-renderer.md](.claude/rules/gs-renderer.md) | `src/ps2/renderer` | GS/libdraw facts, frame model, CLUTs, VRAM blocks, mipmaps, ST scaling |
 | [vu-microprograms.md](.claude/rules/vu-microprograms.md) | VU sources | the oxide-vusl build and its generated headers, writing VUSL for these programs, dvp-as, VU0 inline asm, runtime probes |
 | [performance.md](.claude/rules/performance.md) | `src/ps2`, frame-log scripts | EE codegen facts, what PCSX2 can measure, capture/A-B/asm-test recipes |

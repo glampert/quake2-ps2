@@ -197,15 +197,19 @@ void WriteLocked(const char * text, const bool fatal = false)
 
 } // namespace
 
-void LogFileOpen(const char * basePath)
+void LogFileOpen(const char * logDir, const char * basePath)
 {
-    std::snprintf(s_path, sizeof(s_path), "%s/%s", basePath, kLogFileName);
-
     ee_sema_t sema = {};
     sema.init_count = 1;
     sema.max_count  = 1;
     s_lockSema = CreateSema(&sema);
 
+    if (logDir == nullptr)
+    {
+        std::printf("No log file: a disc build writes it only to the emulator's host filesystem.\n");
+        return;
+    }
+    std::snprintf(s_path, sizeof(s_path), "%s/%s", logDir, kLogFileName);
     s_state = State::Pending;
 
     std::snprintf(s_header, sizeof(s_header), "Quake II %s for PS2 (%s build), game data on %s\n",

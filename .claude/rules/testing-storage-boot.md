@@ -5,9 +5,10 @@ paths:
   - "src/ps2/debug/log_file.*"
   - "src/ps2/tests/aio_test.*"
   - "src/tools/scripts/make_usb_image.py"
+  - "src/tools/scripts/make_iso.py"
 ---
 
-# Testing the storage boot paths: USB, HDD, launchers, the background loader
+# Testing the storage boot paths: USB, HDD, disc images, launchers, the background loader
 
 Companion to [testing-pcsx2.md](testing-pcsx2.md). PCSX2 setup basics (HostFs, logging, the
 card) are there; the driver traps are in [ps2-platform.md](ps2-platform.md).
@@ -75,8 +76,9 @@ card) are there; the driver traps are in [ps2-platform.md](ps2-platform.md).
 - **Reusable test USB image:** `python3 src/tools/scripts/make_usb_image.py` packages the
   existing stripped debug/release ELFs at the volume root as `quake2_debug.elf` and
   `quake2_release.elf`, beside `baseq2/`; unstripped ELFs are omitted. It copies the working
-  data/config except `baseq2/pak0/` when `pak0.pak` is present, and includes only `.adp`
-  files under `baseq2/music/` (case-insensitive, including subdirectories). macOS `hdiutil`
+  data/config except `baseq2/pak0/` when `pak0.pak` is present, and includes the `.adp`
+  files under `baseq2/music/`, plus a track's `.wav` only when it has no `.adp` (since
+  2026-11-22, as make_iso.py does; case-insensitive, including subdirectories). macOS `hdiutil`
   produces an auto-sized writable MBR/FAT32 image with volume name `Q2PS2` at
   `build/quake2-usb.img`; `--output`, `--size-mib`, and `--force` override defaults.
   The initial full-data run produced an 832 MiB image: raw FAT32 verification checked all
@@ -117,6 +119,42 @@ card) are there; the driver traps are in [ps2-platform.md](ps2-platform.md).
   `close() == 0`, and iomanX returns the slot number (see ps2-platform.md). The fix was
   verified on emulated USB (uLaunchELF, `mass:quake2_debug.elf`): a full 1349-line
   `quake2.log` from boot to quit, and no logging warning in emulog.
+
+## Disc builds (`make iso`, `make iso_dbg`)
+
+- **In PCSX2:** `make iso_dbg run` builds the disc build, makes `build/iso_debug/quake2.iso` from
+  `baseq2/` and boots it (`PCSX2 -batch -- <iso>`, plus `-fastboot` for a script). PCSX2 points
+  `host:` at the image's directory, so `quake2.log` lands beside the image and the debug files
+  under its `baseq2` link. **A disc build saves and reads config.cfg on the card** (`Mcd001.ps2`):
+  back the card up before a run that loads a map, as for a console boot. The repo's
+  `baseq2/config.cfg` is only the disc's stand-in, read when the card has none.
+- **Scripting a session:** the card's config wins over the disc's, so put test cvars behind the
+  `Cbuf_AddText` hook in `Qcommon_Init` (testing-pcsx2.md), and rebuild the image (0.5 s).
+  `ps2_logfile` is off until set, so the log then starts at the hook, without its header.
+- **First runs (2026-11-22, debug, PCSX2, a 292 MiB image of the user's data):** the disc
+  mounted in 75 ms (81 files, 6 directories, a 7 KB index), game data at 150 ms after `main()`,
+  1720 KB of IOP memory free; idlog.cin, demo1 and the music played from the disc, the card
+  untouched by the attract loop. MapCycle from the disc, `ps2_logfile 1`: base1 22.6 s, base2
+  12.0 s, base3 12.6 s, train 11.0 s per load (6.1 s for base1 from host: in the 2026-10-11 pkz
+  run; 22.4 s on the console's USB stick), PCSX2 emulating the drive's timing. All 39 maps
+  loaded in 928 s, none timed out; worst moment 30.25 MB (city3), 0.15 MB under the 2026-10-29
+  normal debug cycle's 30.40, the smaller ELF; every level's autosave went to the card.
+  `ps2_testsaves 2` passed (0 failures), every step on the card, SaveData peak 274 KB as on
+  other builds. The release disc build ran the attract loop through both demos.
+- **The disc device's host harness** (2026-11-22): `cdvd_device.cpp` included against fake
+  `tamtypes.h`, `kernel.h` (a semaphore that checks it is held across every read), `delaythread.h`,
+  `libcdvd.h` (a `sceCdRead` that `fread`s sectors out of a real image and checks 64-byte
+  destinations, with busy and error answers on demand) and `ps2sdkapi.h` (the libcglue structs,
+  and a next table counting what reaches it). On the image make_iso.py made from baseq2/ it
+  compared all 80 files with their sources, whole, in odd chunks into odd addresses and by
+  random seeks (229,675 checks, 26,766 drive reads), plus every name spelling, misses, writes,
+  the 32-file limit and EIO after retries, under ASan/UBSan. It caught 5 of 5 seeded mutants
+  (the bounce buffer's range, the DMA alignment test, the version strip, the copy clamp, the
+  end-of-file clamp); the first hangs rather than fails, so run mutants under a time limit.
+- **Not yet tested:** OPL (from USB, the HDD, a share; VMC and PADEMU on), a burned disc, and
+  `ps2_perftest` on a disc build (music and level reads seeking on a real drive). OPL can be run
+  in PCSX2 as an ELF with the image in its `CD/` folder on the emulated USB stick (the Msd recipe
+  above).
 
 ## Launcher states without a launcher
 

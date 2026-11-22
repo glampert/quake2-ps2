@@ -16,7 +16,7 @@
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_system.h"
 #include "ps2/system/heap.h"
-#include "ps2/system/iop_boot.h" // SyncGameDataDevice
+#include "ps2/system/iop_boot.h" // SyncGameDataDevice, DebugOutputGamedir
 
 #include <cstdio>
 #include <cstring>
@@ -165,8 +165,16 @@ void ScreenshotCommand()
         return;
     }
 
+    // A disc build writes it to the emulator's host: filesystem, and has nowhere on a console.
+    const char * const gamedir = ps2::sys::DebugOutputGamedir();
+    if (gamedir == nullptr)
+    {
+        Com_Printf("screenshot: a disc build has nowhere to write one.\n");
+        return;
+    }
+
     char dir[MAX_OSPATH];
-    std::snprintf(dir, sizeof(dir), "%s/scrnshot", FS_Gamedir());
+    std::snprintf(dir, sizeof(dir), "%s/scrnshot", gamedir);
     Sys_Mkdir(dir);
 
     char path[MAX_OSPATH];

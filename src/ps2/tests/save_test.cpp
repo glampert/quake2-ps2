@@ -193,14 +193,21 @@ void RunSaveTest()
                 s_steps    = kLoadOnlySteps;
                 s_numSteps = ps2::ArrayLength(kLoadOnlySteps);
             }
-            const char * const drive = ps2::save::DeviceName(ps2::save::GetDriveDevice().Kind());
+#if PS2_QUAKE_ISO
+            // A disc build saves to the card only, so the steps meant for the boot drive go there.
+            const char * const drive    = "memory card, a disc build's only save device";
+            const bool         alsoCard = false;
+#else // PS2_QUAKE_ISO
+            const char * const drive    = ps2::save::DeviceName(ps2::save::GetDriveDevice().Kind());
+            const bool         alsoCard = withCard;
+#endif // PS2_QUAKE_ISO
             if (loadOnly)
             {
                 Com_Printf("SaveTest: starting (loading an earlier build's save from the %s)\n", drive);
             }
             else
             {
-                Com_Printf("SaveTest: starting (the %s%s)\n", drive, withCard ? " and the memory card" : "");
+                Com_Printf("SaveTest: starting (the %s%s)\n", drive, alsoCard ? " and the memory card" : "");
             }
         }
         if (now >= s_startAtMs)

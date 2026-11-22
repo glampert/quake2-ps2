@@ -269,3 +269,38 @@ paths:
   (`FIO_O_RDONLY` 1, `WRONLY` 2, create `0x200`), not newlib `O_*`. There is no `O_TRUNC`, so
   delete then create. At most 3 open handles.
 - The PS2 BIOS browser ignores the icon texture's alpha bit: transparent texels draw black.
+
+## CD/DVD and Open PS2 Loader (the disc builds, `fs/cdvd_device.cpp`)
+
+- **`sceCdSync(0)` spins** (`while (cbSema || sceSifCheckStatRpc(...));` in libcdvd's ncmd.c),
+  and with no time slicing on the EE that keeps every thread below the caller off the CPU for
+  the whole read. The device polls `sceCdSync(1)` with `DelayThread(1000)` between polls.
+- **`sceCdRead` doesn't wait for a command in flight:** it returns 0 when its `PollSema` on the
+  N-command semaphore fails, and also while `sceCdNCmdDiskReady()` says not ready. The device
+  holds its own semaphore across a read and retries a 0. `sceCdSearchFile` is the same.
+- libcdvd's `sceCdRead` writes back (and invalidates) the destination itself and copies an
+  unaligned head and tail through `_CdAlignReadBuffer`; the device still only lets DMA into
+  64-byte-aligned memory, and bounces the rest. `sceCdInit` binds its RPC in a loop, so it never
+  returns without CDVDFSV running; `sceCdGetDiskType` returns 0 (no disc) when its RPC fails.
+- **Why not ps2sdk's `cdfs.irx`:** at most 4 open files (`MAX_FILES_OPENED`) and 16 KB per read
+  (`MAX_BYTES_READ`), registered with the old ioman. **Why not the ROM's `cdrom0:`:** ISO9660
+  names as on the disc (upper case, `;1`). The device reads the directories itself and matches
+  case-insensitively, with or without the version.
+- **libcglue's path table** (`_libcglue_fdman_path_ops`, `ps2sdkapi.h`) is the hook: every
+  `open`/`stat`/`remove`/`mkdir` goes through it, `fileXioInit` swaps it, and its callbacks
+  return `-errno`. An open sets `info->ops` and `info->userdata`; `fstat` is `getfilename` +
+  the path `stat`, so `st_blksize` (64 KB on the disc, as on fileXio) comes from the device.
+- **PCSX2 booting an image** (`-- <iso>`) loads `cdrom0:\<BOOT2>;1` with the ROM's CDVDMAN and
+  CDVDFSV 1.01 among 24 boot modules (LOADFILE 1.1), sets `host:` to the image's directory
+  (`HLE Host: Set 'host:' root path to: ...`), and reports a 292 MiB image as a PS2 CD. The
+  reset to the ROM image keeps both CD drivers. It emulates the drive's timing.
+- **Open PS2 Loader** (its source, read 2026-11-22): it reads the image's `SYSTEM.CNF` and takes
+  BOOT2's file name, at most 11 characters, as the game ID (`GetStartupExecName`, supportbase.c).
+  Its EE core hooks `SifSetDma`: a reset packet from the game (any `SifIopReset`) becomes
+  `New_Reset_Iop`, which reboots the IOP with OPL's IOPRP (its CDVDMAN/CDVDFSV, which serve
+  sectors out of the image) plus the device driver (its own `usbd` "thpri=2,3" and
+  `usbmass_bd` for USB, SMAP/SMB for a share), and only from the second reboot on MCEMU (the
+  virtual memory card) and PADEMU. So a game must reset once. It loads ps2sdk's `freesio2` as
+  SIO2MAN only with VMC, PADEMU or MX4SIO on; the ROM PADMAN/MCMAN the game loads link only
+  against SIO2MAN 1.x (above), so those modes are untested and suspect. Its EE core lives below
+  0x100000, under the ELF.

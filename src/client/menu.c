@@ -2363,7 +2363,7 @@ void Game_MenuInit(void)
     // [PS2_QUAKE] 2026-09-29
     // Where saves and config.cfg go (ps2_savedevice): the memory card, or the drive the game
     // booted from - the USB drive, the hard disk, or the emulator's host files. Credits move
-    // down a row for it.
+    // down a row for it. A disc build has no drive to save to (a NULL name), and no row.
     save_device_names[1] = Sys_SaveDriveName();
 
     s_save_device_box.generic.type = MTYPE_SPINCONTROL;
@@ -2374,7 +2374,8 @@ void Game_MenuInit(void)
     s_save_device_box.itemnames = save_device_names;
     s_save_device_box.curvalue = Sys_SaveTargetIsCard() ? 0 : 1;
 
-    s_credits_action.generic.y = 80;
+    if (save_device_names[1]) // [PS2_QUAKE]
+        s_credits_action.generic.y = 80;
 
     Menu_AddItem(&s_game_menu, (void *)&s_easy_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_medium_game_action);
@@ -2382,7 +2383,8 @@ void Game_MenuInit(void)
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_load_game_action);
     Menu_AddItem(&s_game_menu, (void *)&s_save_game_action);
-    Menu_AddItem(&s_game_menu, (void *)&s_save_device_box); // [PS2_QUAKE]
+    if (save_device_names[1]) // [PS2_QUAKE]
+        Menu_AddItem(&s_game_menu, (void *)&s_save_device_box);
     Menu_AddItem(&s_game_menu, (void *)&s_blankline);
     Menu_AddItem(&s_game_menu, (void *)&s_credits_action);
 

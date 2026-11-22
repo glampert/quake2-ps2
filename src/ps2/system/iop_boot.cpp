@@ -28,6 +28,10 @@
  *  game's behaviour hung on whatever a launcher happened to leave. -DPS2_QUAKE_ALWAYS_RESET_IOP=0
  *  brings that boot back, for comparing the two on hardware.
  *
+ *  A disc build (PS2_QUAKE_ISO) has none of the storage half: it resets the IOP once and reads
+ *  its data off the disc through the IOP's own CD drivers (fs/cdvd_device.h), and carries only
+ *  the sound driver's modules. See BootAndFindGameData.
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
@@ -56,8 +60,15 @@
 #define NEWLIB_PORT_AWARE
 #include <fileXio_rpc.h>
 
-// IRX module images embedded by the Makefile's bin2c rule (IRX_FILES).
+#if PS2_QUAKE_ISO
+#include "ps2/fs/cdvd_device.h"
+#endif // PS2_QUAKE_ISO
+
+// IRX module images embedded by the Makefile's bin2c rule (IRX_FILES). A disc build carries only
+// the sound driver's: its data comes off the disc through the IOP's own CD drivers, and it has no
+// USB keyboard, whose usbd would collide with the one OPL runs to read a disc image off USB.
 extern "C" {
+#if !PS2_QUAKE_ISO
 extern unsigned char iomanX_irx[];
 extern unsigned int  size_iomanX_irx;
 extern unsigned char fileXio_irx[];
@@ -80,6 +91,7 @@ extern unsigned char usbmass_bd_irx[];
 extern unsigned int  size_usbmass_bd_irx;
 extern unsigned char ps2kbd_irx[];
 extern unsigned int  size_ps2kbd_irx;
+#endif // !PS2_QUAKE_ISO
 extern unsigned char libsd_irx[];
 extern unsigned int  size_libsd_irx;
 extern unsigned char audsrv_irx[];
@@ -167,6 +179,7 @@ struct IrxModule
     u32                  argsBytes;
 };
 
+#if !PS2_QUAKE_ISO
 const IrxModule kIomanX     = { "iomanX",      iomanX_irx,      &size_iomanX_irx,      nullptr,  0                };
 const IrxModule kFileXio    = { "fileXio",     fileXio_irx,     &size_fileXio_irx,     nullptr,  0                };
 const IrxModule kPs2Dev9    = { "ps2dev9",     ps2dev9_irx,     &size_ps2dev9_irx,     nullptr,  0                };
@@ -178,6 +191,7 @@ const IrxModule kBdmFsFatfs = { "bdmfs_fatfs", bdmfs_fatfs_irx, &size_bdmfs_fatf
 const IrxModule kUsbd       = { "usbd",        usbd_irx,        &size_usbd_irx,        nullptr,  0                };
 const IrxModule kUsbmassBd  = { "usbmass_bd",  usbmass_bd_irx,  &size_usbmass_bd_irx,  nullptr,  0                };
 const IrxModule kPs2Kbd     = { "ps2kbd",      ps2kbd_irx,      &size_ps2kbd_irx,      nullptr,  0                };
+#endif // !PS2_QUAKE_ISO
 const IrxModule kLibsd      = { "libsd",       libsd_irx,       &size_libsd_irx,       nullptr,  0                };
 const IrxModule kAudsrv     = { "audsrv",      audsrv_irx,      &size_audsrv_irx,      kAudsrvArgs, sizeof(kAudsrvArgs) };
 
@@ -372,10 +386,12 @@ constexpr int kReportBytes = 6144;
 static char s_report[kReportBytes];
 static int  s_reportUsed = 0;
 
+#if !PS2_QUAKE_ISO
 // The modules a bring-up step reused, started and failed to start, for a line each in the report.
 static char s_reusedModules[256];
 static char s_startedModules[512];
 static char s_failedModules[256];
+#endif // !PS2_QUAKE_ISO
 
 // One line of the report, "IOP boot: " and the text, printed at once as well.
 void ReportLine(const char * format, ...) Q_PRINTF_FUNC(1, 2);
@@ -449,6 +465,7 @@ void ReportResidentModules()
     ReportLine("libraries registered:%s.", (libraries[0] != '\0') ? libraries : " none of those looked for");
 }
 
+#if !PS2_QUAKE_ISO
 void ReportModules()
 {
     if (s_reusedModules[0] != '\0')
@@ -467,6 +484,7 @@ void ReportModules()
         s_failedModules[0] = '\0';
     }
 }
+#endif // !PS2_QUAKE_ISO
 
 // ------------------------------------------------------------------------------------------------
 // Game data location
@@ -476,6 +494,7 @@ void ReportModules()
 // the game loads in preference (fs/pkz_pack.h), or id's.
 constexpr const char * kProbeFiles[] = { "pak0.pkz", "pak0.pak" };
 
+#if !PS2_QUAKE_ISO
 // PCSX2 builds have differed on whether "host:/" is ELF-relative or host-absolute,
 // so the explicitly relative form is tried too.
 constexpr const char * kHostBasePaths[] = { "host:", "host:." };
@@ -546,6 +565,8 @@ static_assert(kFileXioBufferBytes >= kStockFileXioBufferBytes && kFileXioBufferB
 // See FileXioBufferBytes().
 static int s_fileXioBufferBytes = 0;
 
+#endif // !PS2_QUAKE_ISO
+
 bool CanOpen(const char * path)
 {
     std::FILE * file = std::fopen(path, "rb");
@@ -572,6 +593,7 @@ bool HasGameData(const char * basePath)
     return false;
 }
 
+#if !PS2_QUAKE_ISO
 // Retain the launch partition before the IOP reset discards the loader's PFS mount.
 // Both the ELF-loader form (hdd0:+Q2:pfs:/dir/quake2.elf) and the file-browser
 // form (hdd0:/+Q2/dir/quake2.elf) identify it. A bare pfsN: path cannot, so the
@@ -732,6 +754,8 @@ bool IsUsbVolumeMounted(const char * basePath)
     closedir(dir);
     return true;
 }
+#endif // !PS2_QUAKE_ISO
+
 
 // ------------------------------------------------------------------------------------------------
 // Starting modules
@@ -773,9 +797,11 @@ static DriverStart s_cardDriver     = DriverStart::NotTried;
 static DriverStart s_soundDriver    = DriverStart::NotTried;
 static DriverStart s_keyboardDriver = DriverStart::NotTried;
 
+#if !PS2_QUAKE_ISO
 // What the last module that wouldn't start answered, for the error that halts the boot.
 static int s_lastFailedId     = 0;
 static int s_lastFailedResult = 0;
+#endif // !PS2_QUAKE_ISO
 
 // Lets SifExecModuleBuffer load a module out of EE memory. The boot ROM's LOADFILE (1.x) has no
 // RPC for that and sbv patches one in; LOADFILE 2.x, which LoadExecPS2 launches leave running,
@@ -845,6 +871,7 @@ bool ExecModuleBuffer(const ModuleIdentity * identity, void * image, const u32 s
     return true;
 }
 
+#if !PS2_QUAKE_ISO
 enum class ModuleStart
 {
     Reused,
@@ -934,6 +961,7 @@ const char * FindResidentConflict()
     }
     return nullptr;
 }
+#endif // !PS2_QUAKE_ISO
 
 // See LargestFreeIopBlockBytes().
 int LargestFreeIopBlock()
@@ -991,7 +1019,9 @@ void ResetIop(const char * reason)
     s_cardDriver     = DriverStart::NotTried;
     s_soundDriver    = DriverStart::NotTried;
     s_keyboardDriver = DriverStart::NotTried;
+#if !PS2_QUAKE_ISO
     s_hddSyncDevice  = nullptr;
+#endif // !PS2_QUAKE_ISO
 
     ReportLine("the reset took %d ms, leaving %d modules.", Sys_Milliseconds() - startMsec, s_numResident);
 }
@@ -1134,16 +1164,23 @@ bool BringUpSoundDriver()
 }
 
 // ps2kbd speaks USB, so it needs usbd under it. A USB boot has usbd running already, and so may
-// the launcher; it starts here otherwise.
+// the launcher; it starts here otherwise. A disc build has no keyboard: OPL reading the disc image
+// off a USB drive runs its own usbd, which a second one would collide with.
 bool BringUpKeyboardDriver()
 {
+#if PS2_QUAKE_ISO
+    Com_Printf("USB keyboard: none on a disc build.\n");
+    return false;
+#else // PS2_QUAKE_ISO
     return StartLaterModule(kUsbd) && StartLaterModule(kPs2Kbd);
+#endif // PS2_QUAKE_ISO
 }
 
 // ------------------------------------------------------------------------------------------------
 // Storage bring-up
 // ------------------------------------------------------------------------------------------------
 
+#if !PS2_QUAKE_ISO
 const char * ProbeHddPartition(const char * partition, const char * folder)
 {
     const int startMsec = Sys_Milliseconds();
@@ -1393,6 +1430,8 @@ const char * BringUpStorage(const char * preferredPartition, const bool afterRes
     return nullptr;
 }
 
+#endif // !PS2_QUAKE_ISO
+
 // Ends the report with where the data is, when, and the IOP memory left.
 void ReportGameData(const char * basePath, const int freeIopBytes)
 {
@@ -1402,7 +1441,63 @@ void ReportGameData(const char * basePath, const int freeIopBytes)
 
 } // namespace
 
-const char * DetectBasePathAndBootIop(const char * elfPath)
+namespace {
+
+#if PS2_QUAKE_ISO
+
+const char * BootAndFindGameData(const char * elfPath)
+{
+    SifInitRpc(0);
+    TakeInventory();
+
+    const char * const launchedAs = (elfPath != nullptr && elfPath[0] != '\0') ? elfPath : "(no path from the loader)";
+    std::printf("IOP boot: disc build, reading the game data off the disc.\n");
+    ReportLine("launched as '%s'; the game data is on the disc.", launchedAs);
+
+    const ResidentModule * loadfile = FindResidentByName(kLoadfileName);
+    ReportLine("%d modules running at %d ms, LOADFILE %d.%d.", s_numResident, Sys_Milliseconds(),
+               (loadfile != nullptr) ? VersionMajor(loadfile->version) : 0,
+               (loadfile != nullptr) ? VersionMinor(loadfile->version) : 0);
+    ReportResidentModules();
+
+    // Once, as a disc game resets it with its own modules. The boot ROM's set has the CD drivers
+    // the disc is read through (CDVDMAN, CDVDFSV). Open PS2 Loader catches the reset and loads
+    // its own set again in its place, its CD drivers (which read the disc image) and the drive
+    // it reads it from among them, and from the second reboot on, this one, also its virtual
+    // memory card and pad emulation, when those are set for the game.
+    ResetIop("a disc build resets it once, as a disc game does");
+
+    const char * failure = nullptr;
+    if (!ps2::cdvd::Mount(&failure))
+    {
+        // Lines kept within the debug screen's 64 columns.
+        Sys_Error("No game data found!\n"
+                  "The disc couldn't be read: %s.\n"
+                  "Launched as: %s",
+                  failure, launchedAs);
+        return nullptr; // unreachable; Sys_Error halts
+    }
+    ReportLine("%s.", ps2::cdvd::MountSummary());
+
+    const char * const basePath = ps2::cdvd::kBasePath;
+    if (!HasGameData(basePath))
+    {
+        Sys_Error("No game data found!\n"
+                  "The disc has no baseq2/%s or baseq2/%s.\n"
+                  "Make the disc image with make_iso.py from a baseq2/\n"
+                  "holding the game's packs.\n"
+                  "Launched as: %s",
+                  kProbeFiles[0], kProbeFiles[1], launchedAs);
+        return nullptr; // unreachable; Sys_Error halts
+    }
+
+    ReportGameData(basePath, LargestFreeIopBlock());
+    return basePath;
+}
+
+#else // PS2_QUAKE_ISO
+
+const char * BootAndFindGameData(const char * elfPath)
 {
     s_hddSyncDevice = nullptr;
 
@@ -1528,6 +1623,82 @@ const char * DetectBasePathAndBootIop(const char * elfPath)
     return nullptr; // unreachable; Sys_Error halts
 }
 
+#endif // PS2_QUAKE_ISO
+
+// What DetectBasePathAndBootIop returned.
+static const char * s_gameDataBase = nullptr;
+
+} // namespace
+
+const char * DetectBasePathAndBootIop(const char * elfPath)
+{
+    s_gameDataBase = BootAndFindGameData(elfPath);
+    return s_gameDataBase;
+}
+
+namespace {
+
+#if PS2_QUAKE_ISO
+// The emulator's host: filesystem, if it answers: PCSX2 with HostFs on. Tried the way the host:
+// game data is looked for on other builds (kHostBasePaths), by opening its directory; on a console
+// there is no host: device, and the open fails at once.
+const char * FindHostOutput()
+{
+    constexpr const char * kHostBases[] = { "host:", "host:." };
+    for (const char * base : kHostBases)
+    {
+        if (DIR * dir = opendir(base))
+        {
+            closedir(dir);
+            return base;
+        }
+    }
+    return nullptr;
+}
+#endif // PS2_QUAKE_ISO
+
+} // namespace
+
+const char * DebugOutputBasePath()
+{
+#if PS2_QUAKE_ISO
+    static bool s_looked = false;
+    static const char * s_hostBase = nullptr;
+    if (!s_looked)
+    {
+        s_looked   = true;
+        s_hostBase = FindHostOutput();
+    }
+    return s_hostBase;
+#else // PS2_QUAKE_ISO
+    return s_gameDataBase;
+#endif // PS2_QUAKE_ISO
+}
+
+const char * DebugOutputGamedir()
+{
+#if PS2_QUAKE_ISO
+    const char * const base = DebugOutputBasePath();
+    if (base == nullptr)
+    {
+        return nullptr;
+    }
+
+    // "cdrom0:/baseq2" -> "host:/baseq2": the game directory's path under the game data's base.
+    const char * gamedir = FS_Gamedir();
+    const size_t dataBaseLength = std::strlen(ps2::cdvd::kBasePath);
+    if (std::strncmp(gamedir, ps2::cdvd::kBasePath, dataBaseLength) == 0)
+    {
+        gamedir += dataBaseLength;
+    }
+    static char s_gamedir[MAX_OSPATH];
+    std::snprintf(s_gamedir, sizeof(s_gamedir), "%s%s", base, gamedir);
+    return s_gamedir;
+#else // PS2_QUAKE_ISO
+    return FS_Gamedir();
+#endif // PS2_QUAKE_ISO
+}
+
 void PrintIopBootReport(void (*printer)(const char *, ...))
 {
     // A line at a time, as each line is its own message to whoever prints them.
@@ -1539,6 +1710,15 @@ void PrintIopBootReport(void (*printer)(const char *, ...))
         line += length + ((end != nullptr) ? 1 : 0);
     }
 }
+
+#if PS2_QUAKE_ISO
+
+// A disc build has neither the HDD nor fileXio.
+int SyncGameDataDevice() { return 0; }
+bool GameDataOnHdd() { return false; }
+int FileXioBufferBytes() { return 0; }
+
+#else // PS2_QUAKE_ISO
 
 int SyncGameDataDevice()
 {
@@ -1556,6 +1736,8 @@ int FileXioBufferBytes()
 {
     return s_fileXioBufferBytes;
 }
+
+#endif // PS2_QUAKE_ISO
 
 bool StartPadDriver()
 {

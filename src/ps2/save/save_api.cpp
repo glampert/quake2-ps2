@@ -21,6 +21,11 @@
  *  A save or a load that fails says why in a message box, with the way to the other device; the
  *  load and save menus say so over their slots when the device can't be used.
  *
+ *  A disc build (PS2_QUAKE_ISO) can't write to the drive it boots from, so it saves to the card
+ *  only, whatever ps2_savedevice says, and the Game menu has no save device row
+ *  (Sys_SaveDriveName returns null). Its config.cfg is the card's, and the disc's baseq2/config.cfg
+ *  stands in for one the card hasn't got.
+ *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */
 
@@ -69,6 +74,9 @@ bool HostFilesAvailable()
 
 Device & ActiveDevice()
 {
+#if PS2_QUAKE_ISO
+    return GetMemoryCardDevice();
+#endif // PS2_QUAKE_ISO
     Device & drive = GetDriveDevice();
     const bool toDrive = (s_saveDevice != nullptr) && Q_stricmp(s_saveDevice->string, DeviceValue(drive.Kind())) == 0;
     return toDrive ? drive : GetMemoryCardDevice();
@@ -179,6 +187,9 @@ const char * Reason()
 // How to carry on with the other device.
 const char * SwitchAdvice()
 {
+#if PS2_QUAKE_ISO
+    return "A disc game saves to the memory card in MEMORY CARD slot 1 only.";
+#endif // PS2_QUAKE_ISO
     static char s_advice[96];
     std::snprintf(s_advice, sizeof(s_advice), "To use the %s instead, change save device in the Game menu.",
                   DeviceName(OtherDevice(ActiveDevice()).Kind()));
@@ -494,6 +505,9 @@ void ReadDriveConfigOnce()
 // there, and not the game data's stand-in for a card without one.
 bool DriveConfigNamesDrive()
 {
+#if PS2_QUAKE_ISO
+    return false; // A disc build's config.cfg is the card's: the disc's is only a stand-in.
+#endif // PS2_QUAKE_ISO
     ReadDriveConfigOnce();
 
     char value[16];
@@ -601,9 +615,13 @@ void SaveInfoCommand()
     PrintEntries();
 
     Device & device = ActiveDevice();
+#if PS2_QUAKE_ISO
+    Com_Printf("Save device here: the %s only (a disc build).\n", DeviceName(device.Kind()));
+#else // PS2_QUAKE_ISO
     Device & other  = OtherDevice(device);
     Com_Printf("Save devices here: %s (ps2_savedevice \"%s\"), %s (\"%s\").\n", DeviceName(device.Kind()),
                DeviceValue(device.Kind()), DeviceName(other.Kind()), DeviceValue(other.Kind()));
+#endif // PS2_QUAKE_ISO
 
     // The listing is a read of the device, under the save notice like any other.
     ClearError();
@@ -834,6 +852,9 @@ const char * Sys_SaveDeviceName()
 
 const char * Sys_SaveDriveName()
 {
+#if PS2_QUAKE_ISO
+    return nullptr; // No drive to save to: the Game menu leaves its save device row out.
+#endif // PS2_QUAKE_ISO
     return DeviceName(GetDriveDevice().Kind());
 }
 

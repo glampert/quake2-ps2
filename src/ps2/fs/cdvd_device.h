@@ -16,7 +16,7 @@
  *        So here the disc's directories are read once, at the mount, into an index; names match
  *        without regard to case or a ";1"; any number of files can be open; and reads go
  *        straight into the caller's memory when it is aligned for DMA, through a 64 KB buffer
- *        otherwise. See README.md, "Disc images".
+ *        otherwise. See README.md, "From a disc image".
  *
  * This source code is released under the GNU GPL v2 license.
  * ================================================================================================ */

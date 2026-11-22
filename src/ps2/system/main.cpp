@@ -52,7 +52,7 @@ int main(int argc, char ** argv)
 
     // The log file goes next to baseq2/ (a disc build's to the emulator's host:, if any), and
     // starts now so it covers all of Qcommon_Init.
-    ps2::debug::LogFileOpen(ps2::sys::DebugOutputBasePath(), basePath);
+    ps2::debug::LogFileOpen(PS2_QUAKE_ISO ? ps2::sys::DebugOutputBasePath() : basePath, basePath);
 
     Qcommon_Init(argc, argv);
 

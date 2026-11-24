@@ -295,26 +295,18 @@ void warpCorners(in Frame frame, in Warp warp, in Batch batch, ref<Corner> corne
 float planeDistance(in Frame frame, vec4 pos, int16 plane)
 {
     vec3 jp = pos.xyz * frame.clipScale;
-    vec3 jn = -jp;
-    float d = 0.0 + pos.w;
-    d = d * frame.gsScale.w;
+    float d = pos.w * frame.gsScale.w;
     if (plane == 0)
-        d = d + jn.z;
+        d = d - jp.z;
     else if (plane == 1)
-        d = d + jn.x;
+        d = d - jp.x;
     else if (plane == 2)
         d = d + jp.x;
     else if (plane == 3)
-        d = d + jn.y;
+        d = d - jp.y;
     else
         d = d + jp.y;
     return d * frame.gsOffset.w;
-}
-
-// The sign of a distance, read through FTOI4 of it clamped to [-1, 1].
-int16 sign(float d)
-{
-    return int16(ftoi4(clamp(d, -1.0, 1.0)));
 }
 
 // One Sutherland-Hodgman pass over `corners` corners in `from` against
@@ -337,10 +329,9 @@ int16 clipPass(in Frame frame, int16 corners, ref<Corner> from, ref<Corner> to, 
             vec4 nxtCol = walk[1].col;
             float dCur = planeDistance(frame, curPos, plane);
             float dNxt = planeDistance(frame, nxtPos, plane);
-            int16 signCur = sign(dCur);
-            int16 signCut = sign(dCur * dNxt);
+            float cut = dCur * dNxt;
 
-            if (signCur >= 0)
+            if (dCur > -0.0625)
             {
                 cursor.pos = curPos;
                 cursor.stq = curStq;
@@ -348,7 +339,7 @@ int16 clipPass(in Frame frame, int16 corners, ref<Corner> from, ref<Corner> to, 
                 cursor += 1;
                 count++;
             }
-            if (signCut < 0)
+            if (cut <= -0.0625)
             {
                 float t = dCur / (dCur - dNxt);
                 cursor.pos = curPos + (nxtPos - curPos) * t;
@@ -389,9 +380,9 @@ void main(layout(address = 0) uniform Frame frame,
 {
     // The batch's modes, held for the whole batch: nothing in the loop
     // writes them, so oxide-vcl copies the loop per colour mode and vertex
-    // format, and the warp flag costs a register instead of a load. A -1.0
+    // format, and the warp flag costs a register instead of a load. A -1/16
     // held the same way would cost more than the LOI it saves: the cull and
-    // the clipper's signs make theirs where they need it.
+    // the clip passes' sign tests make theirs where they need it.
     int16 colorMode = batch.colorMode;
     bool warped = batch.warp != 0;
     int16 format = batch.format;
@@ -478,12 +469,12 @@ void main(layout(address = 0) uniform Frame frame,
             eye.xy = pos0.xy;
             eye.z = pos0.w;
             float area = dot(cross(edge1.xyz, edge2.xyz), eye);
-            int16 cull = sign(area * lerp.cullStScale.x);
+            float facing = area * lerp.cullStScale.x;
             emitTriangle(cursor, frame, pos0, stq0, col0, pos1, stq1, col1, pos2, stq2, col2,
                          colorMode, outside);
 
             slow = false;
-            if (cull >= 0)
+            if (facing > -0.0625)
             {
                 cursor += 3;
                 room -= 3;

@@ -46,9 +46,10 @@ and `.o`, and the header. There are two programs, `textured_triangles.vusl` and
 
 ## Writing VUSL for these programs
 
-Measured against the hand-written VCL these programs replaced (2026-11-20), on oxide-vcl's
+Measured against the hand-written VCL these programs replaced (2026-11-24), on oxide-vcl's
 test scenes for them (`crates/oxide-vcl/tests/support/scenes.rs`, run in its VU model): the
-packets are identical and the cycles 1.4% more over the triangle scenes, +0.9% for particles.
+packets are identical, and the triangle program takes 18% fewer cycles on the clipped floor,
+23% on the culled model and 15% on the model near the camera; particles takes 14% fewer.
 What moved the triangle program, each from its own A/B:
 
 - **Hold the batch's modes in locals before the loop**: `int16 colorMode`, `int16 format`,
@@ -60,10 +61,14 @@ What moved the triangle program, each from its own A/B:
   transform, and let the slow path take the output back (`cursor -= 3`). The stores fill the
   transform's empty slots. Branching to the fast path first cost the wall +54%.
 - **Leave the slow path's test a flag** set on each format's side, with one `if (slow)` after
-  them. `continue` out of the format sides stopped `unswitch` copying the loop per mode (1190
-  instructions instead of 1806), and the model scene lost 10%.
-- **Don't hoist a constant across the loop.** A `-1.0` held in a local for the clamps cost
-  the keyframe path 5%: one more VF register live across the loop. A literal costs a `loi`
+  them. `continue` out of the format sides stops `unswitch` copying the loop per mode, and
+  cost the model scene 10%. The slow path itself is shared by the copies.
+- **Test a sign with a float compare against -1/16.** `int16(ftoi4(clamp(d, -1, 1))) < 0` is
+  true exactly when `d <= -0.0625`; the compare reads the MAC flags in about 4 cycles, where
+  the clamp, FTOI4 and `mtir` chain takes about 17. The clip passes and the cull use it, with
+  the same packets, and the clipped floor took 15% fewer cycles.
+- **Don't hoist a constant across the loop.** A `-1.0` held in a local cost the keyframe path
+  5%: one more VF register live across the loop. A literal costs a `loi`
   where it is used.
 - **Open the first window through `batch.windows[0]`**, a constant offset from XTOP. Through
   the `window` ref, which lives in the work area, each of the seven tag stores reloaded it.

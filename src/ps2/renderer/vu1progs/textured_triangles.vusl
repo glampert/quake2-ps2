@@ -289,30 +289,41 @@ void warpCorners(in Frame frame, in Warp warp, in Batch batch, ref<Corner> corne
     corners[2].stq.yz = cut;
 }
 
-// A corner's distance inside plane `plane` (0 near, 1 x-, 2 x+, 3 y-, 4
-// y+): w shrunk so a cut lands strictly inside, plus the plane's term,
-// scaled so the sign survives the product of two distances.
-float planeDistance(in Frame frame, vec4 pos, int16 plane)
+// The planes a triangle is clipped against, in the order of the
+// passes. Near keeps z <= w, PositiveX x <= w, NegativeX -w <= x,
+// PositiveY y <= w and NegativeY -w <= y, in judged units (the position
+// times clipScale).
+enum class ClipPlane
+{
+    Near,
+    PositiveX,
+    NegativeX,
+    PositiveY,
+    NegativeY,
+};
+
+// A corner's distance inside plane `plane`: w shrunk so a cut lands
+// strictly inside, plus the plane's term, scaled so the sign survives
+// the product of two distances.
+float planeDistance(in Frame frame, vec4 pos, ClipPlane plane)
 {
     vec3 jp = pos.xyz * frame.clipScale;
     float d = pos.w * frame.gsScale.w;
-    if (plane == 0)
-        d = d - jp.z;
-    else if (plane == 1)
-        d = d - jp.x;
-    else if (plane == 2)
-        d = d + jp.x;
-    else if (plane == 3)
-        d = d - jp.y;
-    else
-        d = d + jp.y;
+    switch (plane)
+    {
+    case ClipPlane::Near:      d = d - jp.z; break;
+    case ClipPlane::PositiveX: d = d - jp.x; break;
+    case ClipPlane::NegativeX: d = d + jp.x; break;
+    case ClipPlane::PositiveY: d = d - jp.y; break;
+    case ClipPlane::NegativeY: d = d + jp.y; break;
+    }
     return d * frame.gsOffset.w;
 }
 
 // One Sutherland-Hodgman pass over `corners` corners in `from` against
 // plane `plane`, the survivors into `to` with the first again after the
 // last. A cut's packed colour is its edge's first corner's.
-int16 clipPass(in Frame frame, int16 corners, ref<Corner> from, ref<Corner> to, int16 plane)
+int16 clipPass(in Frame frame, int16 corners, ref<Corner> from, ref<Corner> to, ClipPlane plane)
 {
     int16 count = 0;
     if (corners >= 3)
@@ -513,11 +524,11 @@ void main(layout(address = 0) uniform Frame frame,
             {
                 ref<Corner> bufferA = ref<Corner>(clip.a);
                 ref<Corner> bufferB = ref<Corner>(clip.b);
-                count = clipPass(frame, 3, bufferA, bufferB, 0);
-                count = clipPass(frame, count, bufferB, bufferA, 1);
-                count = clipPass(frame, count, bufferA, bufferB, 2);
-                count = clipPass(frame, count, bufferB, bufferA, 3);
-                count = clipPass(frame, count, bufferA, bufferB, 4);
+                count = clipPass(frame, 3, bufferA, bufferB, ClipPlane::Near);
+                count = clipPass(frame, count, bufferB, bufferA, ClipPlane::PositiveX);
+                count = clipPass(frame, count, bufferA, bufferB, ClipPlane::NegativeX);
+                count = clipPass(frame, count, bufferB, bufferA, ClipPlane::PositiveY);
+                count = clipPass(frame, count, bufferA, bufferB, ClipPlane::NegativeY);
             }
 
             // Fan the survivors from corner 0.

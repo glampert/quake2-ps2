@@ -129,8 +129,12 @@ The README's "Rendering" section is the architecture overview. The renderer file
   respect while `hires::Active()`:
   - **The chain is replayed once per strip per field**, from its first qword, behind a prologue
     that sets FRAME, ZBUF, XYOFFSET, SCISSOR and TEST for both contexts. So nothing in it may
-    refer to one strip, nothing may be kicked mid-frame (`rs::KickBuilt` skips, `cmdbuf::Reserve`
-    overflowing is fatal), and its clear is the prologue's. **A new ZBUF write in the chain needs
+    refer to one strip, nothing may be kicked mid-frame (`rs::KickBuilt` skips), and its clear is
+    the prologue's. A frame that outgrows its 768 KB half can't kick and carry on in the other
+    half, which is the one being replayed: it ends the half with a NEXT tag into **its half's own
+    256 KB overflow block** (`cmdbuf::Reserve`, `s_overflowPackets`, heap tag `HiRes`), which the
+    passes' hold on the half covers too. 1080i's map cycle needed it: a 16:9 view at a map's start
+    passed 768 KB at its tenth map. A frame past both is fatal. **A new ZBUF write in the chain needs
     `hires::AddZbufFixup`** on its value qword, as the chunk heads and `gs::EmitBegin2D` have: every
     pass patches ZBP to its z strip. A new FRAME, XYOFFSET or SCISSOR write would need the same.
   - **The picture is centred on X = 2048** (XYOFFSET.x = 2048 - W/2, `gs::ScreenCentreX`), since the
@@ -169,6 +173,8 @@ The README's "Rendering" section is the architecture overview. The renderer file
     compare armed at each VSINT for the earliest pass and re-armed by each compare interrupt, is
     seven interrupts a frame with the FINISHes: 0.271 and 5.42 µs (+1.6 to +3.4%, the pass thread's
     own work; `hires-720p-timer-demos.emulog.txt`). ps2sdk takes T2 and T3; T0 and T1 are free.
+  - 1080i's 39-map cycle (2026-11-28) loaded every map: no hold, no repack, no blank load, worst
+    moment 31.04 MB (memory-budget.md).
   - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
     480i scene at the wider 16:9 view, the HUD at 2x. The 720p perf demos: 3 passes and one
     adoption a frame, none late, no frame over a field, chains up to 649 KB of the 768, the world

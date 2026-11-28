@@ -89,6 +89,13 @@ paths:
   16 → 64 KB on every level (two 32 KB ADPCM buffers while a track plays), so live totals
   +0.03-0.05 MB; load peaks -0.01 to +0.04 MB (the music opens while the plaque is still up, so a
   peak late in a load can include it); worst moment 30.41 → 30.40 MB, lowest free 1.20 → 1.19 MB.
+- **Strip mode (720p/1080i, `experimental_hi-res` branch, MapCycle 2026-11-28, 1080i, debug):**
+  all 39 maps load; the worst moment is **31.04 MB** (city3, against 30.41 in the other modes) and
+  the unclaimed heap bottomed out at 260 KB. Strip mode's own: tag `HiRes`, 96 KB of ZBUF fixup
+  lists and two 256 KB chain overflow blocks (gs-renderer.md), plus a loading screen's chain
+  copy (a few KB) while a `.bsp` is parsed; every map's live total about +0.6 MB. It is the
+  tightest the port has run: anything new held across a load in strip mode needs a cycle.
+  `build/baselines/hires-1080i-mapcycle.emulog.txt`.
 - `pics/*` are never freed. A stray key press that opens a menu shows up as extra Tex in a
   cycle (e.g. `pics/inventory.pcx`, 48 KB).
 - Load-time and debug-only sources build `-Os` (`SIZE_OPT_CXX_SRC`), which saves ~9 KB of

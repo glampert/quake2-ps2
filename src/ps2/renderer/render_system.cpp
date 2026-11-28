@@ -767,7 +767,7 @@ void EndFrame(const bool deferPresent)
         else
         {
             const void * const chain = cmdbuf::CloseForReplay();
-            hires::Publish(chain, cmdbuf::QwordCount(), cmdbuf::CurrentHalf());
+            hires::Publish(chain, cmdbuf::HalfQwordCount(), cmdbuf::CurrentHalf());
         }
         cmdbuf::EndFrame();
         return;

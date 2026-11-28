@@ -71,9 +71,11 @@ void BeginFrame();
 void EndFrame();
 
 namespace detail {
-// The half being built, swapped by BeginFrame. Exposed so the accessors below can be inline -
-// they are on the hot path of every emission - and written only by cmd_buffer.cpp.
+// The half being built, swapped by BeginFrame, and the qwords it may take (QwordCapacity). Exposed
+// so the accessors below can be inline - they are on the hot path of every emission - and written
+// only by cmd_buffer.cpp.
 extern packet2_t * g_packet;
+extern int         g_capacityQwords;
 } // namespace detail
 
 // The half being built. Valid between BeginFrame and EndFrame.
@@ -95,11 +97,16 @@ Q_ALWAYS_INLINE int QwordCount()
 // Qwords a caller may write into a half. Not kHalfQwords: the buffer always holds back room for
 // the terminator Kick() appends, because a half with no room left for its own END tag could not
 // be drained. Reserve() measures against exactly this, and it is the capacity to hand any helper
-// that range-checks its own writes.
-constexpr int QwordCapacity()
+// that range-checks its own writes. In strip mode, once a frame has moved on into its half's
+// overflow block (see Reserve), the block's.
+Q_ALWAYS_INLINE int QwordCapacity()
 {
-    return static_cast<int>(kHalfQwords) - kTerminatorQwords;
+    return detail::g_capacityQwords;
 }
+
+// The qwords the current frame's chain holds in its half itself, whatever followed into an
+// overflow block (strip mode's Publish, which copies a chain for a world load by this).
+int HalfQwordCount();
 
 // Makes room for 'qwords' more, and says whether it had to start a fresh chain to do it.
 //

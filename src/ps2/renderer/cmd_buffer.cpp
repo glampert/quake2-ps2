@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <dma.h>
+#include <dma_tags.h> // DMATAG
 #include <kernel.h> // FlushCache
 #include <packet2_chain.h>
 #include <packet2_utils.h>
@@ -87,6 +88,17 @@ static int s_kickedQwords = 0;
 static packet2_t * s_packets[2] = {};
 static int s_half = 0;
 
+// Strip mode only (hi_res.h): a block of its own for each half, which a frame that outgrows its
+// half carries on into. The other modes kick what they have and carry on in the other half, but in
+// strip mode that is the frame being replayed. Each block belongs to its half, so whatever keeps
+// the passes off a half (hires::WaitForHalf) keeps them off its block too. From the heap, and only
+// in strip mode: a 1920-wide view sees more than 768 KB of chain on some map starts (1080i's map
+// cycle, 2026-11-28).
+constexpr u32 kOverflowBytes  = 256u * 1024u;
+constexpr u32 kOverflowQwords = kOverflowBytes / 16u;
+static packet2_t * s_overflowPackets[2] = {};
+static bool        s_inOverflow         = false;
+
 #if PS2_QUAKE_PROFILE
 // High-water across both halves, and the per-frame counters the overlay reads. The 'last frame'
 // copies exist because the debug overlay is drawn during the 2D pass, before EndFrame has run.
@@ -110,14 +122,15 @@ static Stats s_stats = {};
 Q_ALWAYS_INLINE packet2_t * Current()
 {
     PS2_AssertMsg(s_initialized, "cmdbuf::Init not called!");
-    return s_packets[s_half];
+    return s_inOverflow ? s_overflowPackets[s_half] : s_packets[s_half];
 }
 
-// Points the inline accessors in the header at the half s_half selects. Must run wherever
-// s_half changes, which is Init and BeginFrame.
+// Points the inline accessors in the header at the half s_half selects, or its overflow block.
+// Must run wherever either changes: Init, BeginFrame, Reserve's overflow.
 void PublishCurrent()
 {
-    detail::g_packet = s_packets[s_half];
+    detail::g_packet         = Current();
+    detail::g_capacityQwords = static_cast<int>(s_inOverflow ? kOverflowQwords : kHalfQwords) - kTerminatorQwords;
 }
 
 // Aims an allocation's skip tag at the first qword past its payload.
@@ -172,7 +185,8 @@ void Rewind()
 
 } // namespace
 
-packet2_t * detail::g_packet = nullptr;
+packet2_t * detail::g_packet         = nullptr;
+int         detail::g_capacityQwords = static_cast<int>(kHalfQwords) - kTerminatorQwords;
 
 // ------------------------------------------------------------------------------------------------
 // Lifecycle
@@ -215,6 +229,20 @@ void Init(void * memory, const u32 memorySizeBytes)
     // already booked against MemTag::WorldMdl, so counting them here would double count them.
     ps2::heap::TagsAddMem(ps2::heap::MemTag::Renderer, 2u * sizeof(packet2_t));
 
+    // Strip mode's overflow blocks (see s_overflowPackets).
+    if (hires::Active())
+    {
+        for (int i = 0; i < 2; ++i)
+        {
+            void * const mem = ps2::heap::AllocAligned(ps2::heap::MemAlign(64), kOverflowBytes, ps2::heap::MemTag::HiRes);
+            qword_t * const block = static_cast<qword_t *>(mem);
+            s_overflowPackets[i] = packet2_create_from(block, block, static_cast<u16>(kOverflowQwords),
+                                                       P2_TYPE_NORMAL, P2_MODE_CHAIN, /*tte=*/1);
+            PS2_AssertMsg(s_overflowPackets[i] != nullptr, "packet2_create_from failed!");
+        }
+        ps2::heap::TagsAddMem(ps2::heap::MemTag::Renderer, 2u * sizeof(packet2_t));
+    }
+
     s_initialized = true;
     PublishCurrent();
 
@@ -241,6 +269,7 @@ void BeginFrame()
     WaitIdle();
 
     s_half ^= 1;
+    s_inOverflow = false;
     PublishCurrent();
     Rewind();
 
@@ -300,12 +329,34 @@ bool Reserve(const int qwords)
                   qwords, capacity);
     }
 
-    // Strip mode can't kick part of a frame: the passes replay a frame whole, from its half, and the
-    // other half is the frame they are replaying. A frame this size has never been seen (the perf
-    // demos peak at about 660 KB), so it is fatal rather than handled.
-    if (hires::Active()) [[unlikely]]
+    // Strip mode can't kick part of a frame: the passes replay a frame whole, and the other half is
+    // the one they are replaying. So the half ends in a NEXT tag on into its own overflow block, and
+    // the frame carries on there.
+    if (hires::Active())
     {
-        Sys_Error("Frame chain: a strip mode frame outgrew its %u KB half.", kHalfBytes / 1024u);
+        if (s_inOverflow || qwords > static_cast<int>(kOverflowQwords) - kTerminatorQwords) [[unlikely]]
+        {
+            Sys_Error("Frame chain: a strip mode frame outgrew its %u KB half and %u KB overflow block.",
+                      kHalfBytes / 1024u, kOverflowBytes / 1024u);
+        }
+
+        packet2_t * const pkt = Current();
+        PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                      "cmdbuf::Reserve's overflow with a tag still open!");
+
+        const u32 block = static_cast<u32>(reinterpret_cast<std::uintptr_t>(s_overflowPackets[s_half]->base) & 0x0FFFFFFFu);
+        pkt->next->dw[0] = DMATAG(0u, 0, DMA_TAG_NEXT, 0, block, 0);
+        pkt->next->dw[1] = 0; // two VIF NOPs
+        ++pkt->next;
+
+        BankCurrentHalf();
+        s_inOverflow = true;
+        PublishCurrent();
+        ResetCurrentHalf();
+
+        s_reserveEnd = QwordCount() + qwords;
+        PS2_PROFILE_ONLY(++s_stats.emergencyDrains);
+        return true;
     }
 
     // Everything built so far still has to reach the GS: send it, and carry on in the other half
@@ -782,6 +833,11 @@ void AbandonFrame()
     s_kickedQwords = static_cast<int>(packet2_get_qw_count(Current()));
 }
 
+int HalfQwordCount()
+{
+    return static_cast<int>(packet2_get_qw_count(s_packets[s_half]));
+}
+
 int CurrentHalf()
 {
     return s_half;
@@ -844,6 +900,8 @@ void DrainBeforeWorldLoad()
     if (hires::Running())
     {
         hires::LendHalves(s_packets[0]->base, s_packets[1]->base, kHalfBytes);
+        s_inOverflow = false;
+        PublishCurrent();
         Rewind();
         return;
     }

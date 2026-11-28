@@ -11,6 +11,7 @@
 #include "ps2/system/heap.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <dma.h>
 #include <dma_tags.h>
@@ -290,9 +291,35 @@ void Adopt()
     }
 }
 
+#if PS2_QUAKE_DEBUG
+// A pass that never ends would leave this spinning above every other thread, the whole EE frozen
+// with nothing printed: after a second it says what the engine was waiting on, and gives up.
+Q_COLD_FUNC void ReportStuckPass()
+{
+    std::printf("hi-res: a pass never finished: inFlight %d, D1_CHCR %08x, CSR %08x, IMR %08x, T1 %u/%u mode %04x, "
+                "vsyncs %u, passes %u, next %d, held %d\n",
+                s_passInFlight ? 1 : 0, static_cast<unsigned>(*R_EE_D1_CHCR), static_cast<unsigned>(*GS_REG_CSR),
+                static_cast<unsigned>(GsGetIMR()), static_cast<unsigned>(*T1_COUNT), static_cast<unsigned>(*T1_COMP),
+                static_cast<unsigned>(*T1_MODE), s_stats.vsyncs, s_stats.passes, s_nextOrder, s_held ? 1 : 0);
+}
+#endif // PS2_QUAKE_DEBUG
+
 void WaitPassDone()
 {
+#if PS2_QUAKE_DEBUG
+    const CpuCycles start = ReadCycles();
+    while (s_passInFlight)
+    {
+        if ((ReadCycles() - start) > (ps2::debug::ProfileCyclesPerMillisec() * 1000u))
+        {
+            ReportStuckPass();
+            s_passInFlight = false;
+            break;
+        }
+    }
+#else // PS2_QUAKE_DEBUG
     while (s_passInFlight) {}
+#endif // PS2_QUAKE_DEBUG
     while ((*R_EE_D1_CHCR & (1u << 8)) != 0) {}
 }
 
@@ -816,6 +843,7 @@ void WaitForHalf(const int half)
         {
             return;
         }
+
         WaitSema(s_adoptSema);
     }
 }
@@ -834,6 +862,10 @@ void HoldUntilNextFrame()
     s_held = true;
     s_resumeOnAdopt = true;
     SetDisplayOn(false);
+
+    // A frame finished but not yet adopted is dropped too: it samples the textures the caller is
+    // about to evict or move, and adopting it would end the hold on a picture of them.
+    s_pending = kNoFrame;
     UnlockGs();
 }
 

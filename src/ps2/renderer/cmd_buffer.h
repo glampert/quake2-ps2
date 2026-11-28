@@ -259,6 +259,10 @@ int NextHalf();
 // the pass engine replays from.
 const void * CloseForReplay();
 
+// Strip mode's EndFrame for a frame it throws away: nothing sends it, and BeginFrame may rewind
+// the half.
+void AbandonFrame();
+
 #if PS2_QUAKE_DEBUG
 // Installed by the renderer, called when a wait gives up, just after the pipeline registers are
 // dumped. Those say *that* the pipeline is stuck; only the renderer can say what its

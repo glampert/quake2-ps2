@@ -140,9 +140,17 @@ The README's "Rendering" section is the architecture overview. The renderer file
     keeps the next one off the GIF. Texture and CLUT uploads, the seed, readbacks.
   - **The texture heap pins two frames** (`vram.cpp` `IsPinned`): the one being built and the one
     being replayed. Its out-of-memory rung holds the passes, blank, until the next frame takes over
-    (`hires::HoldUntilNextFrame`) and unpins only the replayed frame; it can't defragment
-    mid-frame (the frame's chain has the addresses baked in): that is fatal in strip mode. The
+    (`hires::HoldUntilNextFrame`, which drops a pending frame too) and unpins only the replayed
+    frame. If that isn't enough it repacks the heap anyway and **drops the frame being built**
+    (`rs::AllocateVramFor`'s `s_dropFrame`, `cmdbuf::AbandonFrame`): its draws so far have the old
+    addresses baked in. One blank field and a lost frame. 720p's 2-pass layout (1.1 MB of heap)
+    did it about 20 times a minute in demo1; 3 passes (2.0 MB) never did over the perf demos. The
     level-change defragment holds the passes too.
+  - **`GsPutIMR` returns the mask it just set**, not the old one (PCSX2: 0x7500 in, 0x7700 out).
+    `DownloadFramebufferRows` restored from it, which left FINISH masked after every screenshot:
+    harmless in the other modes (FINISH is always masked there), a frozen EE in strip mode, whose
+    passes end on the FINISH interrupt. It reads the mask with `GsGetIMR` first now; anything new
+    that masks a GS interrupt for a while must too.
   - **A world load copies the replayed chain to the heap** (`hires::LendHalves`, tag `HiRes`),
     relocating its NEXT and REF addresses, before the halves become the lump scratch; it is freed
     at the next `rs::BeginFrame` after a new frame takes over.

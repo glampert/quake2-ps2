@@ -777,6 +777,11 @@ bool KickInFlight()
     return s_kickInFlight;
 }
 
+void AbandonFrame()
+{
+    s_kickedQwords = static_cast<int>(packet2_get_qw_count(Current()));
+}
+
 int CurrentHalf()
 {
     return s_half;

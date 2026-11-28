@@ -395,6 +395,10 @@ void FenceGs()
 //
 // The last rung repacks the heap into one free block, so it can only come up short for a texture
 // larger than the whole heap, which the caller rejects before getting here.
+// Strip mode: the frame being built had the texture heap repacked under it (AllocateVramFor), so
+// EndFrame throws it away rather than hand it to the passes.
+static bool s_dropFrame = false;
+
 vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
 {
     vram::Address addr = vram::TryAllocate(texture, sizeWords);
@@ -420,13 +424,17 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
         addr = vram::TryAllocate(texture, sizeWords);
     }
 
-    // Strip mode can't repack: this frame's draws are already in its chain, with the addresses the
-    // repack would move, and none of it has been drawn.
-    if (addr == vram::Address::Invalid && hires::Active()) [[unlikely]]
+    // Strip mode can repack only by giving the frame up: its draws so far are in its chain, with
+    // the addresses the repack moves, and none of it has been drawn. So the heap is repacked below,
+    // the frame is built on to the end as ever but never published (EndFrame drops it), and the
+    // passes, held since the rung above, stay blank until the next frame, built on the repacked
+    // heap, takes over. One field of black and a frame lost, where a crash was the alternative:
+    // 720p's 2-pass layout (1.1 MB of heap) filled up within demo1.
+    if (addr == vram::Address::Invalid && hires::Active())
     {
-        vram::DumpAllBlocks();
-        Sys_Error("GS VRAM: '%s' (%d KB) doesn't fit the %s texture heap, even with the replayed frame unpinned!",
-                  texture.name, sizeWords * 4 / 1024, video::OutputName(video::Selected(), video::SelectedOutput()));
+        Com_DPrintf("VRAM: heap full for '%s' (%d KB) in strip mode; repacking and dropping the frame.\n",
+                    texture.name, sizeWords * 4 / 1024);
+        s_dropFrame = true;
     }
 
     if (addr == vram::Address::Invalid)
@@ -747,11 +755,20 @@ void EndFrame(const bool deferPresent)
     FlushPending2D();
 
     // Strip mode: the chain is closed and handed to the pass engine, which replays it from the
-    // next field's first pass on, every pass, until the next frame takes over.
+    // next field's first pass on, every pass, until the next frame takes over - unless the texture
+    // heap was repacked under it (AllocateVramFor), when it is thrown away instead.
     if (hires::Active())
     {
-        const void * const chain = cmdbuf::CloseForReplay();
-        hires::Publish(chain, cmdbuf::QwordCount(), cmdbuf::CurrentHalf());
+        if (s_dropFrame)
+        {
+            s_dropFrame = false;
+            cmdbuf::AbandonFrame();
+        }
+        else
+        {
+            const void * const chain = cmdbuf::CloseForReplay();
+            hires::Publish(chain, cmdbuf::QwordCount(), cmdbuf::CurrentHalf());
+        }
         cmdbuf::EndFrame();
         return;
     }

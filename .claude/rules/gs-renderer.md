@@ -104,7 +104,10 @@ The README's "Rendering" section is the architecture overview. The renderer file
   by VIF1 DMA, then put both back and unmask PATH3. Nothing may be in flight
   (`rs::FinishFrameInFlight`, outside a frame), and the target is whole 64-byte lines (sync
   before, invalidate after). Works in PCSX2 with 16- and 32-bit framebuffers (2026-10-12); not
-  yet tried on a console.
+  yet tried on a console. **`GsPutIMR` returns the mask it just set, not the old one**, so the
+  mask to restore after the FINISH wait is read with `GsGetIMR` first: restoring its return value
+  left FINISH masked after every screenshot until 2026-11-28, harmless while nothing takes the
+  FINISH interrupt (found by the `experimental_hi-res` branch, whose strip passes do).
 - **The TV standard is ours to pick, not libgraph's.** `graph_initialize` always takes the
   console's region (`graph_get_region()`: an `E` as the ROM name's 5th character is PAL) and
   has no override. So `gs::Init` makes its calls itself with the mode `ps2_video_mode` chose,

@@ -738,7 +738,12 @@ void DownloadFramebufferRows(const DrawContext ctx, const int y, const int rows,
     constexpr u64 kCsrFinish     = GS_SET_CSR(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     constexpr u64 kImrFinishMask = 1u << 9; // FINISHMSK: the event is polled here, not taken
 
-    const u64 prevImr = GsPutIMR(GsGetIMR() | kImrFinishMask);
+    // GsPutIMR hands back the mask it just set, not the one before it (PCSX2 2026-11-28: 0x7500
+    // in, 0x7700 out), so the one to restore is read first. Restoring its return value left FINISH
+    // masked after every readback: harmless while nothing takes the FINISH interrupt (graph_set_mode
+    // masks it), a frozen pipeline for anything that does.
+    const u64 prevImr = GsGetIMR();
+    GsPutIMR(prevImr | kImrFinishMask);
     *GS_REG_CSR = kCsrFinish; // clear any earlier FINISH event
 
     dma_channel_send_normal(DMA_CHANNEL_VIF1, s_request, 7, 0, 0);

@@ -226,8 +226,22 @@ The README's "Rendering" section is the architecture overview. The renderer file
       edge for anything left; T1's handler, which runs at every pass and on a counter lap when
       nothing re-arms it, takes any FINISH or VSINT still pending with INTC_STAT's GS bit clear
       and counts it (`hrRescue`). Only events the IMR lets through are taken: the readback masks
-      FINISH and polls it itself. The console rerun of this is pending: `hrRescue` above 0 would
-      confirm the edge theory.
+      FINISH and polls it itself.
+  - **The rerun with the handler fix** (c07c761, `build/console-hires-2026-11-28c/`, runs 3-5):
+    all three finished every segment, about 20-21K frames each (3-pass: ~98K passes a run), with
+    `hrRescue` 0 throughout. The b build had stopped at 7067 and 14,388 frames, so at that rate
+    two clean 3-pass runs would have had ~4 stops between them. The handler's own loop and IMR
+    toggle are what held: T1 never found an event left behind. One run can't say which of the
+    loop, the toggle or the always-cleared FINISH it was; the rescue stays as the net. Both b
+    stops came a few hundred frames after a base2 load, and the log only flushes every 64 rows.
+    Per-pass fits match the b run (720p 3-pass 1.57 ms + 0.66 µs a triangle, 26% late; 2-pass
+    2.00 ms + 0.74 µs, 0.3%; 1080i 1.70 ms + 0.68 µs, 35%). The fixed no-fill segments, the 2D
+    held to the strip: 720p 3-pass 0.57 ms + 0.63 µs, 2-pass 0.54 + 0.67, 1080i 0.62 + 0.65. So
+    a pass is ~0.55 ms of setup, ~0.65 µs a triangle of VU1, and the fill: 1.00 ms for 720p's
+    1280x256 strip, 1.46 for 1280x384, 1.09 for 1080i's 1920x192, all 2.94-3.05 ns a pixel. At
+    base2's ~4K-triangle mean, 3 passes repeat ~2.6 ms of VU1 each against a 4.6 ms strip, which
+    is what per-strip culling would take back: about 2.5-3 ms a pass if a batch drew in 1.3 of
+    the strips on average.
   - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
     480i scene at the wider 16:9 view, the HUD at 2x. The 720p perf demos: 3 passes and one
     adoption a frame, none late, no frame over a field, chains up to 649 KB of the 768, the world

@@ -668,7 +668,7 @@ gets the ten columns at the end of a row, after `sndPlay`.
   `hrAdopt` (frames that took over the replay), `hrVsyncs` and `hrLines` (HSINTs in the last
   field: 750 on a console at 720p, 525 in PCSX2), `hrRescue` (GS events T1's handler found
   pending with no interrupt coming, and took itself: a lost INTC_GS edge, gs-renderer.md; 0 is
-  the healthy reading). The pacing wait (`hires::WaitForHalf`) is
+  the healthy reading, and every console run of c07c761 read 0). The pacing wait (`hires::WaitForHalf`) is
   charged to `VSync`. `hrWorst` against the budget is the number the experiment is about, and only
   a console has it: PCSX2's passes are ~260-400 µs of DMA whatever they draw. The EE's own cost
   of strip mode, in PCSX2's 720p demos against NTSC per item: +24-27% with gsKit's HSINT line

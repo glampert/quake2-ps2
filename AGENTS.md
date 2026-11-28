@@ -58,8 +58,10 @@ every backend cvar. Add new ones there, with their debug/release defaults and fl
   `ps2sdk` image pinned by digest, for every change but docs. It keeps no ELF, since releases
   are packaged from local builds. `tools.yml` builds the host tools alone, with GCC, Apple
   clang and MSVC. See [.claude/rules/ci.md](.claude/rules/ci.md).
-- `PS2_QUAKE_DEBUG`, `PS2_QUAKE_ASSERTS` and `PS2_QUAKE_PROFILE` are always defined to 0 or 1.
-  Test them with `#if`, never `#ifdef` (`-Wundef` is on).
+- `PS2_QUAKE_DEBUG`, `PS2_QUAKE_ASSERTS`, `PS2_QUAKE_PROFILE` and `PS2_QUAKE_GPU_SAMPLER` are
+  always defined to 0 or 1. Test them with `#if`, never `#ifdef` (`-Wundef` is on).
+  `PS2_QUAKE_GPU_SAMPLER` (the GPU sampler, cmd_buffer.h) follows `PS2_QUAKE_PROFILE` unless
+  `CONFIG_DEFS` sets it, and reaches the VU programs too (`build/vu_sampler/`).
 - make does not track flag changes. After editing `CONFIG_DEFS` or other flags,
   `rm -rf build/<config>/src`.
 - Source lists in the Makefile are explicit. Add a new `.cpp` to `PS2_CXX_SRC`, and to

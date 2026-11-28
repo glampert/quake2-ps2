@@ -144,6 +144,24 @@ struct Scratch
     qword q[2];
 };
 
+#if PS2_QUAKE_GPU_SAMPLER
+// The GPU sampler's counts (cmd_buffer.h), in the clip scratch's spare
+// qword at 956, which nothing unpacks: the EE reads them, and zeroes them,
+// each time it has waited a chain out. What the program does that the EE
+// cannot see from what it sent, and what its time per frame is fitted
+// against: triangles that took the slow path (a corner outside the guard
+// band, or the warp), the ones of those the clipper left nothing of, the
+// triangles the fans sent in their place, and the back faces culled. Floats,
+// as the VI registers are 16 bits.
+struct Counts
+{
+    float slow;
+    float empty;
+    float fanned;
+    float culled;
+};
+#endif
+
 const int16 kWindowVertices = 45;
 
 // The most vertices one clipped triangle can fan out to: five planes leave
@@ -387,7 +405,11 @@ void main(layout(address = 0) uniform Frame frame,
           layout(address = 1022) uniform Warp warp,
           layout(xtop, vif_base = 8, vif_offset = 474) inout Batch batch,
           layout(address = 957) inout ClipBuffers clip,
-          layout(address = 1008, spill) inout Scratch scratch)
+          layout(address = 1008, spill) inout Scratch scratch
+#if PS2_QUAKE_GPU_SAMPLER
+          , layout(address = 956) inout Counts counts
+#endif
+          )
 {
     // The batch's modes, held for the whole batch: nothing in the loop
     // writes them, so oxide-vcl copies the loop per colour mode and vertex
@@ -491,9 +513,18 @@ void main(layout(address = 0) uniform Frame frame,
                 room -= 3;
                 slow = cut || warped;
             }
+#if PS2_QUAKE_GPU_SAMPLER
+            else
+            {
+                counts.culled += 1.0;
+            }
+#endif
         }
         if (slow)
         {
+#if PS2_QUAKE_GPU_SAMPLER
+            counts.slow += 1.0;
+#endif
             // Back to the triangle's own output, which the fan writes over.
             cursor -= 3;
             room += 3;
@@ -533,6 +564,16 @@ void main(layout(address = 0) uniform Frame frame,
 
             // Fan the survivors from corner 0.
             int16 fans = count - 2;
+#if PS2_QUAKE_GPU_SAMPLER
+            if (fans > 0)
+            {
+                counts.fanned += float(fans);
+            }
+            else
+            {
+                counts.empty += 1.0;
+            }
+#endif
             if (fans > 0)
             {
                 vec4 firstPos = clip.b[0].pos;

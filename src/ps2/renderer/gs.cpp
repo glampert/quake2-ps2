@@ -829,7 +829,13 @@ void UploadTexture(const tex::Texture & texture)
     s_texUploadPacket.SendChain();
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
+#if PS2_QUAKE_GPU_SAMPLER
+        const CpuCycles start = ReadCycles();
         GifPacket::WaitGifChannel();
+        cmdbuf::NoteDirectWait(ReadCycles() - start); // a PATH3 wait no chain carries
+#else // PS2_QUAKE_GPU_SAMPLER
+        GifPacket::WaitGifChannel();
+#endif // PS2_QUAKE_GPU_SAMPLER
     }
 
     vram::NoteTextureUpload(); // for the debug overlay's per-frame upload count

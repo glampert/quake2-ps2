@@ -306,4 +306,71 @@ int KicksLastFrame();
 int EmergencyDrainsLastFrame();
 #endif // PS2_QUAKE_PROFILE
 
+// --------------------------------------------------------------------------------------------
+// GPU sampler (PS2_QUAKE_GPU_SAMPLER: debug and profiling builds, never a release)
+// --------------------------------------------------------------------------------------------
+//
+// GsWait says how long the EE waited for the GS and VU1, not what it waited *on*. The sampler
+// answers that: on every pass of WaitIdle's two spins it reads what holds the chain up and
+// charges the cycles since the last pass to it (doom3-bfg-ps2's, dma.cpp). In priority order:
+//
+//   Vu      VPU-STAT.VBS1 and not VGW1: a microprogram is running.
+//   Gs      VU1 stalled on its XGKICK (VGW1), VIF1 waiting on the GIF for a FLUSH or DIRECT
+//           (VIF1_STAT.VGW), or the GIF still taking a PATH1 packet: the GS is what is slow.
+//   Direct  the GIF busy on PATH2 or PATH3: the 2D blocks, the clear, a texture upload. The
+//           texture uploads' own wait (gs::UploadTexture) is charged here too.
+//   Vif     none of those, but VIF1 is not idle or the DMA is still running: unpacks, tags.
+//   Tail    all of them idle, the GS finishing its last primitives before FINISH.
+//
+// Only what the EE waits for is seen. With ps2_gs_latency on and the world kicked early, most of a
+// frame's GPU work overlaps the EE's and never reaches a wait, so whole chains need
+// ps2_gs_serial 1 (render_system.h). And the split means something on a console only: PCSX2
+// finishes VU1 at once and reports no GIF path, so it charges nearly everything to Vif.
+//
+// The VU counts are the triangle program's (vu1.h kVuCountsAddr), read and zeroed after each
+// wait, when VU1 is idle. PCSX2 counts exactly what a console does, which is what lets a fit of
+// a console's Vu time against them (vu_fit.py) price each kind of work.
+#if PS2_QUAKE_GPU_SAMPLER && !PS2_QUAKE_PROFILE
+#error "PS2_QUAKE_GPU_SAMPLER needs PS2_QUAKE_PROFILE: the frame log is where its numbers go."
+#endif
+
+#if PS2_QUAKE_GPU_SAMPLER
+enum class GpuState : u8
+{
+    Vu,
+    Gs,
+    Direct,
+    Vif,
+    Tail,
+    Count
+};
+
+constexpr int kNumGpuStates = static_cast<int>(GpuState::Count);
+
+struct GpuStats
+{
+    u64 cycles[kNumGpuStates]; // EE cycles charged to each state
+    u32 waits;                 // WaitIdle calls that found a chain in flight
+    u32 samples;               // passes of the spins
+
+    // The triangle program's counts (textured_triangles.vusl's Counts).
+    u32 vuSlow;   // triangles that took the slow path: a corner past the guard band, or the warp
+    u32 vuEmpty;  // slow-path triangles the clipper left nothing of
+    u32 vuFanned; // triangles the clipper's fans sent in place of the slow ones
+    u32 vuCulled; // keyframe back faces dropped
+};
+
+// Everything since the last call, and starts again from zero. The frame log takes it once a
+// frame, so each row has its own frame's share.
+GpuStats TakeGpuStats();
+
+// Charges a wait the EE timed itself to the Direct state: gs::UploadTexture's PATH3 transfer,
+// which no chain carries.
+void NoteDirectWait(CpuCycles cycles);
+
+// Zeroes the triangle program's counts in VU1 memory. With VU1 and the DMA idle only: once at
+// vu1::Init, since VU memory comes up holding whatever was there.
+void ClearVuCounts();
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 } // namespace ps2::cmdbuf

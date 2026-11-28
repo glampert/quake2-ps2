@@ -1294,6 +1294,21 @@ the tests load autosaves slot 0 to the save device, the memory card by default. 
 perf capture reaches a file only in a `PS2_QUAKE_FRAME_LOG_FILE=1` build (see
 [performance.md](.claude/rules/performance.md)).
 
+**GPU sampler:** debug and profiling builds (`PS2_QUAKE_GPU_SAMPLER`, which follows
+`PS2_QUAKE_PROFILE`) split the frame log's `GsWait` by what held the chain up while the EE waited:
+`gpuVu` (a VU1 microprogram running), `gpuGs` (the GS slow to take what VU1 or the VIF hand it),
+`gpuDirect` (2D, the clear, texture uploads), `gpuVif` and `gpuTail` (the GS finishing its last
+primitives), sampled from VPU-STAT, VIF1_STAT and GIF_STAT on every pass of the wait
+([cmd_buffer.h](src/ps2/renderer/cmd_buffer.h)). The triangle program also counts what the EE
+can't see from what it sent: triangles that took the clip or warp path, those clipped to
+nothing, the fan triangles sent instead, and the back faces culled. `ps2_gs_serial 1` waits each
+frame's chain out whole, so the split is its full cost; `ps2_gs_nofill 1` scissors the 3D to one
+pixel, so serial minus serial-without-fill is the GS's pixel work. `ps2_perftest 2` plays the two
+demos once in each of the three, and `src/tools/scripts/frame_log/gpu_split.py` reads the result
+(`--fit` prices the VU1 work per item). PCSX2 models neither VU1 nor GS time, so only a console's
+capture means anything: see [performance.md](.claude/rules/performance.md). A plain release
+compiles none of it, the VU programs included.
+
 **Ending a test:** the perf test, the map cycle and the save test quit the game when they finish
 while `ps2_test_quit` is 1, the default (it isn't archived, so every boot starts there). At 0 the
 game stays up: the test sets its cvar back to 0 and can be started again, or another one, in the

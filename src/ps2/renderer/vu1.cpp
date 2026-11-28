@@ -86,6 +86,12 @@ void Init()
 
     rs::AddVUDoubleBufferSettings(kDoubleBufferBase, kDoubleBufferOffset);
     rs::KickAndWait();
+
+#if PS2_QUAKE_GPU_SAMPLER
+    // VU memory comes up holding whatever was there, and the counts only ever add to it.
+    cmdbuf::ClearVuCounts();
+    (void)cmdbuf::TakeGpuStats(); // and the upload's own wait is no frame's
+#endif // PS2_QUAKE_GPU_SAMPLER
 }
 
 } // namespace ps2::vu1

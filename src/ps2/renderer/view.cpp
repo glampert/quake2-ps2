@@ -2708,6 +2708,10 @@ void RenderFrame(const refdef_t & viewDef)
 
     SetupFrame(viewDef);
 
+    // ps2_gs_nofill: the 3D passes below draw into one pixel, for the GPU sampler. A no-op
+    // otherwise, and compiled out with it.
+    rs::LimitFill(true);
+
     // Opaque world surfaces and skybox, followed by opaque and translucent entities.
     RenderWorldModel(viewDef);
 
@@ -2739,6 +2743,8 @@ void RenderFrame(const refdef_t & viewDef)
     // Last, over the finished scene: ref_gl's R_Flash/R_PolyBlend.
     // (powerups/damange fullscreen blended polygon).
     RenderBlendedOverlay(viewDef);
+
+    rs::LimitFill(false);
 
     // Nothing to draw: hands the light at the camera back to the game code.
     // Where ref_gl's R_RenderFrame calls R_SetLightLevel.

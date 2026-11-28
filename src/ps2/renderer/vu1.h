@@ -140,6 +140,18 @@ static_assert(kClipScratchAddr == kDoubleBufferBase + (2 * kDoubleBufferOffset),
               "The clip scratch starts where the second double buffer ends");
 static_assert(kClipScratchAddr + kClipScratchQwords == 1010, "...and ends where the light block begins");
 
+#if PS2_QUAKE_GPU_SAMPLER
+// The triangle program's counts (textured_triangles.vusl's Counts), in the scratch's one qword the
+// clipper leaves free: slow-path triangles, slow ones clipped to nothing, triangles fanned out in
+// their place and back faces culled, as floats. Nothing in a chain unpacks it, so they add up
+// across every draw until cmdbuf::WaitIdle reads and zeroes them. Only GPU sampler builds have
+// them - see cmd_buffer.h. A debug probe that borrows the qword (vu-microprograms.md) clobbers
+// them.
+constexpr int kVuCountsAddr = static_cast<int>(tri::kCountsAddress);
+static_assert(kVuCountsAddr == kClipScratchAddr && sizeof(tri::Counts) == 16,
+              "The counts take the qword below the clipper's buffers, and only it");
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 // The top two qwords of that scratch are not buffer space. They are the program's work area
 // (its layout(spill) parameter), where the compiler keeps integer values that do not fit in the
 // VI registers: the output window's address, for one, which is read only at a window's open or

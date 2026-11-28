@@ -218,6 +218,28 @@ gs::DrawContext FinishFrameInFlight();
 // draws, where no stream holds a claim on the chain. See view::RenderFrame for why it is there.
 void KickBuilt();
 
+#if PS2_QUAKE_GPU_SAMPLER
+// The GPU sampler's measuring modes (cmd_buffer.h), set from ps2_gs_serial and ps2_gs_nofill once
+// a frame, before BeginFrame.
+//
+// Serial: KickBuilt sends nothing and every frame is presented at its own EndFrame, so each
+// chain is waited out whole, from its first qword, and the sampler's split is the whole chain's
+// cost rather than whatever part of it the EE's own work did not hide.
+//
+// No fill: the 3D view draws with SCISSOR at one pixel (LimitFill), so VU1 and the GIF do all of
+// their work while the GS writes almost nothing. A serial capture minus a serial no-fill one is
+// the GS's pixel work.
+void SetGpuMeasureModes(bool serial, bool noFill);
+bool SerialFrames();
+
+// With no fill on, scissors both contexts down to the top-left pixel ('limited') or back to the
+// whole framebuffer. view::RenderFrame brackets the 3D passes with it. A no-op otherwise.
+void LimitFill(bool limited);
+#else // PS2_QUAKE_GPU_SAMPLER
+constexpr bool SerialFrames() { return false; }
+inline void LimitFill(bool) {}
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 // Makes the texture's pixels resident in GS VRAM, uploading on a miss and evicting the
 // least-recently-bound textures when the heap is full. A resident texture only has its LRU stamp
 // refreshed, unless its pixels are dirty, which re-uploads in place.

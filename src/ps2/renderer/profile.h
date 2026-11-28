@@ -107,6 +107,10 @@ void FrameLogFlush();
 // Emits a marker row so a run can be split by map. Called from PS2_BeginRegistration.
 void FrameLogMarkMap(const char * mapName);
 
+// Emits an "FLOG#seg,<frame>,<label>" row: the rows from the next one on belong to the segment the
+// label names, until the next marker. ps2_perftest 2 names its GPU measuring modes with it.
+void FrameLogMarkSegment(const char * label);
+
 // Records a file being opened, written as an "FLOG#open,<row>,<name>" line with the next dump -
 // the row being the one whose columns are charged with the read. Called from FS_FOpenFile
 // through PS2_FrameLogNoteOpen, so every mid-level load names itself in the log. Note that
@@ -129,6 +133,7 @@ void FrameLogFinish();
 inline void FrameLogCapture() {}
 inline void FrameLogFlush() {}
 inline void FrameLogMarkMap(const char *) {}
+inline void FrameLogMarkSegment(const char *) {}
 inline void FrameLogNoteOpen(const char *) {}
 inline void FrameLogNoteReady(const char *) {}
 inline void FrameLogFinish() {}

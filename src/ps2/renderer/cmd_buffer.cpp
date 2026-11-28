@@ -9,6 +9,9 @@
 #include "ps2/common.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/profile.h"
+#if PS2_QUAKE_GPU_SAMPLER
+#include "ps2/renderer/vu1.h" // kVuCountsAddr
+#endif // PS2_QUAKE_GPU_SAMPLER
 #include "ps2/debug/pipeline_dump.h"
 #include "ps2/debug/log_file.h"    // DumpPrintf
 #include "ps2/debug/stack_trace.h" // PrintStackTrace
@@ -579,6 +582,85 @@ Q_COLD_FUNC void ReportPipelineHang(const char * const what)
 
 #endif // PS2_QUAKE_DEBUG
 
+// ------------------------------------------------------------------------------------------------
+// GPU sampler (see cmd_buffer.h)
+// ------------------------------------------------------------------------------------------------
+
+#if PS2_QUAKE_GPU_SAMPLER
+
+static GpuStats s_gpu = {};
+
+// VU1 data memory as the EE sees it (VU Mem1), where the triangle program keeps its counts.
+constexpr uintptr_t kVu1DataMemory = 0x1100C000u;
+
+volatile float * VuCounts()
+{
+    return reinterpret_cast<volatile float *>(kVu1DataMemory + (static_cast<uintptr_t>(vu1::kVuCountsAddr) * 16u));
+}
+
+// VPU-STAT is VU0 control register 29: VBS1 (bit 8) VU1 runs, VGW1 (bit 12) it waits on an XGKICK.
+// VIF1_STAT: VGW (bit 3) a FLUSH, FLUSHA, DIRECT or MSCALF waits for the GIF; VPS (bits 1:0) not idle.
+// GIF_STAT: APATH (bits 11:10) the path sending.
+GpuState Classify()
+{
+    u32 vpu;
+    asm volatile("cfc2 %0, $29" : "=r"(vpu));
+    if ((vpu & (1u << 8)) != 0)
+    {
+        return ((vpu & (1u << 12)) != 0) ? GpuState::Gs : GpuState::Vu;
+    }
+
+    const u32 vif = *R_EE_VIF1_STAT;
+    if ((vif & (1u << 3)) != 0)
+    {
+        return GpuState::Gs;
+    }
+
+    const u32 path = (*R_EE_GIF_STAT >> 10) & 3u;
+    if (path == 1u)
+    {
+        return GpuState::Gs; // PATH1 still taking a kicked packet
+    }
+    if (path != 0u)
+    {
+        return GpuState::Direct; // PATH2 or PATH3: the 2D blocks, the clear, an upload
+    }
+
+    return ((vif & 3u) != 0 || (*R_EE_D1_CHCR & kDmaChcrStr) != 0) ? GpuState::Vif : GpuState::Tail;
+}
+
+// Charges the cycles since 'last' to what holds the chain up now.
+Q_ALWAYS_INLINE void Sample(CpuCycles & last)
+{
+    const GpuState  state = Classify();
+    const CpuCycles now   = ReadCycles();
+    s_gpu.cycles[static_cast<int>(state)] += now - last;
+    ++s_gpu.samples;
+    last = now;
+}
+
+// Whole counts below 2^24, so through s32: a cvt.w.s, rather than libgcc's unsigned conversion.
+Q_ALWAYS_INLINE u32 CountOf(const float value)
+{
+    return static_cast<u32>(static_cast<s32>(value));
+}
+
+// With VU1 idle: WaitIdle's FLUSH-then-FINISH has seen the last microprogram end.
+void TakeVuCounts()
+{
+    volatile float * const counts = VuCounts();
+    s_gpu.vuSlow   += CountOf(counts[0]);
+    s_gpu.vuEmpty  += CountOf(counts[1]);
+    s_gpu.vuFanned += CountOf(counts[2]);
+    s_gpu.vuCulled += CountOf(counts[3]);
+    counts[0] = 0.0f;
+    counts[1] = 0.0f;
+    counts[2] = 0.0f;
+    counts[3] = 0.0f;
+}
+
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 // Spins until 'ready'. In debug a wait that outlasts the timeout dumps the pipeline and dies; in
 // release it is the bare spin it has always been, and 'what' costs nothing.
 template<typename ReadyFn>
@@ -619,20 +701,61 @@ void WaitIdle()
         // Watched here rather than left to dma_channel_wait, which has no way to say why it never
         // came back. CHCR's STR bit clears when the channel is done, so on the way out of this the
         // call below returns at once and the sdk keeps whatever bookkeeping it does.
+#if PS2_QUAKE_GPU_SAMPLER
+        CpuCycles last = ReadCycles();
+        SpinUntilReady([&last] { Sample(last); return (*R_EE_D1_CHCR & kDmaChcrStr) == 0; },
+                       "the VIF1 chain never drained");
+#else // PS2_QUAKE_GPU_SAMPLER
         SpinUntilReady([] { return (*R_EE_D1_CHCR & kDmaChcrStr) == 0; },
                        "the VIF1 chain never drained");
+#endif // PS2_QUAKE_GPU_SAMPLER
         dma_channel_wait(DMA_CHANNEL_VIF1, 0);
 
         // Then the GS. Everything above only says the work was *handed over*; this is where it has
         // actually been drawn, which is what the framebuffer flip needs before it shows the buffer
         // and what keeps two frames from meeting in the one z-buffer they share.
+#if PS2_QUAKE_GPU_SAMPLER
+        SpinUntilReady([&last] { Sample(last); return (*GS_REG_CSR & 2) != 0; },
+                       "the GS never raised FINISH");
+#else // PS2_QUAKE_GPU_SAMPLER
         SpinUntilReady([] { return (*GS_REG_CSR & 2) != 0; },
                        "the GS never raised FINISH");
+#endif // PS2_QUAKE_GPU_SAMPLER
         *GS_REG_CSR = 2; // write 1 to clear, leaving the other event bits alone
     }
 
+#if PS2_QUAKE_GPU_SAMPLER
+    // After the timed scope, so the split covers the wait alone: a first doom3 gate run with the
+    // read inside it charged most of a short frame's wait to the readback.
+    ++s_gpu.waits;
+    TakeVuCounts();
+#endif // PS2_QUAKE_GPU_SAMPLER
+
     s_kickInFlight = false;
 }
+
+#if PS2_QUAKE_GPU_SAMPLER
+GpuStats TakeGpuStats()
+{
+    const GpuStats taken = s_gpu;
+    s_gpu = {};
+    return taken;
+}
+
+void NoteDirectWait(const CpuCycles cycles)
+{
+    s_gpu.cycles[static_cast<int>(GpuState::Direct)] += cycles;
+}
+
+void ClearVuCounts()
+{
+    volatile float * const counts = VuCounts();
+    counts[0] = 0.0f;
+    counts[1] = 0.0f;
+    counts[2] = 0.0f;
+    counts[3] = 0.0f;
+}
+#endif // PS2_QUAKE_GPU_SAMPLER
 
 bool KickInFlight()
 {

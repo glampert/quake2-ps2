@@ -742,11 +742,49 @@ void KickBuilt()
     // A kick may only go out with no tag open, and a pending 2D batch holds one.
     FlushPending2D();
 
-    if (!cmdbuf::KickInFlight())
+    if (!cmdbuf::KickInFlight() && !SerialFrames())
     {
         cmdbuf::Kick();
     }
 }
+
+#if PS2_QUAKE_GPU_SAMPLER
+static bool s_serialFrames = false;
+static bool s_noFill       = false;
+
+void SetGpuMeasureModes(const bool serial, const bool noFill)
+{
+    s_serialFrames = serial;
+    s_noFill       = noFill;
+}
+
+bool SerialFrames()
+{
+    return s_serialFrames;
+}
+
+void LimitFill(const bool limited)
+{
+    if (!s_noFill)
+    {
+        return;
+    }
+
+    FlushPending2D();
+
+    // GS_SET_SCISSOR doesn't parenthesize its arguments: named locals, and every field zero is the
+    // top-left pixel alone. The block's VIF FLUSH lets the PATH1 work before it finish first.
+    const u32 right  = static_cast<u32>(gs::Width()) - 1u;
+    const u32 bottom = static_cast<u32>(gs::Height()) - 1u;
+    const u64 whole  = GS_SET_SCISSOR(0u, right, 0u, bottom);
+    const u64 value  = limited ? 0u : whole;
+
+    gs::GifWriter & w = OpenGifBlock(4);
+    w.SetRegister(GS_REG_SCISSOR_1, value);
+    w.SetRegister(GS_REG_SCISSOR_2, value);
+    CloseGifBlock();
+}
+#endif // PS2_QUAKE_GPU_SAMPLER
 
 #if PS2_QUAKE_PROFILE
 int Gif2DPeakQwords()

@@ -616,6 +616,43 @@ interval, and read 1 µs in PCSX2.
   clean afterwards.
 - `build/baselines/` is untracked and local, holding captures, summaries and config backups.
 
+## The GPU sampler (`PS2_QUAKE_GPU_SAMPLER`, since 2026-11-28)
+
+GsWait says how long the EE waited, not on what. Debug and profiling builds (the macro follows
+`PS2_QUAKE_PROFILE`; a `CONFIG_DEFS` with `-DPS2_QUAKE_GPU_SAMPLER=0` turns it off for an A/B)
+sample VPU-STAT, VIF1_STAT, GIF_STAT and D1_CHCR on every pass of `cmdbuf::WaitIdle`'s two spins
+and charge the cycles to `gpuVu`, `gpuGs`, `gpuDirect`, `gpuVif` or `gpuTail` (cmd_buffer.h
+has the rules, ported from doom3-bfg-ps2's 037606c). `gs::UploadTexture`'s PATH3 wait goes to
+`gpuDirect`. The triangle program adds four counts at VU qword 956 (`vuSlow`, `vuEmpty`,
+`vuFanned`, `vuCulled`; vu-microprograms.md), read and zeroed after each wait. The frame log
+gets the ten columns at the end of a row, after `sndPlay`.
+
+- **The split means something on a console only.** PCSX2 finishes VU1 at once and reports no
+  GIF path, so it charges nearly everything to `gpuVif`, and GsWait is ~9 µs there anyway. The
+  VU counts are exact in PCSX2, as on a console.
+- **Only what the EE waits for is seen.** With `ps2_gs_latency 1` and the world kicked after
+  its pass, most GPU work overlaps the EE. `ps2_gs_serial 1` turns both off, so each chain is
+  waited out whole: the five columns are the chain's whole cost. `ps2_gs_nofill 1` scissors the
+  3D passes to one pixel (`rs::LimitFill`, around `view::RenderFrame`'s passes): VU1 and the GIF
+  do all their work while the GS fills almost nothing, so serial minus serial no-fill is the GS's
+  pixel work.
+- **`ps2_perftest 2`** plays demo1 and demo2 three times in one boot, pipelined, serial and
+  serial no-fill, each pass under an `FLOG#seg,<frame>,<label>` row (the marker row is the last
+  one in the old mode). `frame_log/gpu_split.py <capture>` prints the split per segment, its
+  shares, ns per triangle, and the fill cost; `--fit` fits the serial segment's VU1 cycles a
+  frame against tris, batches, particles and the four counts (ordinary least squares), which
+  prices each kind of VU1 work from one console capture. The counts and the timing come from the
+  same run, so the rows need no pairing (doom3's paired a PCSX2 log with a console one).
+- **Checked in PCSX2 (2026-11-28, debug):** `ps2_perftest 1` against main's `oxide-f410ed4.flog`
+  moved no column by more than 0.3% but GsWait, 9.0 → 9.6 µs (the sampler's own reads inside the
+  wait). `ps2_perftest 2` (`build/baselines/hires-sampler-perf2.flog`): serial GsWait 263 µs a
+  frame, 99.5% `gpuVif`, the split summing to 101% of it (the last sample lands after the wait's
+  own end); no-fill identical, since PCSX2 charges no fill; the VU counts identical across the
+  three passes (255 slow-path, 142 clipped to nothing, 160 fanned, 2294 back faces a 3D frame,
+  of 4224 triangles), the demos being deterministic. The console run is what gives the split.
+- What a strip ("hi-res") mode would cost is modelled from the serial and no-fill segments:
+  every replay pays the chain's VU1 and GS setup again, and the fill grows with the pixels.
+
 ## Codegen A/B across the backend (no tree edits)
 
 - Baseline: `make release`, then snapshot `build/release/src/ps2/**/*.o` to the scratchpad.

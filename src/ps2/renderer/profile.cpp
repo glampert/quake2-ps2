@@ -172,6 +172,14 @@ struct FrameSample
     // follows it. Either waits on the IOP while a file read is out there; the ring can run lower
     // than sndFree shows by as long as the play waits.
     u32 sndQueryCycles, sndPlayCycles;
+
+#if PS2_QUAKE_GPU_SAMPLER
+    // cmdbuf::TakeGpuStats: the frame's GsWait split by what held the chain up (cmd_buffer.h),
+    // the waits that found a chain in flight, and the triangle program's counts.
+    u32 gpuCycles[cmdbuf::kNumGpuStates];
+    u32 gpuWaits;
+    u32 vuSlow, vuEmpty, vuFanned, vuCulled;
+#endif // PS2_QUAKE_GPU_SAMPLER
 };
 
 static FrameSample s_samples[kBatchFrames];
@@ -330,12 +338,21 @@ void WriteBatch()
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
-                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay\n");
+                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay"
+#if PS2_QUAKE_GPU_SAMPLER
+                    ",gpuVu,gpuGs,gpuDirect,gpuVif,gpuTail,gpuWaits,vuSlow,vuEmpty,vuFanned,vuCulled"
+#endif // PS2_QUAKE_GPU_SAMPLER
+                    "\n");
         Emit("FLOG#note,timings are microseconds\n");
         Emit("FLOG#note,sndFree is the free bytes of audsrv's %d-byte ring at the frame's submit; -1 held, -2 sent nothing (the last send still out, or held back behind a read)\n",
              ps2::audio::DeviceRingBytes());
         Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
         Emit("FLOG#note,sndQuery and sndPlay are the slowest free-space and play RPCs of the sends finished since the last row, in microseconds\n");
+#if PS2_QUAKE_GPU_SAMPLER
+        Emit("FLOG#note,gpuVu..gpuTail split GsWait by what held the chain up (cmd_buffer.h); on a console only, PCSX2 charges nearly all of it to gpuVif\n");
+        Emit("FLOG#note,vuSlow vuEmpty vuFanned vuCulled are the triangle program's counts: slow-path triangles, those clipped to nothing, fan triangles sent, back faces culled\n");
+        Emit("FLOG#note,FLOG#seg rows name the GPU measuring mode from that frame on (ps2_gs_serial, ps2_gs_nofill)\n");
+#endif // PS2_QUAKE_GPU_SAMPLER
     }
 
     // Built into one buffer and written with a single printf: every call is a
@@ -346,7 +363,7 @@ void WriteBatch()
     {
         const FrameSample & s = s_samples[i];
 
-        char line[640];
+        char line[768];
         int at = std::snprintf(line, sizeof(line), "FLOG,%u", s.frameIndex);
 
         for (int e = 0; e < kNumEvents && at > 0 && at < static_cast<int>(sizeof(line)); ++e)
@@ -357,9 +374,9 @@ void WriteBatch()
 
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
-            std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
+            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
                           ",%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,"
-                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u\n",
+                          "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%u,%u",
                           s.nodes, s.surfs, s.surfsAlpha, s.surfsTurb, s.skyFaces,
                           s.tris, s.trisClipped, s.trisCulled,
                           s.trisClipNearOnly, s.trisClipNoNear, s.trisClipMixed,
@@ -369,6 +386,23 @@ void WriteBatch()
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
                           s.chainKB, s.chainKicks, s.chainDrains, s.sndFree, s.aioBytes, s.aioQ,
                           ToMicrosec(s.sndQueryCycles), ToMicrosec(s.sndPlayCycles));
+        }
+
+#if PS2_QUAKE_GPU_SAMPLER
+        if (at > 0 && at < static_cast<int>(sizeof(line)))
+        {
+            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at),
+                                ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
+                                ToMicrosec(s.gpuCycles[0]), ToMicrosec(s.gpuCycles[1]), ToMicrosec(s.gpuCycles[2]),
+                                ToMicrosec(s.gpuCycles[3]), ToMicrosec(s.gpuCycles[4]), s.gpuWaits,
+                                s.vuSlow, s.vuEmpty, s.vuFanned, s.vuCulled);
+        }
+#endif // PS2_QUAKE_GPU_SAMPLER
+
+        if (at > 0 && at < static_cast<int>(sizeof(line)) - 1)
+        {
+            line[at++] = '\n';
+            line[at]   = '\0';
         }
 
         Emit("%s", line);
@@ -483,6 +517,22 @@ void FrameLogCapture()
     s.aioQ     = static_cast<int>(aio.queueDepth);
 
     ps2::audio::TakeSubmitTimes(s.sndQueryCycles, s.sndPlayCycles);
+
+#if PS2_QUAKE_GPU_SAMPLER
+    // Every wait since the last row: the frame's own (a texture fence, an overflow, the world's
+    // kick) and the one that retired the frame before, at this frame's BeginFrame - the same
+    // waits the GsWait column above was charged with.
+    const cmdbuf::GpuStats gpu = cmdbuf::TakeGpuStats();
+    for (int i = 0; i < cmdbuf::kNumGpuStates; ++i)
+    {
+        s.gpuCycles[i] = static_cast<u32>(gpu.cycles[i]);
+    }
+    s.gpuWaits = gpu.waits;
+    s.vuSlow   = gpu.vuSlow;
+    s.vuEmpty  = gpu.vuEmpty;
+    s.vuFanned = gpu.vuFanned;
+    s.vuCulled = gpu.vuCulled;
+#endif // PS2_QUAKE_GPU_SAMPLER
 }
 
 void FrameLogFlush()
@@ -556,6 +606,16 @@ void FrameLogMarkMap(const char * mapName)
         return;
     }
     Emit("FLOG#map,%u,%s\n", s_frameIndex, (mapName != nullptr) ? mapName : "?");
+    Commit();
+}
+
+void FrameLogMarkSegment(const char * label)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    Emit("FLOG#seg,%u,%s\n", s_frameIndex, (label != nullptr) ? label : "?");
     Commit();
 }
 

@@ -37,6 +37,12 @@ void RegisterPerfTestCvar();
 // one is recognisable. With "ps2_test_quit 0" it stays up instead, and can be
 // armed again (test_quit.h); a second run appends to the same frame log.
 //
+// "2" is the GPU sampler's run (GPU sampler builds only, cmd_buffer.h): the two demos three times
+// in one boot, pipelined, then with ps2_gs_serial 1, then serial with ps2_gs_nofill 1, each pass
+// opened by an FLOG#seg row naming it. The serial passes give every chain's whole cost split by
+// state, and the difference between the last two the GS's pixel work. The cinematics stay out:
+// they draw one textured quad. A build without the sampler runs "2" as "1".
+//
 // One shot: the cvar is archived and set back to 0 before quitting, so the config
 // written on the way out disarms the next launch. A run that does not finish
 // stays armed, which is what you want when the emulator was closed mid-capture.

@@ -4,7 +4,8 @@
 A debug build prints one FLOG row per frame (ps2::debug::FrameLogCapture, see
 src/ps2/renderer/profile.cpp): the profiler events in microseconds and the draw
 counters, under a FLOG#hdr naming the columns. FLOG#map marks a level load,
-FLOG#open names a file opened in that row and FLOG#end closes a complete run.
+FLOG#seg a GPU measuring mode (ps2_perftest 2), FLOG#open names a file opened in that row and
+FLOG#end closes a complete run.
 The perf run (ps2_perftest 1) plays the demos with the log on and quits, and
 the rows end up in PCSX2's logs/emulog.txt (with EnableIOPConsole on).
 
@@ -40,6 +41,12 @@ def extract(path):
         elif kind is None:   rows.append(chunk)
     return hdr, rows, maps, opens, end
 
+def extract_segments(path):
+    # FLOG#seg,<frame>,<label> rows (ps2_perftest 2's measuring modes), kept apart from extract's
+    # tuple so its callers need not change.
+    text = open(path, errors='replace').read()
+    return [m.group(0) for m in re.finditer(r'FLOG#seg,\d+,[A-Za-z0-9_.-]+', text)]
+
 def main():
     path = sys.argv[1]
     out = None
@@ -51,6 +58,7 @@ def main():
         with open(out, 'w') as f:
             if hdr: f.write(hdr + '\n')
             for r in maps: f.write(r + '\n')
+            for r in extract_segments(path): f.write(r + '\n')
             for r in rows: f.write(r + '\n')
             for r in opens: f.write(r + '\n')
             if end: f.write(end + '\n')

@@ -9,15 +9,18 @@ paths:
 
 # VU microprograms and VU0 inline asm
 
-## Pipeline (Makefile rule `build/vu/%.o`)
+## Pipeline (Makefile rule `$(VU_DIR)/%.o`)
 
-`oxide-vusl --warnings-as-errors --header=build/vu/<name>.vusl.h` → `dvp-as`. oxide-vusl comes
-from the `src/tools/oxide-vcl` submodule, built by cargo into `build/tools/oxide-vcl/`; it
-compiles VUSL to VCL and hands that to oxide-vcl in oxide mode with every optimization. Its
-docs, there: `docs/VUSL.md` (the language, the cost of each construct, the header) and
-`docs/VUSL_COMPILER.md`. The output is config-independent and lives in `build/vu/`: the `.vsm`
-and `.o`, and the header. There are two programs, `textured_triangles.vusl` and
-`particles.vusl`, which share `frame.vush`.
+`oxide-vusl --warnings-as-errors -DPS2_QUAKE_GPU_SAMPLER=<0|1> --header=<dir>/<name>.vusl.h` →
+`dvp-as`. oxide-vusl comes from the `src/tools/oxide-vcl` submodule, built by cargo into
+`build/tools/oxide-vcl/`; it compiles VUSL to VCL and hands that to oxide-vcl in oxide mode with
+every optimization. Its docs, there: `docs/VUSL.md` (the language, the cost of each construct,
+the header) and `docs/VUSL_COMPILER.md`. The output depends on one setting only, the GPU
+sampler's (cmd_buffer.h), which adds the triangle program's counters: `build/vu/` holds the
+programs without them (a plain release), `build/vu_sampler/` with them (debug and profiling
+builds), each the `.vsm`, the `.o` and the header. The sampler-off output is byte-identical to the
+programs before the counters existed (checked 2026-11-28). There are two programs,
+`textured_triangles.vusl` and `particles.vusl`, which share `frame.vush`.
 
 - **Check `make`'s exit status.** oxide-vusl writes all its files or none, but a failed VU
   build leaves the previous `.vsm`/`.o` in place. If a VU change seems not to take effect,
@@ -105,8 +108,11 @@ does it for its own copies of these programs, against the corpus VCL. PCSX2 show
 Chunks are up to 90 vertices (60 for MD2) in a double buffer, `XTOP` flips per `MSCAL`, and
 there are two output windows XGKICKed alternately. The clip scratch is 956..1009: the
 clipper's buffers from 957 and the program's work area (its `layout(spill)` parameter) at
-1008-1009, where oxide-vcl keeps the VI values that do not fit in registers. 956 is spare. The
-light block starts at 1010. The batch tag block is 7 qwords with no room to grow (see
+1008-1009, where oxide-vcl keeps the VI values that do not fit in registers. 956 is the one
+qword left: in GPU sampler builds it holds the triangle program's counts (`vu1::kVuCountsAddr`:
+slow-path, clipped-to-nothing, fanned and culled triangles, as floats, read and zeroed by
+`cmdbuf::WaitIdle`), which cost the program 20 instructions (1147 → 1167), none on the fast
+path. Elsewhere it is spare. The light block starts at 1010. The batch tag block is 7 qwords with no room to grow (see
 [gs-renderer.md](gs-renderer.md)). The programs' `main` parameters are where these addresses
 are written; vu1.h takes them from the generated headers.
 
@@ -128,7 +134,9 @@ failed in a row on one bug, and two probes settled it:
   `drawCorner`) and read the grey level on screen. A value that saturates the blend hides
   what's behind it.
 - **Byte dump:** store the value to a scratch qword nothing else writes (956, the clip
-  scratch's spare qword, as a `layout(address = 956) inout` parameter), then print it from the
+  scratch's spare qword, as a `layout(address = 956) inout` parameter; in a GPU sampler build
+  that is the counts' qword, so build the probe with `-DPS2_QUAKE_GPU_SAMPLER=0` in
+  `CONFIG_DEFS` or expect the counts to be garbage), then print it from the
   EE with `ps2::debug::DumpVu1DataMemory(what, addrQw, count)` (`debug/pipeline_dump.h`, debug
   only), gated to every N frames. A probe in a function lands in *every* call, since each is
   inlined, so check the shape of the data before trusting a sample.

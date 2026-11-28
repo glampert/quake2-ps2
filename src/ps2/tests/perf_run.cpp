@@ -52,6 +52,25 @@ static const cvar_t * s_enabled = nullptr;
 // say nothing the other two don't.
 constexpr const char * kSequence[] = { "demo1.dm2", "demo2.dm2", "eou1_.cin", "ntro.cin" };
 
+#if PS2_QUAKE_GPU_SAMPLER
+// ps2_perftest 2: the demos alone (the first two of kSequence), once per GPU measuring mode, each
+// pass under an FLOG#seg row named as below (frame_log/gpu_split.py groups rows by it).
+constexpr int kGpuRunItems = 2;
+
+struct GpuPass
+{
+    const char * label;
+    const char * serial; // ps2_gs_serial
+    const char * noFill; // ps2_gs_nofill
+};
+
+constexpr GpuPass kGpuPasses[] = {
+    { "pipelined",     "0", "0" },
+    { "serial",        "1", "0" },
+    { "serial-nofill", "1", "1" },
+};
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 bool IsCinematic(const char * const name)
 {
     const char * const dot = std::strrchr(name, '.');
@@ -120,6 +139,36 @@ static int   s_issuedAtMs  = 0;
 static int   s_startedAtMs = 0;
 static int   s_failed      = 0;
 
+#if PS2_QUAKE_GPU_SAMPLER
+static bool s_gpuRun  = false; // ps2_perftest 2, latched when the run starts
+static int  s_gpuPass = 0;
+#endif // PS2_QUAKE_GPU_SAMPLER
+
+// What this run plays: the whole sequence, or for ps2_perftest 2 its demos.
+int ItemCount()
+{
+#if PS2_QUAKE_GPU_SAMPLER
+    if (s_gpuRun)
+    {
+        return kGpuRunItems;
+    }
+#endif // PS2_QUAKE_GPU_SAMPLER
+    return ArrayLength(kSequence);
+}
+
+#if PS2_QUAKE_GPU_SAMPLER
+// Sets the pass's measuring mode and opens its segment in the frame log. The cvars are read at
+// the next PS2_BeginFrame, so the marker's row is the last one in the old mode.
+void BeginGpuPass()
+{
+    const GpuPass & pass = kGpuPasses[s_gpuPass];
+    Cvar_Set("ps2_gs_serial", pass.serial);
+    Cvar_Set("ps2_gs_nofill", pass.noFill);
+    ps2::debug::FrameLogMarkSegment(pass.label);
+    Com_Printf("PerfRun: GPU pass %d/%d, %s\n", s_gpuPass + 1, ArrayLength(kGpuPasses), pass.label);
+}
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 bool ServerIsUp()
 {
     return Com_ServerState() != kServerDead;
@@ -148,7 +197,7 @@ void RestoreRunCvars()
 void StartDemo()
 {
     const char * const name = kSequence[s_nextDemo];
-    Com_Printf("PerfRun: [%d/%d] playing %s\n", s_nextDemo + 1, ArrayLength(kSequence), name);
+    Com_Printf("PerfRun: [%d/%d] playing %s\n", s_nextDemo + 1, ItemCount(), name);
 
     // A cinematic goes through gamemap, as the level chains issue it: SV_Map spawns a cinematic
     // server, the client plays the file, and with no '+' to chain to the end kills the server.
@@ -162,14 +211,29 @@ void StartDemo()
 void NextDemoOrFinish()
 {
     ++s_nextDemo;
-    if (s_nextDemo < ArrayLength(kSequence))
+    if (s_nextDemo < ItemCount())
     {
         StartDemo();
         return;
     }
 
+#if PS2_QUAKE_GPU_SAMPLER
+    // The next measuring mode, from the first demo again.
+    if (s_gpuRun && (s_gpuPass + 1) < ArrayLength(kGpuPasses))
+    {
+        ++s_gpuPass;
+        s_nextDemo = 0;
+        BeginGpuPass();
+        StartDemo();
+        return;
+    }
+    const int passes = s_gpuRun ? ArrayLength(kGpuPasses) : 1;
+#else // PS2_QUAKE_GPU_SAMPLER
+    constexpr int passes = 1;
+#endif // PS2_QUAKE_GPU_SAMPLER
+
     Com_Printf("PerfRun: complete - %d of %d played, %d timed out.\n",
-               ArrayLength(kSequence) - s_failed, ArrayLength(kSequence), s_failed);
+               (ItemCount() * passes) - s_failed, ItemCount() * passes, s_failed);
 
     // The frame log writes in batches, so the tail of the run is still buffered.
     // This also marks the end, which is what tells a completed capture apart from
@@ -177,6 +241,14 @@ void NextDemoOrFinish()
     ps2::debug::FrameLogFinish();
     Cvar_Set("ps2_frame_log", "0");
     RestoreRunCvars();
+#if PS2_QUAKE_GPU_SAMPLER
+    if (s_gpuRun)
+    {
+        // Neither is archived, and both default to off: back to normal frames.
+        Cvar_Set("ps2_gs_serial", "0");
+        Cvar_Set("ps2_gs_nofill", "0");
+    }
+#endif // PS2_QUAKE_GPU_SAMPLER
 
     // EndTest disarms it before quitting, so the config the quit writes has it back
     // at 0. A run that force-quits the program on startup must not be able to leave
@@ -220,8 +292,21 @@ void RunPerfTest()
         ApplyRunCvars();
         Cvar_Set("ps2_frame_log", "1");
 
-        Com_Printf("PerfRun: starting - %d demos and cinematics, developer 0, overlays off, frame log on.\n",
-                   ArrayLength(kSequence));
+#if PS2_QUAKE_GPU_SAMPLER
+        s_gpuRun  = (s_enabled->value == 2.0f);
+        s_gpuPass = 0;
+        if (s_gpuRun)
+        {
+            Com_Printf("PerfRun: starting the GPU run - %d demos, %d passes, developer 0, overlays off, frame log on.\n",
+                       ItemCount(), ArrayLength(kGpuPasses));
+            BeginGpuPass();
+        }
+        else
+#endif // PS2_QUAKE_GPU_SAMPLER
+        {
+            Com_Printf("PerfRun: starting - %d demos and cinematics, developer 0, overlays off, frame log on.\n",
+                       ItemCount());
+        }
 
         // Whatever the startup left running - the d1 attract loop, or a map forced
         // in Qcommon_Init - is still up. Drop it, so the first demo's server coming

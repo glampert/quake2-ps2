@@ -267,12 +267,15 @@ CXX_OBJS = $(addprefix $(OUTPUT_DIR)/$(SRC_DIR)/, $(CXX_SRC:.cpp=.o))
 # (see PS2_DECLARE_VU_MICROPROGRAM in ps2/renderer/vu1.h), and a C++ header,
 # <name>.vusl.h, with the program's memory layout: vu1.h includes it and checks
 # the host's structs and constants against it. None of the EE compiler flags
-# reach this toolchain, so the output is identical in both configs: build it
-# once into build/vu/ and share it.
+# reach this toolchain, so the output depends on one setting only, the GPU
+# sampler's (below), which adds the programs' counters: build it once per value,
+# into build/vu/ (off, what a release ships) or build/vu_sampler/ (on), and share
+# it between the configs that agree on it.
 VUSL_PATH    = $(SRC_DIR)/ps2/renderer/vu1progs
 VUSL_FILES   = textured_triangles.vusl particles.vusl
-VU_OBJS      = $(addprefix $(BUILD_DIR)/vu/, $(VUSL_FILES:.vusl=.o))
-VU_HEADERS   = $(addprefix $(BUILD_DIR)/vu/, $(VUSL_FILES:.vusl=.vusl.h))
+VU_DIR       = $(BUILD_DIR)/vu$(if $(filter 1,$(GPU_SAMPLER)),_sampler,)
+VU_OBJS      = $(addprefix $(VU_DIR)/, $(VUSL_FILES:.vusl=.o))
+VU_HEADERS   = $(addprefix $(VU_DIR)/, $(VUSL_FILES:.vusl=.vusl.h))
 
 # Shared include files (frame.vush). The programs include these by bare name,
 # which the preprocessor finds next to the including file; they are prerequisites
@@ -289,7 +292,7 @@ VUSL_INCS    = $(wildcard $(VUSL_PATH)/*.vush)
 OXIDE_VCL_PATH   = $(SRC_DIR)/tools/oxide-vcl
 OXIDE_VCL_BUILD  = $(BUILD_DIR)/tools/oxide-vcl
 OXIDE_VUSL       = $(OXIDE_VCL_BUILD)/release/oxide-vusl
-OXIDE_VUSL_FLAGS = --warnings-as-errors
+OXIDE_VUSL_FLAGS = --warnings-as-errors -DPS2_QUAKE_GPU_SAMPLER=$(GPU_SAMPLER)
 
 # miniz (https://github.com/richgel999/miniz), the deflate codec the save games are
 # compressed with (ps2/save/working_set.cpp). A git submodule like oxide-vcl; only the raw
@@ -370,12 +373,19 @@ else
     CONFIG_DEFS     = -DPS2_QUAKE_DEBUG=1 -DPS2_QUAKE_ASSERTS=1 -DPS2_QUAKE_PROFILE=1
 endif
 
-COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(CONFIG_DEFS) -DPS2_QUAKE_ISO=$(ISO_BUILD)
+# PS2_QUAKE_GPU_SAMPLER (cmd_buffer.h: the GPU sampler and the VU programs' counters) follows
+# PS2_QUAKE_PROFILE, so debug and profiling builds have it and a release never does. A CONFIG_DEFS
+# that sets it says otherwise, for an A/B of what the sampler itself costs. It reaches the VU
+# programs too, which is why it is worked out here rather than in a header.
+GPU_SAMPLER = $(or $(patsubst -DPS2_QUAKE_GPU_SAMPLER=%,%,$(filter -DPS2_QUAKE_GPU_SAMPLER=%,$(CONFIG_DEFS))),$(if $(filter -DPS2_QUAKE_PROFILE=1,$(CONFIG_DEFS)),1,0))
+
+COMMON_DEFS = -DGAME_HARD_LINKED -DPS2_QUAKE $(filter-out -DPS2_QUAKE_GPU_SAMPLER=%,$(CONFIG_DEFS)) \
+              -DPS2_QUAKE_GPU_SAMPLER=$(GPU_SAMPLER) -DPS2_QUAKE_ISO=$(ISO_BUILD)
 
 EE_INCS += -I$(SRC_DIR)
 
 # The VU programs' generated headers (see VU_HEADERS), included by vu1.h by bare name.
-EE_INCS += -I$(BUILD_DIR)/vu
+EE_INCS += -I$(VU_DIR)
 
 # Floating-point semantics, for the engine C and the backend C++ alike. GCC already models
 # the EE FPU as having no NaN or Inf (sqrtf is a bare sqrt.s, fabsf an abs.s), so what is
@@ -563,10 +573,10 @@ $(OXIDE_VUSL): $(wildcard $(OXIDE_VCL_SRCS))
 #
 # One recipe makes both targets: a pattern rule with two targets is run once for
 # the pair.
-$(BUILD_DIR)/vu/%.o $(BUILD_DIR)/vu/%.vusl.h: $(VUSL_PATH)/%.vusl $(VUSL_INCS) $(OXIDE_VUSL)
+$(VU_DIR)/%.o $(VU_DIR)/%.vusl.h: $(VUSL_PATH)/%.vusl $(VUSL_INCS) $(OXIDE_VUSL)
 	@mkdir -p $(dir $@)
-	$(OXIDE_VUSL) $(OXIDE_VUSL_FLAGS) --header=$(BUILD_DIR)/vu/$*.vusl.h -o$(BUILD_DIR)/vu/$*.vsm $<
-	dvp-as $(BUILD_DIR)/vu/$*.vsm -o $(BUILD_DIR)/vu/$*.o
+	$(OXIDE_VUSL) $(OXIDE_VUSL_FLAGS) --header=$(VU_DIR)/$*.vusl.h -o$(VU_DIR)/$*.vsm $<
+	dvp-as $(VU_DIR)/$*.vsm -o $(VU_DIR)/$*.o
 
 # vu1.h includes the generated headers, so no C++ object can be built before them.
 # Order-only: once an object exists, its -MMD dependency file names the headers it
@@ -675,10 +685,10 @@ compiledb:
 # Every config, not just the selected one.
 clean:
 	rm -rf $(BUILD_DIR)/debug $(BUILD_DIR)/release $(BUILD_DIR)/iso_debug $(BUILD_DIR)/iso_release \
-		$(BUILD_DIR)/vu $(BUILD_DIR)/tools
+		$(BUILD_DIR)/vu $(BUILD_DIR)/vu_sampler $(BUILD_DIR)/tools
 
 clean_vu:
-	rm -rf $(BUILD_DIR)/vu
+	rm -rf $(BUILD_DIR)/vu $(BUILD_DIR)/vu_sampler
 
 -include $(DEPS)
 

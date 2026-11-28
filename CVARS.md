@@ -92,7 +92,9 @@ bigger picture.
 | `ps2_show_profile` | `1` | `0` | Arch. | Per-stage frame timings panel; does nothing in release, where the profiler is compiled out. |
 | `ps2_frame_log` | `0` | — | | Log per-frame timings and counters to stdout in batches, for the `frame_log` scripts. |
 | `ps2_logfile` | `0` | `0` | | Copy the console, `Sys_Error` and the reports printed before it (pipeline hang dump, stack traces, out-of-memory stats) to `quake2.log` next to `baseq2/`, one open/append/close per write so a hang leaves the log on the drive. A `Sys_Error` and the reports before it are written even at `0`, so a console crash always leaves `quake2.log` with the header and the report. Defaults to `1` in a build with `PS2_QUAKE_LOAD_TRACE` set to 1. The Options menu's debug page sets it. A disc build writes it to the emulator's `host:` (beside the image in PCSX2), and on a console nowhere. |
-| `ps2_perftest` | `0` | `0` | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits; does nothing in release, where the profiler is compiled out. The debug page's "start perf test" sets it. |
+| `ps2_perftest` | `0` | `0` | Arch. | Unattended perf run: plays the attract demos with the frame log on, then quits; does nothing in release, where the profiler is compiled out. The debug page's "start perf test" sets it. `2` is the GPU sampler's run (GPU sampler builds; elsewhere it runs as `1`): the two demos three times, pipelined, with `ps2_gs_serial 1`, and serial with `ps2_gs_nofill 1`, each pass under an `FLOG#seg` row (`frame_log/gpu_split.py`). |
+| `ps2_gs_serial` | `0` | — | | GPU sampler builds (`PS2_QUAKE_GPU_SAMPLER`, debug and profiling): every frame's chain is kicked once, at its end, and waited out there (no world kick, no GS latency), so the sampler's split covers each chain whole. Frames run slower; for measuring only. |
+| `ps2_gs_nofill` | `0` | — | | GPU sampler builds: the 3D passes draw with SCISSOR at one pixel, so VU1 and the GIF do all their work while the GS fills almost nothing. Serial minus serial with this is the GS's pixel cost. The picture is black but for the 2D. |
 
 ## File system and background loading
 

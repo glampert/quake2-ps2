@@ -70,6 +70,14 @@ static const cvar_t * s_showProfileStats  = nullptr;
 static const cvar_t * s_gsLatency    = nullptr;
 static const cvar_t * s_enableDither = nullptr;
 
+#if PS2_QUAKE_GPU_SAMPLER
+// The GPU sampler's measuring modes (rs::SetGpuMeasureModes): ps2_gs_serial waits every chain out
+// whole at its own EndFrame, ps2_gs_nofill scissors the 3D passes to one pixel. Not archived:
+// a capture sets them (ps2_perftest 2), and a session that forgot one would read slow.
+static const cvar_t * s_gsSerial = nullptr;
+static const cvar_t * s_gsNoFill = nullptr;
+#endif // PS2_QUAKE_GPU_SAMPLER
+
 // Where the picture sits on the TV: pixels to the right and rows down of the standard's usual
 // place, for a set that cuts an edge off (system/video_mode.h). Live, from the video menu's
 // "screen x" and "screen y" rows, and read before gs::Init, so the GS comes up with it.
@@ -566,6 +574,10 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
 
     s_gsLatency         = Cvar_Get("ps2_gs_latency", "1", CVAR_ARCHIVE);
     s_enableDither      = Cvar_Get("ps2_fb_dither",  "0", CVAR_ARCHIVE);
+#if PS2_QUAKE_GPU_SAMPLER
+    s_gsSerial          = Cvar_Get("ps2_gs_serial",  "0", 0);
+    s_gsNoFill          = Cvar_Get("ps2_gs_nofill",  "0", 0);
+#endif // PS2_QUAKE_GPU_SAMPLER
     s_screenX           = Cvar_Get("ps2_screen_x",   "0", CVAR_ARCHIVE);
     s_screenY           = Cvar_Get("ps2_screen_y",   "0", CVAR_ARCHIVE);
     SyncScreenOffset();
@@ -957,6 +969,10 @@ void PS2_BeginFrame(float cameraSeparation)
     ps2::gamma::ApplyPendingChange();
     SyncScreenOffset();
 
+#if PS2_QUAKE_GPU_SAMPLER
+    ps2::rs::SetGpuMeasureModes(/*serial=*/s_gsSerial->value != 0.0f, /*noFill=*/s_gsNoFill->value != 0.0f);
+#endif // PS2_QUAKE_GPU_SAMPLER
+
     // 2D and 3D now draw freely between here and PS2_EndFrame: 2D primitives
     // open the deferred overlay batch lazily and it flushes automatically at
     // each 2D->3D boundary and in rs::EndFrame().
@@ -1015,7 +1031,9 @@ void PS2_EndFrame()
     // zero in a release-style configuration.
     DrawDebugOverlays();
 
-    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f && !saveNotice);
+    // ps2_gs_serial (GPU sampler builds) presents every frame here too, so its chain is waited out
+    // whole, from the first qword, and the sampler sees all of it.
+    ps2::rs::EndFrame(/*deferPresent=*/s_gsLatency->value != 0.0f && !saveNotice && !ps2::rs::SerialFrames());
 
 #if PS2_QUAKE_LOAD_TRACE
     if (s_firstViewInThisFrame)

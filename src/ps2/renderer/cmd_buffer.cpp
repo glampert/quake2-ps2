@@ -9,6 +9,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/profile.h"
+#include "ps2/renderer/hi_res.h"
 #if PS2_QUAKE_GPU_SAMPLER
 #include "ps2/renderer/vu1.h" // kVuCountsAddr
 #endif // PS2_QUAKE_GPU_SAMPLER
@@ -299,6 +300,14 @@ bool Reserve(const int qwords)
                   qwords, capacity);
     }
 
+    // Strip mode can't kick part of a frame: the passes replay a frame whole, from its half, and the
+    // other half is the frame they are replaying. A frame this size has never been seen (the perf
+    // demos peak at about 660 KB), so it is fatal rather than handled.
+    if (hires::Active()) [[unlikely]]
+    {
+        Sys_Error("Frame chain: a strip mode frame outgrew its %u KB half.", kHalfBytes / 1024u);
+    }
+
     // Everything built so far still has to reach the GS: send it, and carry on in the other half
     // without waiting for it to be drawn. The kick waits out the segment before this one first -
     // one chain at a time on the channel - and with it everything the other half held, the
@@ -423,22 +432,9 @@ void detail::CommitQwords(void * const base, const int usedQwords)
 // Submission
 // ------------------------------------------------------------------------------------------------
 
-void Kick()
+// Appends a segment's terminator: FLUSH, the FINISH the fences wait on, END.
+static void AppendTerminator(packet2_t * const pkt)
 {
-    packet2_t * const pkt = Current();
-    if (packet2_get_qw_count(pkt) == static_cast<u32>(s_kickedQwords))
-    {
-        return; // nothing built since the last one
-    }
-
-    // One chain at a time on the channel: the segment about to go out would otherwise overwrite
-    // TADR under a transfer still walking the previous one. Free when the caller is Drain(),
-    // which has already waited.
-    WaitIdle();
-
-    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
-                  "cmdbuf::Kick with a tag still open - the segment has no valid end!");
-
     // The terminator, and the two halves of what it means for a chain to be "done".
     //
     // The FLUSH stalls VIF1 until the last microprogram has ended and its XGKICKs have drained to
@@ -463,6 +459,25 @@ void Kick()
     packet2_vif_close_direct_manual(pkt, 2);
     packet2_chain_close_tag(pkt);
     packet2_utils_vu_add_end_tag(pkt);
+}
+
+void Kick()
+{
+    packet2_t * const pkt = Current();
+    if (packet2_get_qw_count(pkt) == static_cast<u32>(s_kickedQwords))
+    {
+        return; // nothing built since the last one
+    }
+
+    // One chain at a time on the channel: the segment about to go out would otherwise overwrite
+    // TADR under a transfer still walking the previous one. Free when the caller is Drain(),
+    // which has already waited.
+    WaitIdle();
+
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "cmdbuf::Kick with a tag still open - the segment has no valid end!");
+
+    AppendTerminator(pkt);
 
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaSend);
@@ -762,6 +777,37 @@ bool KickInFlight()
     return s_kickInFlight;
 }
 
+int CurrentHalf()
+{
+    return s_half;
+}
+
+int NextHalf()
+{
+    return s_half ^ 1;
+}
+
+const void * CloseForReplay()
+{
+    packet2_t * const pkt = Current();
+    PS2_AssertMsg(s_kickedQwords == 0 && !s_kickInFlight, "cmdbuf::CloseForReplay on a frame something kicked!");
+    PS2_AssertMsg(!packet2_is_dma_tag_opened(pkt) && !packet2_is_vif_code_opened(pkt),
+                  "cmdbuf::CloseForReplay with a tag still open - the chain has no valid end!");
+
+    AppendTerminator(pkt);
+    {
+        // As Kick: the whole chain back to memory for the DMAC, and out of the cache, so the passes'
+        // uncached ZBUF patches (hires::PatchFixups) are never overwritten by a dirty line.
+        PS2_PROFILE_SCOPED_EVENT(prof_evt::DmaFlush);
+        FlushCache(0);
+    }
+
+    // Nothing is left un-kicked as far as BeginFrame's check goes: the passes send it.
+    s_kickedQwords = static_cast<int>(packet2_get_qw_count(pkt));
+    PS2_PROFILE_ONLY(++s_stats.kicks);
+    return pkt->base;
+}
+
 #if PS2_QUAKE_DEBUG
 void SetHangReportHook(const HangReportFn hook)
 {
@@ -786,6 +832,15 @@ void DrainBeforeWorldLoad()
     if (!s_initialized)
     {
         return; // a load before the renderer is up cannot be racing anything
+    }
+
+    // Strip mode kicks nothing, but the passes replay a frame out of one of the halves: they move
+    // to a copy of it for the load (hi_res.h).
+    if (hires::Running())
+    {
+        hires::LendHalves(s_packets[0]->base, s_packets[1]->base, kHalfBytes);
+        Rewind();
+        return;
     }
 
     // The rewind is the point of this one: the half is about to become the .bsp lump staging

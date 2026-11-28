@@ -33,6 +33,7 @@
 #include "ps2/debug/log_file.h" // DumpPrintf
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/hi_res.h"
 
 #include <cstdint>
 #include <optional>
@@ -358,6 +359,16 @@ void Ensure2D()
 // (cmdbuf::kTerminatorQwords).
 void FenceGs()
 {
+    // Strip mode sends nothing of the frame being built before it is finished, and the frame being
+    // replayed keeps its textures pinned (vram.h), so a recycled block is never one a draw still
+    // samples: there is nothing to fence. The heap's own recovery holds the passes instead (see
+    // AllocateVramFor).
+    if (hires::Active())
+    {
+        vram::ClearReuseHazard();
+        return;
+    }
+
     const bool reopen = s_gifBlock.has_value();
     if (reopen)
     {
@@ -395,12 +406,27 @@ vram::Address AllocateVramFor(const tex::Texture & texture, const int sizeWords)
                     texture.name, sizeWords * 4 / 1024);
 #endif // PS2_QUAKE_DEBUG
 
+        // Strip mode: the pins in the way are the replayed frame's, so the passes hold, blank,
+        // until this frame takes over from it; UnpinAll then drops those and keeps this frame's.
+        if (hires::Active())
+        {
+            hires::HoldUntilNextFrame();
+        }
         FenceGs();
         gs::Invalidate2DBinding(); // the 2D dedupe must not survive an eviction
         vram::UnpinAll();
         vram::NoteOomSync();
 
         addr = vram::TryAllocate(texture, sizeWords);
+    }
+
+    // Strip mode can't repack: this frame's draws are already in its chain, with the addresses the
+    // repack would move, and none of it has been drawn.
+    if (addr == vram::Address::Invalid && hires::Active()) [[unlikely]]
+    {
+        vram::DumpAllBlocks();
+        Sys_Error("GS VRAM: '%s' (%d KB) doesn't fit the %s texture heap, even with the replayed frame unpinned!",
+                  texture.name, sizeWords * 4 / 1024, video::OutputName(video::Selected(), video::SelectedOutput()));
     }
 
     if (addr == vram::Address::Invalid)
@@ -645,6 +671,12 @@ void Init(const gs::Config & gsConfig, void * memory, const u32 memorySizeBytes)
     // NOTE: Must happen after cmdbuf::Init since the microprogram upload goes out on the cmdbuf chain.
     vu1::Init();
 
+    // Strip mode: the passes start once the microprograms are in, the last chain anything kicks.
+    if (hires::Active())
+    {
+        hires::Start(gs::MakePixelTests());
+    }
+
 #if PS2_QUAKE_DEBUG
     cmdbuf::SetHangReportHook(&DumpVuWorkInProgress);
 #endif
@@ -666,17 +698,37 @@ void BeginFrame(const bool dither)
     // which reads the finished frame's counters, before it calls this.
     PS2_PROFILE_ONLY(GetStats() = {});
 
-    // Retires and shows the previous frame when EndFrame left it drawing; a no-op when EndFrame
-    // presented it immediately, which is what lets the two paths share everything below.
-    PresentFrameInFlight();
+    if (hires::Active())
+    {
+        // Strip mode: nothing is kicked and nothing presented. The half about to be built is free
+        // once the passes no longer replay it, which they stop doing as the frame published after
+        // it takes over at a field's first pass: the frame rate's pacing, as the vsync is in the
+        // other modes. Each pass clears its own strip, so the chain has no clear of its own.
+        {
+            // The frame's pacing wait, charged where the other modes' vsync sleep is, so the frame
+            // log's "EE work = Frame - VSync" holds in strip mode too.
+            PS2_PROFILE_SCOPED_EVENT(prof_evt::VSync);
+            hires::WaitForHalf(cmdbuf::NextHalf());
+        }
+        hires::ReleaseCopy(); // the loading screen's, once a frame drawn after the load took over
+        cmdbuf::BeginFrame();
+        hires::BeginBuild(cmdbuf::CurrentHalf());
+        hires::SetClear(s_clearColor, dither);
+    }
+    else
+    {
+        // Retires and shows the previous frame when EndFrame left it drawing; a no-op when EndFrame
+        // presented it immediately, which is what lets the two paths share everything below.
+        PresentFrameInFlight();
 
-    cmdbuf::BeginFrame();
+        cmdbuf::BeginFrame();
 
-    // The clear is the first thing in the frame, so the VU1 world that follows in the same buffer
-    // cannot land on an uncleared framebuffer whatever the two GIF paths do.
-    gs::GifWriter & clear = OpenGifBlock(kClearBlockQwords);
-    gs::EmitClear(clear, s_drawCtx, s_clearColor, dither);
-    CloseGifBlock();
+        // The clear is the first thing in the frame, so the VU1 world that follows in the same
+        // buffer cannot land on an uncleared framebuffer whatever the two GIF paths do.
+        gs::GifWriter & clear = OpenGifBlock(kClearBlockQwords);
+        gs::EmitClear(clear, s_drawCtx, s_clearColor, dither);
+        CloseGifBlock();
+    }
 
     // The two lines below need the GS idle, and it is: whether the previous frame was fenced at
     // its own EndFrame or left drawing until PresentFrameInFlight above, it has been fenced by
@@ -693,6 +745,16 @@ void EndFrame(const bool deferPresent)
 
     // Close whatever 2D accumulated since the last flush, so it lands on top.
     FlushPending2D();
+
+    // Strip mode: the chain is closed and handed to the pass engine, which replays it from the
+    // next field's first pass on, every pass, until the next frame takes over.
+    if (hires::Active())
+    {
+        const void * const chain = cmdbuf::CloseForReplay();
+        hires::Publish(chain, cmdbuf::QwordCount(), cmdbuf::CurrentHalf());
+        cmdbuf::EndFrame();
+        return;
+    }
 
     // Everything since BeginFrame - the clear, every VU1 batch, every 2D block - goes out here,
     // in one kick, with one FlushCache(0).
@@ -723,6 +785,13 @@ gs::DrawContext FinishFrameInFlight()
 {
     PS2_AssertMsg(!s_frameStarted, "FinishFrameInFlight inside a frame!");
 
+    // Strip mode has no frame in flight: the passes replay the last one, and a send between them
+    // takes the GS lock (gs.cpp's GsLock).
+    if (hires::Active())
+    {
+        return s_drawCtx;
+    }
+
     // Shown now rather than at the next BeginFrame, whose own call then has nothing to do.
     PresentFrameInFlight();
 
@@ -742,7 +811,8 @@ void KickBuilt()
     // A kick may only go out with no tag open, and a pending 2D batch holds one.
     FlushPending2D();
 
-    if (!cmdbuf::KickInFlight() && !SerialFrames())
+    // Strip mode builds the whole frame before anything of it is sent: the passes replay it.
+    if (!cmdbuf::KickInFlight() && !SerialFrames() && !hires::Active())
     {
         cmdbuf::Kick();
     }
@@ -914,6 +984,11 @@ struct alignas(16) ChunkHead
     u64 gifTags[2 * vu1::kNumGifTagQwords];
 };
 constexpr int kChunkHeadQwords = sizeof(ChunkHead) / 16;
+
+// The state block's ZBUF write (BuildBatchStateBlock's out[10], its sixth qword) inside a chunk
+// head, for strip mode's fixups (hi_res.h).
+constexpr int kStateBlockZbufQword = 5;
+constexpr int kChunkHeadZbufQword  = static_cast<int>(offsetof(ChunkHead, gifTags) / 16) + kStateBlockZbufQword;
 static_assert(kChunkHeadQwords == 2 + vu1::kNumGifTagQwords, "A chunk head is the header, the parameters and the tags");
 static_assert(vu1::kNumGifTagQwords == kStateBlockQwords + 1, "The tag block is the state block and the drawing tag");
 
@@ -1005,6 +1080,12 @@ void EmitChunkHead(const ChunkHead & head, const int vertCount)
     CopyQwords<kChunkHeadQwords>(payload, &head);
     PatchPayloadWord(payload, 3, static_cast<u32>(vertCount));
     CloseInlinePayload(payload, kChunkHeadQwords);
+
+    // Strip mode: every pass points the chunk's ZBUF at its own z strip.
+    if (hires::Active())
+    {
+        hires::AddZbufFixup(&payload[kChunkHeadZbufQword].dw[0]);
+    }
 }
 
 // Builds the draw's transform and per-draw blocks into the buffer and unpacks them to their fixed
@@ -1045,7 +1126,7 @@ void BeginDrawChain(const math::Mat4 & mvp, DrawFlags flags, const vu1::LerpCons
     constants->gsScale    = { 2048.0f, 2048.0f, depthScale, 1.0f - vu1::kVuClipShrink };
     // .w is the clipper's distance scale, read by nothing else - the screen mapping
     // uses .xyz only. See vu1::kVuClipDistScale.
-    constants->gsOffset   = { 2048.0f + static_cast<float>(gs::Width())  * 0.5f,
+    constants->gsOffset   = { gs::ScreenCentreX(),
                               2048.0f + static_cast<float>(gs::Height()) * 0.5f,
                               depthOffset, vu1::kVuClipDistScale };
     // The constant guard band scale, then in its qword's spare lane the turbulent animation
@@ -1155,6 +1236,7 @@ struct alignas(16) ParticleHead
     u64 spriteTag[2]; // NLOOP in bits 0-14 of the first word
 };
 constexpr int kParticleHeadQwords = sizeof(ParticleHead) / 16;
+constexpr int kParticleHeadZbufQword = static_cast<int>(offsetof(ParticleHead, stateBlock) / 16) + kStateBlockZbufQword;
 constexpr int kParticleTagWord    = offsetof(ParticleHead, spriteTag) / 4;
 static_assert(kParticleHeadQwords == vu1::kPrtDataAddr - vu1::kPrtBatchHeaderAddr,
               "The particle head must fill the batch layout up to the billboards");
@@ -1205,6 +1287,11 @@ void AddParticleChunk(const ParticleHead & head, const vu1::ParticleVertex * par
     PatchPayloadWord(payload, 3, static_cast<u32>(count));
     PatchPayloadWord(payload, kParticleTagWord, static_cast<u32>(head.spriteTag[0]) | static_cast<u32>(count));
     CloseInlinePayload(payload, kParticleHeadQwords);
+
+    if (hires::Active())
+    {
+        hires::AddZbufFixup(&payload[kParticleHeadZbufQword].dw[0]);
+    }
 
     AddUnpackData(vu1::kPrtDataAddr, particles, static_cast<u32>(count), true);
 

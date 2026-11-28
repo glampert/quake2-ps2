@@ -27,6 +27,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/cmd_buffer.h"
 #include "ps2/renderer/splash_screen.h"
+#include "ps2/renderer/hi_res.h"
 #include "ps2/debug/profile.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/system/heap.h"
@@ -135,6 +136,21 @@ private:
 
 static GifPacket s_texUploadPacket; // owns its buffer; sent over the GIF channel
 
+// Strip mode: anything sent to the GS outside the frame's chain waits for the pass in flight and
+// keeps the next one off the GIF until it is done (hires::LockGs). Nothing to do in the other
+// modes, or before the pass engine is up.
+class GsLock final
+{
+public:
+    GsLock() : m_held(hires::Running()) { if (m_held) { hires::LockGs(); } }
+    ~GsLock() { if (m_held) { hires::UnlockGs(); } }
+    GsLock(const GsLock &) = delete;
+    GsLock & operator=(const GsLock &) = delete;
+private:
+    const bool m_held;
+};
+
+
 // ------------------------------------------------------------------------------------------------
 // Local helpers / constants
 // ------------------------------------------------------------------------------------------------
@@ -229,6 +245,7 @@ void UploadCluts(const tex::Clut * const (&cluts)[4])
     }
     upload.TextureFlush();
 
+    GsLock lock;
     s_texUploadPacket.SendChain();
     GifPacket::WaitGifChannel();
 }
@@ -313,6 +330,7 @@ void SeedClutBuffer()
                                 GS_PSM_32, CLUT_STORAGE_MODE1, 0, CLUT_LOAD_COPY_CBP0));
     pkt.EndGifPacket();
 
+    GsLock lock;
     s_texUploadPacket.SendNormal();
     GifPacket::WaitGifChannel();
 }
@@ -449,28 +467,57 @@ void Init(const Config & cfg)
     dma_channel_initialize(DMA_CHANNEL_GIF, nullptr, 0);
     dma_channel_fast_waits(DMA_CHANNEL_GIF);
 
-    detail::g_state.width      = cfg.width;
-    detail::g_state.height     = cfg.height;
-    detail::g_state.currentTex = nullptr;
+    // 720p and 1080i are drawn in strips (hi_res.h), with their own layout: one 16-bit front
+    // buffer whose strips are the framebuffer and the z-buffer in turn.
+    const bool strips = hires::Configure(cfg.output, cfg.hiResPasses);
+    const int  width  = strips ? hires::Get().width : cfg.width;
+    const int  height = strips ? hires::Get().height : cfg.height;
+    if (strips && (cfg.width != 640 || cfg.height > 512 || !cfg.framebuffer16Bit))
+    {
+        Com_Printf("GS: %s draws %dx%d 16-bit in strips; ps2_fb_width, ps2_fb_height and ps2_fb_16bit don't apply.\n",
+                   video::OutputName(cfg.standard, cfg.output), width, height);
+    }
+
+    detail::g_state.width        = width;
+    detail::g_state.height       = height;
+    detail::g_state.currentTex   = nullptr;
+    detail::g_state.originShiftX = strips ? (width / 2) : 0;
 
     // Two framebuffers. 16-bit halves them - 1120 KB each down to 560 KB - which
     // is where most of the texture heap's headroom comes from, at the cost of
     // 5:5:5 color (see the dither below) and one bit of destination alpha, which
     // nothing reads: every blend here scales by *source* alpha.
-    const int framePsm = cfg.framebuffer16Bit ? GS_PSM_16 : GS_PSM_32;
+    const int framePsm = (strips || cfg.framebuffer16Bit) ? GS_PSM_16 : GS_PSM_32;
 
     framebuffer_t * const frames = detail::g_state.framebuffer;
 
     // Framebuffer[0]
-    frames[0].width   = static_cast<unsigned int>(cfg.width);
-    frames[0].height  = static_cast<unsigned int>(cfg.height);
+    frames[0].width   = static_cast<unsigned int>(width);
+    frames[0].height  = static_cast<unsigned int>(height);
     frames[0].mask    = 0;
     frames[0].psm     = static_cast<unsigned int>(framePsm);
-    frames[0].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
 
-    // Framebuffer[1]
-    frames[1]         = frames[0];
-    frames[1].address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, framePsm, GRAPH_ALIGN_PAGE));
+    if (strips)
+    {
+        // One allocation for the whole layout - the strips, and a 2-pass layout's z strip, are page
+        // rows of one buffer as wide as the picture - so libgraph's pointer lands past it for the
+        // CLUTs. Its heights are whole pages, which graph_vram_size needs (it doesn't round).
+        // Both contexts draw into it: each pass's prologue aims FRAME and ZBUF at its strips.
+        const hires::Layout & layout = hires::Get();
+        const int layoutRows = (layout.endWords * 2) / width;
+        const int base = graph_vram_allocate(width, layoutRows, GS_PSM_16, GRAPH_ALIGN_PAGE);
+        PS2_Assert(base == layout.baseWords);
+        frames[0].address = static_cast<unsigned int>(base);
+        frames[1]         = frames[0];
+    }
+    else
+    {
+        frames[0].address = static_cast<unsigned int>(graph_vram_allocate(width, height, framePsm, GRAPH_ALIGN_PAGE));
+
+        // Framebuffer[1]
+        frames[1]         = frames[0];
+        frames[1].address = static_cast<unsigned int>(graph_vram_allocate(width, height, framePsm, GRAPH_ALIGN_PAGE));
+    }
 
     // Z-buffer for the 3D world; larger depth = closer (the projection maps the
     // near plane to 0xFFFF), hence GREATER_EQUAL. Depth is 16-bit either way -
@@ -478,14 +525,18 @@ void Init(const Config & cfg)
     // depth buffers to share a page layout: PSMCT32/24 pair with Z32/Z24/Z16S,
     // PSMCT16 pairs with Z16, PSMCT16S with Z16S. Mismatch them and depth sorting
     // breaks while color looks fine, which is a confusing way to find out.
-    const int zPsm = cfg.framebuffer16Bit ? GS_ZBUF_16 : GS_ZBUF_16S;
+    const int zPsm = (framePsm == GS_PSM_16) ? GS_ZBUF_16 : GS_ZBUF_16S;
 
     zbuffer_t & zbuffer = detail::g_state.zbuffer;
     zbuffer.enable  = DRAW_ENABLE;
     zbuffer.method  = ZTEST_METHOD_GREATER_EQUAL;
     zbuffer.mask    = 0;
     zbuffer.zsm     = static_cast<unsigned int>(zPsm);
-    zbuffer.address = static_cast<unsigned int>(graph_vram_allocate(cfg.width, cfg.height, zPsm, GRAPH_ALIGN_PAGE));
+
+    // Strip mode: the address the chain's ZBUF writes carry is a placeholder every pass patches
+    // (hires::AddZbufFixup); strip 1 is where pass 0's z lands with 3 passes.
+    zbuffer.address = strips ? static_cast<unsigned int>(hires::StripWords(1))
+                             : static_cast<unsigned int>(graph_vram_allocate(width, height, zPsm, GRAPH_ALIGN_PAGE));
 
     // All four CLUTs live with the fixed allocations; the streamed texture heap
     // takes everything after them, rounded up to a page so its footprint math
@@ -577,13 +628,16 @@ void Init(const Config & cfg)
     // frame. In any other layout those texels would show as garbage: the frame starts black.
     // A digital output scans the same VRAM through another CRT mode, so the splash, drawn in the
     // console's interlaced one, is never taken for it.
+    //
+    // In strip mode frame 0 is the whole front buffer, its strips one under the other, so this
+    // clears the picture.
     if (cfg.output != video::Output::Interlaced ||
-        !splash::IsShownIn(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, cfg.standard))
+        !splash::IsShownIn(static_cast<int>(frames[0].address), width, height, framePsm, cfg.standard))
     {
         pkt.DisableTests(Index(DrawContext::Ctx0), zbuffer);
         pkt.Clear(Index(DrawContext::Ctx0), 0.0f, 0.0f,
-                        static_cast<float>(cfg.width),
-                        static_cast<float>(cfg.height),
+                        static_cast<float>(width),
+                        static_cast<float>(height),
                         0, 0, 0);
         pkt.EnableTests(Index(DrawContext::Ctx0), zbuffer);
     }
@@ -700,6 +754,12 @@ void ReleaseTexture(const tex::Texture & texture)
 
 void DefragVramHeap()
 {
+    // Strip mode: the passes may be replaying the loading screen, whose textures this evicts.
+    if (hires::Running())
+    {
+        hires::HoldUntilNextFrame();
+    }
+
     if (!vram::Defragment())
     {
         return;
@@ -758,6 +818,8 @@ void DownloadFramebufferRows(const DrawContext ctx, const int y, const int rows,
     PS2_Assert(y >= 0 && rows > 0 && (y + rows) <= static_cast<int>(fb.height));
     PS2_AssertMsg((reinterpret_cast<std::uintptr_t>(dst) & 63u) == 0 && (bytes & 63u) == 0,
                   "Readback target must be whole, aligned cache lines!");
+
+    GsLock lock; // strip mode: between passes (the screenshot holds them anyway)
 
     // The request goes down PATH2, VIF1 DIRECT, rather than the GIF channel the uploads use: the
     // VIF1 FIFO is what turns around to carry the pixels back. MSKPATH3 holds PATH3 off until the
@@ -883,6 +945,7 @@ void UploadTexture(const tex::Texture & texture)
     // on 5% of frames, which is the kind of bug that takes a week.
     cmdbuf::WaitIdle();
 
+    GsLock lock; // strip mode: between passes
     s_texUploadPacket.SendChain();
     {
         PS2_PROFILE_SCOPED_EVENT(prof_evt::GsWait);
@@ -934,6 +997,13 @@ void EmitBegin2D(GifWriter & w, const DrawContext ctx)
 
     w.DisableTests(Index(ctx), detail::g_state.zbuffer);
     w.SetRegister(ContextReg(GS_REG_ZBUF, ctx), MakeZBuf(false));
+
+    // Strip mode: the ZBUF value is the qword before the cursor, and every pass points it at its
+    // own z strip.
+    if (hires::Active())
+    {
+        hires::AddZbufFixup(&(w.Cursor() - 1)->dw[0]);
+    }
 }
 
 void EmitEnd2D(GifWriter & w, const DrawContext ctx)
@@ -948,11 +1018,14 @@ void EmitFillRect(GifWriter & w, const DrawContext ctx, const int x, const int y
 {
     w.EnsureSpace(kFillRectQwords);
 
+    // libdraw puts the picture's left edge on X = 2048; strip mode has it W/2 further left.
+    const int left = x - detail::g_state.originShiftX;
+
     rect_t rect;
-    rect.v0.x = static_cast<float>(x);
+    rect.v0.x = static_cast<float>(left);
     rect.v0.y = static_cast<float>(y);
     rect.v0.z = 0u;
-    rect.v1.x = static_cast<float>(x + width);
+    rect.v1.x = static_cast<float>(left + width);
     rect.v1.y = static_cast<float>(y + height);
     rect.v1.z = 0u;
     rect.color.r = r;
@@ -1015,12 +1088,14 @@ void EmitTexturedRect(GifWriter & w, const DrawContext ctx, const int x, const i
     // The bind's origins are both zero unless a scrap atlas is bound, in which case they shift
     // the coordinates from the image's own space into its corner of the atlas.
     texrect_t rect;
-    rect.v0.x = static_cast<float>(x);
+    const int left = x - detail::g_state.originShiftX; // see EmitFillRect
+
+    rect.v0.x = static_cast<float>(left);
     rect.v0.y = static_cast<float>(y);
     rect.v0.z = 0u;
     rect.t0.u = static_cast<float>(u0 + bind.originU);
     rect.t0.v = static_cast<float>(v0 + bind.originV);
-    rect.v1.x = static_cast<float>(x + width);
+    rect.v1.x = static_cast<float>(left + width);
     rect.v1.y = static_cast<float>(y + height);
     rect.v1.z = 0u;
     rect.t1.u = static_cast<float>(u1 + bind.originU);

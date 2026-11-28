@@ -61,6 +61,7 @@ struct Config
     bool            framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
     video::Standard standard;         // NTSC or PAL (ps2_video_mode, see system/video_mode.h)
     video::Output   output;           // the standard's interlaced picture, or a digital TV mode
+    int             hiResPasses;      // 720p's strips: 2 or 3 (ps2_hires_passes); 1080i takes 3
 };
 
 // Brings up the GS: allocates the framebuffers and z-buffer, sets the video mode for the config's
@@ -94,12 +95,25 @@ struct State
     // Texture bound for 2D draws in the current context, for dropping redundant TEX0 writes.
     // The atlas when a scrapped image was bound; see ResolveBind2D.
     const tex::Texture * currentTex;
+
+    // Strip mode (hi_res.h) centres the picture on X = 2048, half the width left of where the
+    // other modes put its left edge: the 3D mapping and the 2D emitters both move by this.
+    int originShiftX;
 };
 extern State g_state;
 } // namespace detail
 
 Q_ALWAYS_INLINE int Width()  { return detail::g_state.width;  }
 Q_ALWAYS_INLINE int Height() { return detail::g_state.height; }
+
+// The GS window X of the picture's centre, which the VU programs' screen mapping adds (gsOffset):
+// 2048 + W/2 with the picture's left edge on 2048, as the interlaced and 480p modes draw, and 2048
+// itself in strip mode, where XYOFFSET puts the left edge at 2048 - W/2. Centred, the guard band
+// fits the 12.4 window at 1280 and 1920 wide; left-aligned it would not past 820.
+Q_ALWAYS_INLINE float ScreenCentreX()
+{
+    return 2048.0f + static_cast<float>((detail::g_state.width / 2) - detail::g_state.originShiftX);
+}
 
 // ------------------------------------------------------------------------------------------------
 // GS register values
@@ -354,8 +368,10 @@ Q_ALWAYS_INLINE void Invalidate2DBinding() { detail::g_state.currentTex = nullpt
 // ------------------------------------------------------------------------------------------------
 
 // Upper bounds on what one emission appends, for the caller sizing its block.
-constexpr int kClearQwords        = 64;
-constexpr int kFillRectQwords     = 64;
+// A near-fullscreen fill goes down in 32-pixel strips (libdraw's draw_rect_filled_strips): a qword
+// per strip and the packet around them, 37 at 640 wide and 77 at 1920 (strip mode).
+constexpr int kClearQwords        = 96;
+constexpr int kFillRectQwords     = 96;
 constexpr int kTextureBindQwords  = 16;
 constexpr int kTexturedRectQwords = 8;
 constexpr int kBegin2DQwords      = 8;

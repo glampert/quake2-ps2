@@ -664,6 +664,26 @@ requires colour and depth to share a page layout). What is left after the two fr
 the z-buffer and CLUTs — ~1.27 MB in the 16-bit configuration — becomes the
 streamed texture heap.
 
+**720p and 1080i: strip rendering** ([hi_res.h](src/ps2/renderer/hi_res.h), experimental). A
+1280x720 or 1920x540 picture leaves no room for two framebuffers and a z-buffer in 4 MB of VRAM,
+so these two modes draw the way gsKit's `gsHires.c` does. One 16-bit front buffer is cut into
+three strips of whole 64-row pages (720p: 256 rows; 1080i: 192), and every field each strip is
+drawn again just before the CRTC reaches it, while the CRTC shows the one above; the strip below
+is its z-buffer, which its own pass clears before it is shown. An INTC_GS handler counts HSINTs
+from each VSINT and wakes a priority-0 pass thread at each strip's line. Each pass sends a short
+prologue (FRAME, ZBUF, XYOFFSET and SCISSOR for both contexts, and the strip's clear), then the
+whole chain of the last finished frame, which is kept and replayed until the next one takes over
+at a field's first pass. So the frame's VU1 work runs once per strip per field. The chain's ZBUF
+writes are patched per pass (`hires::AddZbufFixup`), nothing is kicked mid-frame, uploads run
+between passes under a lock, and the texture heap pins the replayed frame's textures as well as
+the frame being built's. The picture is centred on X = 2048 so the guard band fits the GS's 12.4
+window at 1920 wide. 1080i is interlaced FRAME mode: the 540-row buffer is drawn again each field
+half a row lower, which gives 1080 lines. `ps2_hud_scale` keeps the 2D at its usual size;
+`screenshot` draws and reads back one strip at a time. The frame log's `hr*` columns count the
+passes, the late ones (a strip that tore) and their GS time against the strip's budget. What it
+costs is a console's question: PCSX2 charges VU1 and the GS nothing, and gives 720p NTSC's 525
+lines a frame.
+
 **Boot splash** ([splash_screen.h](src/ps2/renderer/splash_screen.h)). First thing in `main()`,
 before any IOP driver comes up, the GS is set up the way `gs::Init` sets it up with the default
 video settings, and the id logo (`pics/m_main_logo.pcx`, built into the ELF) is drawn at four

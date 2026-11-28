@@ -31,6 +31,7 @@ enum class MemTag : size_t
     SaveData,  // The save game working set (compressed level states) and the save/load I/O buffers.
     Pack,      // Compressed game packs (fs/pkz_pack.cpp): directory tables, restart points, inflate buffers.
     Aio,       // The background loader (fs/async_io.cpp): its inflate workspace, staging buffers, the read-ahead ring.
+    HiRes,     // Strip mode (renderer/hi_res.cpp): its ZBUF fixup lists, and the replayed frame's chain copied for a .bsp load.
 
     TagCount,  // Number of entries in this enum. Internal use only.
 };

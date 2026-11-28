@@ -15,6 +15,7 @@
 #include "ps2/renderer/screenshot.h"
 #include "ps2/renderer/gs.h"
 #include "ps2/renderer/render_system.h"
+#include "ps2/renderer/hi_res.h"
 #include "ps2/system/heap.h"
 #include "ps2/system/iop_boot.h" // SyncGameDataDevice, DebugOutputGamedir
 
@@ -139,20 +140,46 @@ bool WriteFrame(std::FILE * file, void * const strip, u8 * const bgr)
     // The frame the last EndFrame closed, which a deferred present may still have drawing.
     const gs::DrawContext ctx = rs::FinishFrameInFlight();
 
-    for (int y = 0; y < height; y += kStripRows)
+    // Strip mode never holds a whole frame in VRAM: every strip is the next one's z-buffer, or
+    // about to be drawn again. So the passes stop (the picture goes blank for a few fields), and
+    // each strip is drawn on its own and read back before the next pass can touch it.
+    const bool strips = hires::Running();
+    int stripEnd = height;
+    int pass     = 0;
+    if (strips)
     {
+        hires::Hold();
+        stripEnd = 0;
+    }
+
+    bool ok = true;
+    for (int y = 0; y < height && ok; y += kStripRows)
+    {
+        if (strips && y >= stripEnd)
+        {
+            if (!hires::DrawPassNow(pass))
+            {
+                ok = false;
+                break;
+            }
+            stripEnd = y + hires::Get().stripRows;
+            ++pass;
+        }
+
         const int rows  = (height - y < kStripRows) ? (height - y) : kStripRows;
         const int count = width * rows;
         gs::DownloadFramebufferRows(ctx, y, rows, strip);
         ToBgr(strip, count, fb16, bgr);
 
         const size_t bytes = static_cast<size_t>(count) * 3u;
-        if (std::fwrite(bgr, 1, bytes, file) != bytes)
-        {
-            return false;
-        }
+        ok = (std::fwrite(bgr, 1, bytes, file) == bytes);
     }
-    return true;
+
+    if (strips)
+    {
+        hires::Resume();
+    }
+    return ok;
 }
 
 void ScreenshotCommand()

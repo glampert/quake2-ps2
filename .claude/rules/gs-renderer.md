@@ -124,6 +124,39 @@ The README's "Rendering" section is the architecture overview. The renderer file
   on, and `graph_set_framebuffer_filtered` would point it a row down, so a digital output writes
   both DISPFBs at row 0 (`SetDisplayFramebuffer`). PCSX2 logs `SDTV 720x480 @ 59.94 Progressive
   (FRAME)`; a scripted shot of the attract demo matched 480i's but for the demo's own timing.
+- **Strip mode (720p, 1080i; 2026-11-28, experimental)** is hi_res.h's, after gsKit's
+  `gsHires.c`; the README's "strip rendering" paragraph has the design. What any new code has to
+  respect while `hires::Active()`:
+  - **The chain is replayed once per strip per field**, from its first qword, behind a prologue
+    that sets FRAME, ZBUF, XYOFFSET, SCISSOR and TEST for both contexts. So nothing in it may
+    refer to one strip, nothing may be kicked mid-frame (`rs::KickBuilt` skips, `cmdbuf::Reserve`
+    overflowing is fatal), and its clear is the prologue's. **A new ZBUF write in the chain needs
+    `hires::AddZbufFixup`** on its value qword, as the chunk heads and `gs::EmitBegin2D` have: every
+    pass patches ZBP to its z strip. A new FRAME, XYOFFSET or SCISSOR write would need the same.
+  - **The picture is centred on X = 2048** (XYOFFSET.x = 2048 - W/2, `gs::ScreenCentreX`), since the
+    0.8 guard band at 2048 + W/2 overflows 12.4 past 820 pixels wide. libdraw's 2D adds a fixed
+    2048, so the 2D emitters subtract `originShiftX`; a new emitter must too.
+  - **GS traffic outside the chain takes `GsLock`** (gs.cpp): it waits for the pass in flight and
+    keeps the next one off the GIF. Texture and CLUT uploads, the seed, readbacks.
+  - **The texture heap pins two frames** (`vram.cpp` `IsPinned`): the one being built and the one
+    being replayed. Its out-of-memory rung holds the passes, blank, until the next frame takes over
+    (`hires::HoldUntilNextFrame`) and unpins only the replayed frame; it can't defragment
+    mid-frame (the frame's chain has the addresses baked in): that is fatal in strip mode. The
+    level-change defragment holds the passes too.
+  - **A world load copies the replayed chain to the heap** (`hires::LendHalves`, tag `HiRes`),
+    relocating its NEXT and REF addresses, before the halves become the lump scratch; it is freed
+    at the next `rs::BeginFrame` after a new frame takes over.
+  - **GS privileged registers are write-only**: DISPLAY's DY is worked out again from
+    `video::DtvDisplay`, not read back (reading DISPLAY2 gave pass lines past the frame's end).
+  - **PCSX2 gives 720p NTSC's 525 lines a frame** (its log shows the rate as `??.???`) where a
+    console has 750, so gsKit's pass 0 line (DY + 4 + 512) never came; VSINT now scales the
+    schedule to the field it counted, which leaves a console's lines as gsKit has them. 1080i
+    counted 562/563 a field, as a console does. PCSX2 also reads the display at vblank rather
+    than behind the beam, so its live picture may show a strip's z-buffer; `screenshot` (each
+    strip drawn alone and read back after its pass) is what to judge it by.
+  - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
+    480i scene at the wider 16:9 view, the HUD at 2x; 3 passes and one adoption a field, none
+    late, frames at 16.9 ms.
 - **The picture's place on the TV is DISPLAY's DX/DY**, `graph_set_screen`'s x/y adjustments over
   libgraph's origin for the standard (NTSC 652/50, PAL 680/72): 4 VCK per pixel at 640 wide (DW
   2560, MAGH 3) and 2 raster lines per framebuffer row in FIELD mode. `ps2_screen_x/y` (ref.cpp,

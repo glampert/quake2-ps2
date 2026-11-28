@@ -125,6 +125,7 @@ PS2_CXX_SRC =                         \
 	ps2/fs/readahead_stream.cpp       \
 	ps2/fs/aio_pump.cpp               \
 	ps2/renderer/gs.cpp               \
+	ps2/renderer/hi_res.cpp           \
 	ps2/renderer/gamma.cpp            \
 	ps2/renderer/vram.cpp             \
 	ps2/renderer/texture.cpp          \

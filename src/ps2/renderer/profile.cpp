@@ -14,6 +14,7 @@
 #include "ps2/renderer/vu1.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/gs.h" // GetPresentClock
+#include "ps2/renderer/hi_res.h"
 #include "ps2/renderer/view.h"
 #include "ps2/audio/sound_hold.h" // SubmitFreeBytes, DeviceRingBytes
 #include "ps2/fs/async_io.h"       // TakeFrameStats
@@ -172,6 +173,13 @@ struct FrameSample
     // follows it. Either waits on the IOP while a file read is out there; the ring can run lower
     // than sndFree shows by as long as the play waits.
     u32 sndQueryCycles, sndPlayCycles;
+
+    // Strip mode's passes since the last row (hires::TakeStats; zeros in the other modes): fields
+    // started, passes sent, passes that found the one before still drawing (that strip tore),
+    // passes skipped (held, or no frame yet), their kick-to-FINISH time summed and the longest,
+    // and frames that took over the replay.
+    u32 hrFields, hrPasses, hrLate, hrSkipped, hrBusyCycles, hrWorstCycles, hrAdoptions;
+    u32 hrVsyncs, hrLines; // VSINTs, and the HSINTs between the last two
 
 #if PS2_QUAKE_GPU_SAMPLER
     // cmdbuf::TakeGpuStats: the frame's GsWait split by what held the chain up (cmd_buffer.h),
@@ -338,7 +346,8 @@ void WriteBatch()
                     "boxesCulled,batches,entities,particles,dlights,"
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
-                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay"
+                    "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay,"
+                    "hrFields,hrPasses,hrLate,hrSkipped,hrBusy,hrWorst,hrAdopt,hrVsyncs,hrLines"
 #if PS2_QUAKE_GPU_SAMPLER
                     ",gpuVu,gpuGs,gpuDirect,gpuVif,gpuTail,gpuWaits,vuSlow,vuEmpty,vuFanned,vuCulled"
 #endif // PS2_QUAKE_GPU_SAMPLER
@@ -348,6 +357,8 @@ void WriteBatch()
              ps2::audio::DeviceRingBytes());
         Emit("FLOG#note,aioBytes is what the background loader landed during the frame; aioQ its requests in flight at the capture\n");
         Emit("FLOG#note,sndQuery and sndPlay are the slowest free-space and play RPCs of the sends finished since the last row, in microseconds\n");
+        Emit("FLOG#note,hrFields..hrAdopt are strip mode's passes (hi_res.h); hrBusy and hrWorst in microseconds, against a strip budget of %u us\n",
+             ps2::hires::Running() ? ToMicrosec(ps2::hires::StripBudgetCycles()) : 0u);
 #if PS2_QUAKE_GPU_SAMPLER
         Emit("FLOG#note,gpuVu..gpuTail split GsWait by what held the chain up (cmd_buffer.h); on a console only, PCSX2 charges nearly all of it to gpuVif\n");
         Emit("FLOG#note,vuSlow vuEmpty vuFanned vuCulled are the triangle program's counts: slow-path triangles, those clipped to nothing, fan triangles sent, back faces culled\n");
@@ -386,6 +397,14 @@ void WriteBatch()
                           s.vramUploads, s.vramOomSyncs, s.vramResident,
                           s.chainKB, s.chainKicks, s.chainDrains, s.sndFree, s.aioBytes, s.aioQ,
                           ToMicrosec(s.sndQueryCycles), ToMicrosec(s.sndPlayCycles));
+        }
+
+        if (at > 0 && at < static_cast<int>(sizeof(line)))
+        {
+            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at), ",%u,%u,%u,%u,%u,%u,%u,%u,%u",
+                                s.hrFields, s.hrPasses, s.hrLate, s.hrSkipped,
+                                ToMicrosec(s.hrBusyCycles), ToMicrosec(s.hrWorstCycles), s.hrAdoptions,
+                                s.hrVsyncs, s.hrLines);
         }
 
 #if PS2_QUAKE_GPU_SAMPLER
@@ -517,6 +536,17 @@ void FrameLogCapture()
     s.aioQ     = static_cast<int>(aio.queueDepth);
 
     ps2::audio::TakeSubmitTimes(s.sndQueryCycles, s.sndPlayCycles);
+
+    const ps2::hires::Stats strips = ps2::hires::TakeStats();
+    s.hrFields      = strips.fields;
+    s.hrPasses      = strips.passes;
+    s.hrLate        = strips.late;
+    s.hrSkipped     = strips.skipped;
+    s.hrBusyCycles  = strips.busyCycles;
+    s.hrWorstCycles = strips.worstCycles;
+    s.hrAdoptions   = strips.adoptions;
+    s.hrVsyncs      = strips.vsyncs;
+    s.hrLines       = strips.fieldLines;
 
 #if PS2_QUAKE_GPU_SAMPLER
     // Every wait since the last row: the frame's own (a texture fence, an overflow, the world's

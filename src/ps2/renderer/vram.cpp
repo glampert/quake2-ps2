@@ -25,6 +25,7 @@
 #include "ps2/common.h"
 #include "ps2/renderer/vram.h"
 #include "ps2/renderer/texture.h"
+#include "ps2/renderer/hi_res.h"
 
 #include <cstring> // memset
 #include <tamtypes.h>
@@ -212,6 +213,16 @@ static Block * s_unusedBlocks      = nullptr;
 static Block * s_blockList         = nullptr; // null until Init()
 static int     s_blockCount        = 0;       // blocks currently in s_blockList
 static u32     s_frame             = 0;
+
+// Whether a block may not be evicted: its texture was bound by the frame being built, whose draws
+// are in the chain or queued at the GS. In strip mode by the frame before it too, which the passes
+// keep replaying until this one takes over (hi_res.h).
+Q_ALWAYS_INLINE bool IsPinned(const Block * const block)
+{
+    const u32 span = hires::Active() ? 1u : 0u;
+    return block->lastBoundFrame <= s_frame && (s_frame - block->lastBoundFrame) <= span;
+}
+
 
 // Set when VRAM was recycled or given back; see HasReuseHazard in vram.h.
 static bool    s_reuseHazard       = false;
@@ -411,7 +422,7 @@ void DumpAllBlocks()
 
         ++usedBlocks;
 
-        const bool pinned = (block->lastBoundFrame == s_frame);
+        const bool pinned = IsPinned(block);
         if (pinned)
         {
             ++pinnedBlocks;
@@ -584,7 +595,7 @@ Address TryAllocate(const tex::Texture & texture, int sizeWords)
         Block * victim = nullptr;
         for (Block * block = s_blockList; block != nullptr; block = block->next)
         {
-            if (block->owner == nullptr || block->lastBoundFrame == s_frame)
+            if (block->owner == nullptr || IsPinned(block))
             {
                 continue;
             }
@@ -622,6 +633,20 @@ void UnpinAll()
     if (s_frame == 0)
     {
         return; // no frame has started, so nothing can be pinned
+    }
+
+    // Strip mode: only the replayed frame's pins go, which the caller has stopped the passes for
+    // (hires::HoldUntilNextFrame). This frame's draws are in its chain, none of it drawn yet.
+    if (hires::Active())
+    {
+        for (Block * block = s_blockList; block != nullptr; block = block->next)
+        {
+            if (block->owner != nullptr && block->lastBoundFrame == s_frame - 1 && s_frame >= 2)
+            {
+                block->lastBoundFrame = s_frame - 2;
+            }
+        }
+        return;
     }
 
     for (Block * block = s_blockList; block != nullptr; block = block->next)

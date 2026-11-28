@@ -29,6 +29,7 @@
 #include "ps2/renderer/sky.h"
 #include "ps2/renderer/profile.h"
 #include "ps2/renderer/loading_screen.h"
+#include "ps2/renderer/hi_res.h"
 #include "ps2/debug/load_trace.h"
 #include "ps2/save/save_notice.h"
 #include "ps2/tests/draw_cube.h"
@@ -136,6 +137,28 @@ const ps2::tex::Texture & FindTextureOrPlaceholder(const char * name, const ps2:
     return *texture;
 }
 
+// The engine's 2D space against the framebuffer's. 1 to 1 but in the strip modes, where
+// ps2_hud_scale 2 keeps the HUD, console and menus the size they are at 640x448: 720p's 1280x720
+// is a 640x360 space, 1080i's 1920x540 buffer (1080 lines, each row shown twice) a 960x540 one.
+// Its vertical scale is half its horizontal, as the fraction says; at ps2_hud_scale 1, 1080i's
+// space is 1920x1080, half a row a unit. The debug overlays draw in framebuffer pixels.
+static int s_hudScaleX    = 1;
+static int s_hudScaleYNum = 1;
+static int s_hudScaleYDen = 1;
+
+Q_ALWAYS_INLINE int HudX(const int x) { return x * s_hudScaleX; }
+Q_ALWAYS_INLINE int HudY(const int y) { return (y * s_hudScaleYNum) / s_hudScaleYDen; }
+
+// A rectangle of the engine's 2D space in framebuffer pixels, its far edges scaled as its near
+// ones are, so neighbouring rectangles still meet.
+struct HudRect { int x, y, w, h; };
+Q_ALWAYS_INLINE HudRect ToFramebuffer(const int x, const int y, const int w, const int h)
+{
+    const int x0 = HudX(x);
+    const int y0 = HudY(y);
+    return { x0, y0, HudX(x + w) - x0, HudY(y + h) - y0 };
+}
+
 void DrawGlyph(int x, int y, int c, const u8 color[3])
 {
     // Draws one 8x8 graphics character with 0 being transparent.
@@ -241,8 +264,9 @@ void DrawFpsCounter()
     }
 
     // A black background to give the text more contrast.
-    ps2::rs::FillRect(viddef.width - 68, 2, 64, 12, 0, 0, 0, 255);
-    DrawInternalString(viddef.width - 64, 4, text, color);
+    // The debug overlays draw in framebuffer pixels, whatever the engine's 2D space (HudX/HudY).
+    ps2::rs::FillRect(ps2::gs::Width() - 68, 2, 64, 12, 0, 0, 0, 255);
+    DrawInternalString(ps2::gs::Width() - 64, 4, text, color);
 }
 
 // Per-event frame time overlay, stacked under the FPS counter in the top-right
@@ -301,7 +325,7 @@ void DrawProfileOverlay()
     const int panelHeight = ((numRows + 1) * kLineHeight) + (kPadding * 2); // Header + one per event.
 
     // Right edge aligned with the FPS counter above.
-    const int panelX = viddef.width - kPanelWidth;
+    const int panelX = ps2::gs::Width() - kPanelWidth;
     const int panelY = 16; // Clears the 12px FPS box at y = 2.
 
     // A black background to give the text more contrast.
@@ -358,8 +382,8 @@ void DrawMemUsageOverlay()
     constexpr int kPadding    = 4;
 
     const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
-    const int panelX = viddef.width  - kPanelWidth;
-    const int panelY = viddef.height - panelHeight;
+    const int panelX = ps2::gs::Width()  - kPanelWidth;
+    const int panelY = ps2::gs::Height() - panelHeight;
 
     // A black background to give the text more contrast.
     ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
@@ -426,7 +450,7 @@ void DrawVramUsageOverlay()
 
     const int panelHeight = (kNumLines * kLineHeight) + (kPadding * 2);
     const int panelX = 0;                            // flush to the left edge
-    const int panelY = viddef.height - panelHeight;  // ...and the bottom
+    const int panelY = ps2::gs::Height() - panelHeight;  // ...and the bottom
 
     // A black background to give the text more contrast.
     ps2::rs::FillRect(panelX, panelY, kPanelWidth, panelHeight, 0, 0, 0, 255);
@@ -604,20 +628,16 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     const cvar_t * const videoMode = Cvar_Get("ps2_video_mode", "auto", CVAR_ARCHIVE);
     bool videoModeKnown = true;
     const ps2::video::Standard standard = ps2::video::SelectStandard(videoMode->string, &videoModeKnown);
-    ps2::video::Output output = ps2::video::SelectedOutput();
+    const ps2::video::Output output = ps2::video::SelectedOutput();
     if (!videoModeKnown)
     {
-        Com_Printf("ps2_video_mode: '%s' is not auto, ntsc, pal or 480p; using the console's own, %s.\n",
+        Com_Printf("ps2_video_mode: '%s' is not auto, ntsc, pal, 480p, 720p or 1080i; using the console's own, %s.\n",
                    videoMode->string, ps2::video::Name(standard));
     }
 
-    // 720p and 1080i draw in strips (the hi-res modes), which this build does not have yet.
-    if (output == ps2::video::Output::Dtv720p || output == ps2::video::Output::Dtv1080i)
-    {
-        Com_Printf("ps2_video_mode: %s is not supported yet; using %s.\n",
-                   ps2::video::OutputName(standard, output), ps2::video::OutputName(standard, ps2::video::Output::Interlaced));
-        output = ps2::video::Output::Interlaced;
-    }
+    // 720p and 1080i are drawn in strips (hi_res.h): how many for 720p, and how big the 2D is.
+    const cvar_t * const hiResPasses = Cvar_Get("ps2_hires_passes", "3", CVAR_ARCHIVE);
+    const cvar_t * const hudScale    = Cvar_Get("ps2_hud_scale",    "2", CVAR_ARCHIVE);
 
     const int requestedHeight = static_cast<int>(fbHeight->value);
     const int fbHeightLines   = ps2::video::FramebufferHeight(standard, output, requestedHeight);
@@ -653,7 +673,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
         .height           = fbHeightLines,
         .framebuffer16Bit = (fb16Bit->value != 0.0f),
         .standard         = standard,
-        .output           = output
+        .output           = output,
+        .hiResPasses      = static_cast<int>(hiResPasses->value)
     };
     ps2::rs::Init(gsConfig, scratch.base, scratch.sizeBytes);
     ps2::screenshot::Init();
@@ -666,16 +687,26 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     // sets a real one before the first frame; this covers stray draws).
     ps2::cin::SetPalette(nullptr);
 
-    viddef.width  = ps2::gs::Width();
-    viddef.height = ps2::gs::Height();
+    // The engine's 2D space: the framebuffer's, but in the strip modes, where ps2_hud_scale 2
+    // keeps the HUD the size it is at 640x448 (see HudX/HudY). 1080i's rows are two lines each.
+    if (ps2::hires::Active())
+    {
+        const int scale = (hudScale->value >= 2.0f) ? 2 : 1;
+        const bool fieldRows = (output == ps2::video::Output::Dtv1080i);
+        s_hudScaleX    = scale;
+        s_hudScaleYNum = scale;
+        s_hudScaleYDen = fieldRows ? 2 : 1;
+    }
+    viddef.width  = ps2::gs::Width() / s_hudScaleX;
+    viddef.height = (ps2::gs::Height() * s_hudScaleYDen) / s_hudScaleYNum;
 
 #if !PS2_QUAKE_DEBUG
     // Default clear color to black in release builds.
     ps2::rs::SetClearColor(0, 0, 0);
 #endif // PS2_QUAKE_DEBUG
 
-    Com_DPrintf("PS2 refresh initialised: %dx%d %s %s\n", viddef.width, viddef.height,
-                ps2::video::Name(standard), ps2::video::OutputName(standard, output));
+    Com_DPrintf("PS2 refresh initialised: %dx%d (%dx%d in 2D) %s %s\n", ps2::gs::Width(), ps2::gs::Height(),
+                viddef.width, viddef.height, ps2::video::Name(standard), ps2::video::OutputName(standard, output));
     Com_DPrintf("Debug: %s, Asserts: %s\n",
                 PS2_QUAKE_DEBUG   ? "yes" : "no",
                 PS2_QUAKE_ASSERTS ? "yes" : "no");
@@ -834,7 +865,8 @@ void PS2_DrawStretchPic(int x, int y, int w, int h, const char * name)
     {
         return; // still loading in the background (RegisterPic named it): skipped this frame
     }
-    ps2::rs::DrawTexturedRect(texture, x, y, w, h, 0, 0,
+    const HudRect r = ToFramebuffer(x, y, w, h);
+    ps2::rs::DrawTexturedRect(texture, r.x, r.y, r.w, r.h, 0, 0,
                               texture.width, texture.height, kUiBrightness);
 }
 
@@ -847,14 +879,32 @@ void PS2_DrawPic(int x, int y, const char * name)
     {
         return; // as PS2_DrawStretchPic
     }
-    ps2::rs::DrawTexturedRect(texture, x, y, texture.width, texture.height,
+    const HudRect r = ToFramebuffer(x, y, texture.width, texture.height);
+    ps2::rs::DrawTexturedRect(texture, r.x, r.y, r.w, r.h,
                               0, 0, texture.width, texture.height, kUiBrightness);
 }
 
 void PS2_DrawChar(int x, int y, int c)
 {
     PS2_PROFILE_SCOPED_EVENT(ps2::prof_evt::Ui);
-    DrawGlyph(x, y, c, kUiBrightness);
+
+    if (s_hudScaleX == 1 && s_hudScaleYNum == s_hudScaleYDen)
+    {
+        DrawGlyph(x, y, c, kUiBrightness);
+        return;
+    }
+
+    // DrawGlyph's, scaled to the framebuffer.
+    c &= 255;
+    if ((c & 127) == ' ' || y <= -kGlyphSize)
+    {
+        return;
+    }
+    const int row = (c >> 4) * kGlyphSize;
+    const int col = (c & 15) * kGlyphSize;
+    const HudRect r = ToFramebuffer(x, y, kGlyphSize, kGlyphSize);
+    ps2::rs::DrawTexturedRect(*s_texConchars, r.x, r.y, r.w, r.h,
+                              col, row, col + kGlyphSize, row + kGlyphSize, kUiBrightness);
 }
 
 void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
@@ -864,7 +914,8 @@ void PS2_DrawTileClear(int x, int y, int w, int h, const char * name)
     // Tiles the image over the given screen rectangle: texels are addressed in
     // screen space and wrap via the REPEAT mode set up in gs::Init().
     (void)name; // Quake only ever tiles "backtile" here.
-    ps2::rs::DrawTexturedRect(*s_texBacktile, x, y, w, h, x, y, x + w, y + h, kUiBrightness);
+    const HudRect r = ToFramebuffer(x, y, w, h);
+    ps2::rs::DrawTexturedRect(*s_texBacktile, r.x, r.y, r.w, r.h, x, y, x + w, y + h, kUiBrightness);
 }
 
 void PS2_DrawFill(int x, int y, int w, int h, int c)
@@ -875,7 +926,8 @@ void PS2_DrawFill(int x, int y, int w, int h, int c)
     const u8  r = static_cast<u8>(p & 0xFFu);
     const u8  g = static_cast<u8>((p >> 8) & 0xFFu);
     const u8  b = static_cast<u8>((p >> 16) & 0xFFu);
-    ps2::rs::FillRect(x, y, w, h, r, g, b, 255);
+    const HudRect rect = ToFramebuffer(x, y, w, h);
+    ps2::rs::FillRect(rect.x, rect.y, rect.w, rect.h, r, g, b, 255);
 }
 
 void PS2_DrawFadeScreen()
@@ -940,7 +992,8 @@ void PS2_DrawStretchRaw(int x, int y, int w, int h, int cols, int rows, const by
 
     // Called every frame while a cinematic plays; the movie quad is a 2D draw,
     // so it joins the deferred overlay batch (opened lazily) like any other.
-    ps2::cin::DrawFrame(x, y, w, h, cols, rows, data);
+    const HudRect r = ToFramebuffer(x, y, w, h);
+    ps2::cin::DrawFrame(r.x, r.y, r.w, r.h, cols, rows, data);
 }
 
 void PS2_CinematicSetPalette(const unsigned char * palette)

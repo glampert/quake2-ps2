@@ -650,6 +650,15 @@ gets the ten columns at the end of a row, after `sndPlay`.
   own end); no-fill identical, since PCSX2 charges no fill; the VU counts identical across the
   three passes (255 slow-path, 142 clipped to nothing, 160 fanned, 2294 back faces a 3D frame,
   of 4224 triangles), the demos being deterministic. The console run is what gives the split.
+- **Strip mode's columns** (720p/1080i, hi_res.h; every profiling build writes them, zeros in the
+  other modes): `hrFields` (first passes, one a field), `hrPasses`, `hrLate` (a pass that found
+  the one before still drawing: that strip tore), `hrSkipped` (held, or no frame yet), `hrBusy`
+  and `hrWorst` (kick-to-FINISH µs, timestamped by the INTC_GS handler, summed and the longest;
+  the header's `FLOG#note` gives the strip budget, 4626 µs at 720p's 208-row last strip),
+  `hrAdopt` (frames that took over the replay), `hrVsyncs` and `hrLines` (HSINTs in the last
+  field: 750 on a console at 720p, 525 in PCSX2). The pacing wait (`hires::WaitForHalf`) is
+  charged to `VSync`. `hrWorst` against the budget is the number the experiment is about, and only
+  a console has it: PCSX2's passes are ~400 µs of DMA whatever they draw.
 - What a strip ("hi-res") mode would cost is modelled from the serial and no-fill segments:
   every replay pays the chain's VU1 and GS setup again, and the fill grows with the pixels.
 

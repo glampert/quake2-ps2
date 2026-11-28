@@ -89,6 +89,7 @@ static const char * const s_memTagNames[kMemTagCount] = {
     "SaveData",
     "Pack",
     "Aio",
+    "HiRes",
 };
 
 static inline size_t MemTagToIndex(const MemTag tag)

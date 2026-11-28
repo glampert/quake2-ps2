@@ -250,6 +250,15 @@ void WaitIdle();
 // pixels, the half it was built in) must WaitIdle() first.
 bool KickInFlight();
 
+// The half being built, and the one the next BeginFrame swaps to.
+int CurrentHalf();
+int NextHalf();
+
+// Strip mode's EndFrame in place of Kick (hi_res.h): terminates the frame's chain - one segment,
+// nothing kicked before it - and writes it back, without sending it. Returns its first tag, which
+// the pass engine replays from.
+const void * CloseForReplay();
+
 #if PS2_QUAKE_DEBUG
 // Installed by the renderer, called when a wait gives up, just after the pipeline registers are
 // dumped. Those say *that* the pipeline is stuck; only the renderer can say what its

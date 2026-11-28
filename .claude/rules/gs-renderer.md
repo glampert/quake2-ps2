@@ -166,6 +166,12 @@ The README's "Rendering" section is the architecture overview. The renderer file
     counted 562/563 a field, as a console does. PCSX2 also reads the display at vblank rather
     than behind the beam, so its live picture may show a strip's z-buffer; `screenshot` (each
     strip drawn alone and read back after its pass) is what to judge it by.
+  - **PCSX2's hardware renderer (Metal) showed only the top strip live** (the user, 2026-11-28,
+    720p 3-pass): the rest of the picture was the clear colour, while `screenshot` of the same
+    run read all three strips back whole. Likely cause: the hardware renderer keeps each render
+    target as its own texture, keyed by FBP, and each strip is drawn at its own FBP, so only
+    strip 0's reaches the display at FBP 0. The Software renderer has one VRAM as a console
+    does; with 3 passes one strip is the z-buffer at any instant, with 2 none is.
   - **Count the lines on EE timer T1, not with HSINT** (`ps2_hires_timer`, default 1). gsKit's
     HSINT-per-line counter cost the EE a quarter of its time in PCSX2: the 720p perf demos ran
     EntGeom at 0.331 µs a triangle against NTSC's 0.262, World 6.60 against 5.33 µs a surface,

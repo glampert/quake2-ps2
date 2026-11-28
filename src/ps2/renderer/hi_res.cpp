@@ -409,39 +409,28 @@ void ArmTimer()
     }
 }
 
-s32 TimerHandler(const s32 cause)
+// The GS events the engine takes, as CSR bits: each is cleared by writing its bit alone (the event
+// bits are write-one-to-clear), so the others survive.
+constexpr u32 kCsrFinish   = 2u;
+constexpr u32 kCsrHsint    = 4u;
+constexpr u32 kCsrVsint    = 8u;
+constexpr u32 kTakenEvents = kCsrFinish | kCsrHsint | kCsrVsint;
+
+// What CSR has raised that the IMR lets through: a masked event is someone else's to poll (the
+// readback masks FINISH and waits for it itself), so it is never taken or cleared here.
+u32 PendingGsEvents(const u64 csr)
 {
-    (void)cause;
-    *T1_MODE = kTimerMode | kTimerEqualFlag; // clear EQUF
-
-    const int index = s_nextOrder;
-    if (index < s_layout.passes)
-    {
-        const int pass = s_order[index];
-        if (pass == 0)
-        {
-            s_renderField = ((*GS_REG_CSR >> 13) & 1u) != 0 ? 0 : 1;
-        }
-        s_signalled = pass;
-        s_nextOrder = index + 1;
-        ArmTimer();
-        iSignalSema(s_passSema);
-    }
-
-    ExitHandler();
-    return 0;
+    const u32 unmasked = ~static_cast<u32>(iGsGetIMR() >> 8);
+    return static_cast<u32>(csr) & unmasked & kTakenEvents;
 }
 
-// INTC_GS: HSINT counts the lines, VSINT starts a field, FINISH ends a pass. Each is cleared by
-// writing its bit alone (CSR's event bits are write-one-to-clear), so the others survive.
-s32 GsHandler(const s32 cause)
+// HSINT counts the lines, VSINT starts a field, FINISH ends a pass. Interrupt context only (the
+// GS handler, or the timer's rescue below).
+void ServiceGsEvents(const u32 events, const u64 csr)
 {
-    (void)cause;
-    const u64 csr = *GS_REG_CSR;
-
-    if ((csr & 4u) != 0) // HSINT
+    if ((events & kCsrHsint) != 0)
     {
-        *GS_REG_CSR = 4u;
+        *GS_REG_CSR = kCsrHsint;
         const u32 line = s_lines + 1u;
         s_lines = line;
 
@@ -462,9 +451,9 @@ s32 GsHandler(const s32 cause)
         }
     }
 
-    if ((csr & 8u) != 0) // VSINT
+    if ((events & kCsrVsint) != 0)
     {
-        *GS_REG_CSR = 8u;
+        *GS_REG_CSR = kCsrVsint;
         u32 lines = s_lines;
         if (s_useTimer)
         {
@@ -506,18 +495,90 @@ s32 GsHandler(const s32 cause)
         }
     }
 
-    if ((csr & 2u) != 0 && s_passInFlight) // FINISH, the pass's terminator
+    // FINISH is cleared whether or not a pass is in flight: one left set would hold the GS's
+    // interrupt line up (GsHandler).
+    if ((events & kCsrFinish) != 0)
     {
-        *GS_REG_CSR = 2u;
-        const CpuCycles took = ReadCycles() - s_passStart;
-        s_stats.busyCycles += took;
-        if (took > s_stats.worstCycles)
+        *GS_REG_CSR = kCsrFinish;
+        if (s_passInFlight) // the pass's terminator
         {
-            s_stats.worstCycles = took;
+            const CpuCycles took = ReadCycles() - s_passStart;
+            s_stats.busyCycles += took;
+            if (took > s_stats.worstCycles)
+            {
+                s_stats.worstCycles = took;
+            }
+            s_passInFlight = false;
+            iSignalSema(s_finishSema);
         }
-        s_passInFlight = false;
-        iSignalSema(s_finishSema);
     }
+}
+
+s32 TimerHandler(const s32 cause)
+{
+    (void)cause;
+    *T1_MODE = kTimerMode | kTimerEqualFlag; // clear EQUF
+
+    // The rescue: a GS event still pending with no GS interrupt on its way (INTC_STAT's GS bit
+    // clear) is one whose interrupt was lost (GsHandler). This handler runs at every pass, and a
+    // lap of the counter (~1.4 s) after the last one when nothing else re-arms it, so a lost FINISH
+    // or VSINT costs a strip or a field instead of the pass engine for good.
+    const u64 csr    = *GS_REG_CSR;
+    const u32 missed = PendingGsEvents(csr) & (kCsrFinish | kCsrVsint);
+    if (missed != 0 && (*R_EE_I_STAT & EE_I_STAT_GS) == 0)
+    {
+        ++s_stats.rescues;
+        ServiceGsEvents(missed, csr);
+        if ((missed & kCsrVsint) != 0)
+        {
+            // The field's schedule starts again from here: its first compare is armed.
+            ExitHandler();
+            return 0;
+        }
+    }
+
+    const int index = s_nextOrder;
+    if (index < s_layout.passes)
+    {
+        const int pass = s_order[index];
+        if (pass == 0)
+        {
+            s_renderField = ((csr >> 13) & 1u) != 0 ? 0 : 1;
+        }
+        s_signalled = pass;
+        s_nextOrder = index + 1;
+        ArmTimer();
+        iSignalSema(s_passSema);
+    }
+
+    ExitHandler();
+    return 0;
+}
+
+// INTC_GS. The INTC latches the GS's interrupt line on its rising edge, and the GS holds the line up
+// while any unmasked event is pending, so an event raised after CSR was read, or one left set, keeps
+// it up with no edge to come: no GS interrupt ever again, the pass in flight never seen to finish,
+// and everything behind the GS lock stopped. The likely cause of the console's 3-pass runs freezing
+// minutes in, the sound looping (2026-11-28; gsKit's handler takes no FINISH, and has an HSINT every
+// line). So this takes events until none is left, then masks and unmasks them all, which gives the
+// INTC a new edge for one that came in between; the timer's rescue is the net under both.
+s32 GsHandler(const s32 cause)
+{
+    (void)cause;
+    for (int round = 0; round < 4; ++round)
+    {
+        const u64 csr    = *GS_REG_CSR;
+        const u32 events = PendingGsEvents(csr);
+        if (events == 0)
+        {
+            break;
+        }
+        ServiceGsEvents(events, csr);
+    }
+
+    const u64 imr = iGsGetIMR();
+    iGsPutIMR(imr | 0x7F00u);
+    iGsPutIMR(imr);
 
     ExitHandler();
     return 0;

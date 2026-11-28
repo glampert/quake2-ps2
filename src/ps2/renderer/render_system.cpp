@@ -861,8 +861,13 @@ void LimitFill(const bool limited)
 
     // GS_SET_SCISSOR doesn't parenthesize its arguments: named locals, and every field zero is the
     // top-left pixel alone. The block's VIF FLUSH lets the PATH1 work before it finish first.
+    // In strip mode every pass draws its strip from row 0 behind its own SCISSOR (hi_res.cpp's
+    // prologue), and the chain is the same for all of them, so this can't put back each pass's own:
+    // it gives back a whole strip, which keeps every pass inside its strip's VRAM (the last strip's
+    // rows below the picture included). The whole screen's would draw past the strip, and the last
+    // pass past the front buffer into the CLUTs and the texture heap.
     const u32 right  = static_cast<u32>(gs::Width()) - 1u;
-    const u32 bottom = static_cast<u32>(gs::Height()) - 1u;
+    const u32 bottom = static_cast<u32>(hires::Active() ? hires::Get().stripRows : gs::Height()) - 1u;
     const u64 whole  = GS_SET_SCISSOR(0u, right, 0u, bottom);
     const u64 value  = limited ? 0u : whole;
 

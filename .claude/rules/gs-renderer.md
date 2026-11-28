@@ -202,6 +202,32 @@ The README's "Rendering" section is the architecture overview. The renderer file
       Nothing was written: a release has no watchdog, and the debug one (a second) would not have
       fired, the passes did finish. The wait sleeps on a semaphore the FINISH interrupt signals
       now; the debug watchdog counts VSINTs. A late pass tears its strip; it must never stall.
+  - **The rerun with that fix** (`build/console-hires-2026-11-28b/`, runs 2-5, same configs):
+    480p and 720p 2-pass finished all three segments. Per pass, by segment fits against triangles:
+    720p 3-pass 1.56 ms + 0.66 µs, 26% of passes late, frames 17.4 ms mean (17% over 17.5);
+    720p 2-pass 1.96 ms + 0.75 µs, 0.3% late, 16.3 ms; 1080i 1.70 ms + 0.68 µs, 35% late, 17.8 ms.
+    2-pass no-fill: 0.52 ms + 0.67 µs, so fill is ~1.4 ms of a 491K-pixel strip (2.9 ns a pixel,
+    as at 480i) and the rest is VU1 replaying the whole frame. EE work rose from 6.1 ms (2-pass)
+    to 7.3-7.9 ms at 3 passes: the pass thread's own work, and the passes' DMA on the bus.
+    - **`ps2_gs_serial` does nothing in strip mode** (EndFrame never kicks or presents there), so
+      its segment repeats the first. **`ps2_gs_nofill`'s restore wrote the whole screen's
+      SCISSOR** over the pass's, so the 2D after the 3D drew past each strip, the last pass past
+      the front buffer into the CLUTs and the texture heap; it restores a whole strip's now
+      (`rs::LimitFill`). The 3D part of those captures is still a valid no-fill measurement.
+    - **3-pass 720p and 1080i still stopped**, minutes in, in a light scene as well as a saturated
+      one, the sound looping, no log: run 3 after ~7000 frames, run 5 after ~14,400. Likely a
+      lost interrupt: the INTC latches the GS's interrupt line on its rising edge, and the GS holds
+      the line up while any unmasked CSR event is pending, so a FINISH or VSINT raised while the
+      handler runs (after its one CSR read), or a FINISH it left set (it only cleared FINISH with
+      a pass in flight), leaves the line up with no edge to come: no GS interrupt again, the pass
+      in flight never seen to finish. gsKit's handler takes no FINISH and gets an HSINT every line,
+      so its code is no guide here. The handler now takes events until none is pending, always
+      clears FINISH, and masks and unmasks the IMR on the way out (`iGsPutIMR`), which gives a new
+      edge for anything left; T1's handler, which runs at every pass and on a counter lap when
+      nothing re-arms it, takes any FINISH or VSINT still pending with INTC_STAT's GS bit clear
+      and counts it (`hrRescue`). Only events the IMR lets through are taken: the readback masks
+      FINISH and polls it itself. The console rerun of this is pending: `hrRescue` above 0 would
+      confirm the edge theory.
   - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
     480i scene at the wider 16:9 view, the HUD at 2x. The 720p perf demos: 3 passes and one
     adoption a frame, none late, no frame over a field, chains up to 649 KB of the 768, the world

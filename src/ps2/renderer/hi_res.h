@@ -158,6 +158,7 @@ struct Stats
     u32 adoptions;     // frames that took over the replay
     u32 vsyncs;        // VSINTs: one a frame at 720p, a field at 1080i
     u32 fieldLines;    // HSINTs counted between the last two of them: the mode's lines a field
+    u32 rescues;       // GS events the timer found pending with no interrupt to come (GsHandler)
 };
 
 // Everything since the last call, and starts again from zero.

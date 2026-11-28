@@ -180,6 +180,7 @@ struct FrameSample
     // and frames that took over the replay.
     u32 hrFields, hrPasses, hrLate, hrSkipped, hrBusyCycles, hrWorstCycles, hrAdoptions;
     u32 hrVsyncs, hrLines; // VSINTs, and the HSINTs between the last two
+    u32 hrRescues;         // GS events the timer took because their interrupt never came
 
 #if PS2_QUAKE_GPU_SAMPLER
     // cmdbuf::TakeGpuStats: the frame's GsWait split by what held the chain up (cmd_buffer.h),
@@ -347,7 +348,7 @@ void WriteBatch()
                     "lmAtlases,lmStyle,lmDynamic,lmRestore,"
                     "vramUploads,vramOomSyncs,vramResident,"
                     "chainKB,chainKicks,chainDrains,sndFree,aioBytes,aioQ,sndQuery,sndPlay,"
-                    "hrFields,hrPasses,hrLate,hrSkipped,hrBusy,hrWorst,hrAdopt,hrVsyncs,hrLines"
+                    "hrFields,hrPasses,hrLate,hrSkipped,hrBusy,hrWorst,hrAdopt,hrVsyncs,hrLines,hrRescue"
 #if PS2_QUAKE_GPU_SAMPLER
                     ",gpuVu,gpuGs,gpuDirect,gpuVif,gpuTail,gpuWaits,vuSlow,vuEmpty,vuFanned,vuCulled"
 #endif // PS2_QUAKE_GPU_SAMPLER
@@ -401,10 +402,10 @@ void WriteBatch()
 
         if (at > 0 && at < static_cast<int>(sizeof(line)))
         {
-            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at), ",%u,%u,%u,%u,%u,%u,%u,%u,%u",
+            at += std::snprintf(line + at, sizeof(line) - static_cast<size_t>(at), ",%u,%u,%u,%u,%u,%u,%u,%u,%u,%u",
                                 s.hrFields, s.hrPasses, s.hrLate, s.hrSkipped,
                                 ToMicrosec(s.hrBusyCycles), ToMicrosec(s.hrWorstCycles), s.hrAdoptions,
-                                s.hrVsyncs, s.hrLines);
+                                s.hrVsyncs, s.hrLines, s.hrRescues);
         }
 
 #if PS2_QUAKE_GPU_SAMPLER
@@ -547,6 +548,7 @@ void FrameLogCapture()
     s.hrAdoptions   = strips.adoptions;
     s.hrVsyncs      = strips.vsyncs;
     s.hrLines       = strips.fieldLines;
+    s.hrRescues     = strips.rescues;
 
 #if PS2_QUAKE_GPU_SAMPLER
     // Every wait since the last row: the frame's own (a texture fence, an overflow, the world's

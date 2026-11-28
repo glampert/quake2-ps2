@@ -647,7 +647,11 @@ having a DLL as the original Quake 2 did.
 GS drawing contexts. `ps2_video_mode` ("video mode" in the video options, after a restart)
 picks the standard: `auto` takes the console's own (from its BIOS ROM name), and `ntsc` or
 `pal` force one, so a PAL console can run at 60 Hz on a TV that takes it
-([video_mode.h](src/ps2/system/video_mode.h), which the fatal-error screen shares).
+([video_mode.h](src/ps2/system/video_mode.h), which the fatal-error screen shares). `480p` is a
+digital TV mode instead (SetGsCrt 0x50, for component or an HDMI adapter): the same 640x448
+double-buffered picture, progressive at 59.94 Hz with the flicker filter off, scanned at 2 VCK a
+pixel and centred in the mode's 720x480 as gsKit lays its modes out (`video::DtvDisplay`); the
+boot splash and the fatal-error screen stay in the console's interlaced standard.
 `ps2_fb_height` 0 follows the standard's full height; 512 lines leave 240 KB less VRAM for
 textures than 448. `ps2_screen_x` and `ps2_screen_y` move the picture on the TV through the GS
 DISPLAY register's origin ([video_mode.h](src/ps2/system/video_mode.h)): the GS comes up with

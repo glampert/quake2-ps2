@@ -175,7 +175,7 @@ struct Setting
 };
 
 constexpr Choice kOffOn[]        = { { "0", "off" }, { "1", "on" } };
-constexpr Choice kVideoModes[]   = { { "auto" }, { "ntsc", "NTSC" }, { "pal", "PAL" } };
+constexpr Choice kVideoModes[]   = { { "auto" }, { "ntsc", "NTSC" }, { "pal", "PAL" }, { "480p" } };
 constexpr Choice kFbWidths[]     = { { "512" }, { "640" } };
 constexpr Choice kFbHeights[]    = { { "0", "auto" }, { "448" }, { "512" } }; // auto: the video mode's full height.
 constexpr Choice kFbFormats[]    = { { "1", "16-bit" }, { "0", "32-bit" } };
@@ -207,7 +207,7 @@ const NumberRange kScreenYRange = { -kMaxScreenY, kMaxScreenY, s_screenYNames };
 constexpr Setting kSettings[] = {
     { "ps2_debug_overlays",    "debug overlays",    "show developer debug info (draw/mem/profile stats)",    Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
     { "ps2_show_fps",          "show fps",          "show frames per second at the top right of the screen", Applies::Now,     false, kOffOn,        ps2::ArrayLength(kOffOn)        },
-    { "ps2_video_mode",        "video mode",        "auto is the console's own standard; needs a restart",   Applies::Restart, true,  kVideoModes,   ps2::ArrayLength(kVideoModes)   },
+    { "ps2_video_mode",        "video mode",        "auto: the console's own; 480p needs a TV that takes it", Applies::Restart, true,  kVideoModes,   ps2::ArrayLength(kVideoModes)   },
     { "ps2_fb_width",          "screen width",      "framebuffer width in pixels; needs a restart",          Applies::Restart, false, kFbWidths,     ps2::ArrayLength(kFbWidths)     },
     { "ps2_fb_height",         "screen height",     "auto: the mode's full 448/512 lines; needs a restart",  Applies::Restart, false, kFbHeights,    ps2::ArrayLength(kFbHeights)    },
     { "ps2_fb_16bit",          "color depth",       "16-bit leaves more VRAM for textures; needs a restart", Applies::Restart, false, kFbFormats,    ps2::ArrayLength(kFbFormats)    },

@@ -115,6 +115,15 @@ The README's "Rendering" section is the architecture overview. The renderer file
   out-of-memory syncs, though fewer textures stayed resident (73 against 79 on average). The
   present clock's field rate follows the chosen standard, not the console's. Forcing NTSC on a
   PAL console works on hardware (2026-10-11): the perf test paced at 59.94 Hz.
+- **480p (2026-11-28)**: `ps2_video_mode 480p` (video_mode.h `Output::Dtv480p`) is libgraph's
+  `GRAPH_MODE_HDTV_480P` through `graph_set_mode` (non-interlaced, FRAME, filter off), but not
+  `graph_set_screen`: that sets DW to the mode's whole 1440 VCK, 720 pixels at MAGH 1, out of a
+  640-pixel buffer. `video::DtvDisplay` writes DISPLAY1/2 as gsKit does instead: the magnification
+  that fits (MAGH 1, MAGV 0), the picture centred in what is left (+80 VCK, +16 lines), plus the
+  BIOS's `_GetGsDxDyOffset` (PCSX2's: DX 308, DY 51). With the filter off only read circuit 2 is
+  on, and `graph_set_framebuffer_filtered` would point it a row down, so a digital output writes
+  both DISPFBs at row 0 (`SetDisplayFramebuffer`). PCSX2 logs `SDTV 720x480 @ 59.94 Progressive
+  (FRAME)`; a scripted shot of the attract demo matched 480i's but for the demo's own timing.
 - **The picture's place on the TV is DISPLAY's DX/DY**, `graph_set_screen`'s x/y adjustments over
   libgraph's origin for the standard (NTSC 652/50, PAL 680/72): 4 VCK per pixel at 640 wide (DW
   2560, MAGH 3) and 2 raster lines per framebuffer row in FIELD mode. `ps2_screen_x/y` (ref.cpp,

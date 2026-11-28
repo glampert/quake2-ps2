@@ -20,7 +20,7 @@ bigger picture.
 | Cvar | Debug | Release | Flags | Description |
 | --- | --- | --- | --- | --- |
 | `ps2_fb_width` | `640` | `640` | Arch., Menu | Framebuffer width in pixels (512 or 640); read at startup. |
-| `ps2_video_mode` | `auto` | `auto` | Arch., Menu | TV standard: `auto` (the console's own), `ntsc` (59.94 Hz) or `pal` (50 Hz); read at startup. A PAL console can drive NTSC if the TV takes 60 Hz. The fatal-error screen follows it too. |
+| `ps2_video_mode` | `auto` | `auto` | Arch., Menu | TV standard: `auto` (the console's own), `ntsc` (59.94 Hz) or `pal` (50 Hz), or a digital TV mode: `480p` (the same 640x448 picture, progressive, 59.94 Hz, centred in the mode's 720x480; for component or an HDMI adapter); read at startup. A PAL console can drive NTSC if the TV takes 60 Hz. The fatal-error screen follows the standard, and stays interlaced in 480p. `720p` and `1080i` are taken and fall back to the standard's interlaced picture until strip rendering lands (`experimental_hi-res` branch). |
 | `ps2_fb_height` | `0` | `0` | Arch., Menu | Framebuffer height in pixels: 0 (auto) is the video mode's full height, 448 for NTSC and 512 for PAL; a taller value than the mode shows is clamped. 512 lines leave 240 KB less VRAM for textures. Read at startup. |
 | `ps2_fb_16bit` | `1` | `1` | Arch., Menu | 16-bit colour buffers (more VRAM for textures) instead of 32-bit; read at startup. |
 | `ps2_fb_dither` | `0` | `0` | Arch., Menu | GS dithering, to hide the 16-bit framebuffer's colour banding. |

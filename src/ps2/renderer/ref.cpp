@@ -597,20 +597,30 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     const cvar_t * const fbWidth  = Cvar_Get("ps2_fb_width",  "640", CVAR_ARCHIVE);
     const cvar_t * const fbHeight = Cvar_Get("ps2_fb_height", "0",   CVAR_ARCHIVE);
 
-    // NTSC or PAL, latched here like the framebuffer: "auto" takes the console's own. The height
-    // follows the standard - its full 448 or 512 lines for ps2_fb_height 0, and never more than
-    // it can show - since a framebuffer taller than the picture would lose its bottom rows.
+    // NTSC or PAL, or a digital TV output, latched here like the framebuffer: "auto" takes the
+    // console's own. The height follows the standard - its full 448 or 512 lines for
+    // ps2_fb_height 0, and never more than it can show - since a framebuffer taller than the
+    // picture would lose its bottom rows. 480p shows 480i's 448.
     const cvar_t * const videoMode = Cvar_Get("ps2_video_mode", "auto", CVAR_ARCHIVE);
     bool videoModeKnown = true;
     const ps2::video::Standard standard = ps2::video::SelectStandard(videoMode->string, &videoModeKnown);
+    ps2::video::Output output = ps2::video::SelectedOutput();
     if (!videoModeKnown)
     {
-        Com_Printf("ps2_video_mode: '%s' is not auto, ntsc or pal; using the console's own, %s.\n",
+        Com_Printf("ps2_video_mode: '%s' is not auto, ntsc, pal or 480p; using the console's own, %s.\n",
                    videoMode->string, ps2::video::Name(standard));
     }
 
+    // 720p and 1080i draw in strips (the hi-res modes), which this build does not have yet.
+    if (output == ps2::video::Output::Dtv720p || output == ps2::video::Output::Dtv1080i)
+    {
+        Com_Printf("ps2_video_mode: %s is not supported yet; using %s.\n",
+                   ps2::video::OutputName(standard, output), ps2::video::OutputName(standard, ps2::video::Output::Interlaced));
+        output = ps2::video::Output::Interlaced;
+    }
+
     const int requestedHeight = static_cast<int>(fbHeight->value);
-    const int fbHeightLines   = ps2::video::FramebufferHeight(standard, requestedHeight);
+    const int fbHeightLines   = ps2::video::FramebufferHeight(standard, output, requestedHeight);
     if (requestedHeight > 0 && fbHeightLines != requestedHeight)
     {
         Com_Printf("ps2_fb_height: %s shows %d lines; using %d instead of %d.\n",
@@ -642,7 +652,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
         .width            = static_cast<int>(fbWidth->value),
         .height           = fbHeightLines,
         .framebuffer16Bit = (fb16Bit->value != 0.0f),
-        .standard         = standard
+        .standard         = standard,
+        .output           = output
     };
     ps2::rs::Init(gsConfig, scratch.base, scratch.sizeBytes);
     ps2::screenshot::Init();
@@ -663,8 +674,8 @@ qboolean PS2_RefInit(void * hinstance, void * wndproc)
     ps2::rs::SetClearColor(0, 0, 0);
 #endif // PS2_QUAKE_DEBUG
 
-    Com_DPrintf("PS2 refresh initialised: %dx%d %s\n", viddef.width, viddef.height,
-                ps2::video::Name(standard));
+    Com_DPrintf("PS2 refresh initialised: %dx%d %s %s\n", viddef.width, viddef.height,
+                ps2::video::Name(standard), ps2::video::OutputName(standard, output));
     Com_DPrintf("Debug: %s, Asserts: %s\n",
                 PS2_QUAKE_DEBUG   ? "yes" : "no",
                 PS2_QUAKE_ASSERTS ? "yes" : "no");

@@ -60,6 +60,7 @@ struct Config
     int             width, height;    // framebuffer dimensions, in pixels; height fits the standard
     bool            framebuffer16Bit; // 16-bit halves the framebuffers, at 5:5:5 colour
     video::Standard standard;         // NTSC or PAL (ps2_video_mode, see system/video_mode.h)
+    video::Output   output;           // the standard's interlaced picture, or a digital TV mode
 };
 
 // Brings up the GS: allocates the framebuffers and z-buffer, sets the video mode for the config's

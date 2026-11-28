@@ -242,15 +242,55 @@ void UploadCluts(const tex::Clut * const (&cluts)[4])
 static int s_screenAdjustX = 0;
 static int s_screenAdjustY = 0;
 
+// What the GS scans out (gs::Config::output), latched by Init.
+static video::Output s_output = video::Output::Interlaced;
+
 void SetDisplayPosition()
 {
     s_screenAdjustX = video::ScreenAdjustX();
     s_screenAdjustY = video::ScreenAdjustY();
-    graph_set_screen(s_screenAdjustX, s_screenAdjustY, detail::g_state.width, detail::g_state.height);
 
-    const video::Standard standard = video::Selected();
-    Com_DPrintf("GS: picture %+d pixels, %+d rows: DISPLAY DX %d, DY %d.\n",
-                video::ScreenOffsetX(), video::ScreenOffsetY(), video::DisplayX(standard), video::DisplayY(standard));
+    if (s_output == video::Output::Interlaced)
+    {
+        graph_set_screen(s_screenAdjustX, s_screenAdjustY, detail::g_state.width, detail::g_state.height);
+
+        const video::Standard standard = video::Selected();
+        Com_DPrintf("GS: picture %+d pixels, %+d rows: DISPLAY DX %d, DY %d.\n",
+                    video::ScreenOffsetX(), video::ScreenOffsetY(), video::DisplayX(standard), video::DisplayY(standard));
+        return;
+    }
+
+    // A digital mode: graph_set_screen would scan the mode's whole width (480p's 1440 VCK, 720
+    // pixels at MAGH 1) out of a 640-pixel framebuffer. gsKit's layout fits the magnification to
+    // the framebuffer and centres the picture instead. Only read circuit 2 is on, without the
+    // flicker filter, but both are written so either reads the same picture.
+    const u64 display = video::DtvDisplay(s_output, detail::g_state.width, detail::g_state.height);
+    *GS_REG_DISPLAY1 = display;
+    *GS_REG_DISPLAY2 = display;
+
+    Com_DPrintf("GS: picture %+d pixels, %+d rows: DISPLAY DX %u, DY %u.\n",
+                video::ScreenOffsetX(), video::ScreenOffsetY(),
+                static_cast<unsigned>(display & 0xFFFu), static_cast<unsigned>((display >> 12) & 0x7FFu));
+}
+
+// Points the display at a framebuffer. The interlaced output reads it through both circuits, the
+// second a row down, which the flicker filter blends; a digital one has the filter off and shows
+// circuit 2 alone, which must then read row 0, or the picture would sit a row high.
+void SetDisplayFramebuffer(const framebuffer_t & fb)
+{
+    const int address = static_cast<int>(fb.address);
+    const int width   = static_cast<int>(fb.width);
+    const int psm     = static_cast<int>(fb.psm);
+
+    if (s_output == video::Output::Interlaced)
+    {
+        graph_set_framebuffer_filtered(address, width, psm, 0, 0);
+    }
+    else
+    {
+        graph_set_framebuffer(0, address, width, psm, 0, 0);
+        graph_set_framebuffer(1, address, width, psm, 0, 0);
+    }
 }
 
 // Loads the global palette into the GS's CLUT buffer and sets CBP0 to it, so the
@@ -480,15 +520,32 @@ void Init(const Config & cfg)
     // circuits - with the mode passed in, where graph_initialize can only take the console's own,
     // and the picture where ps2_screen_x/y put it. The output comes on below, once frame 0 holds a
     // picture.
-    graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(cfg.standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
+    //
+    // A digital output is FRAME mode with the flicker filter off: progressive for 480p and 720p,
+    // interlaced for 1080i, whose SMODE2 needs gsKit's fix after SetGsCrt (FFMD, which the BIOS
+    // leaves at FIELD for that mode).
+    s_output = cfg.output;
+    if (cfg.output == video::Output::Interlaced)
+    {
+        graph_set_mode(GRAPH_MODE_INTERLACED, video::GraphMode(cfg.standard), GRAPH_MODE_FIELD, GRAPH_ENABLE);
+    }
+    else
+    {
+        const int interlace = video::IsProgressive(cfg.output) ? GRAPH_MODE_NONINTERLACED : GRAPH_MODE_INTERLACED;
+        graph_set_mode(interlace, video::OutputGraphMode(cfg.standard, cfg.output), GRAPH_MODE_FRAME, GRAPH_DISABLE);
+        if (cfg.output == video::Output::Dtv1080i)
+        {
+            *GS_REG_SMODE2 = GS_SET_SMODE2(1, 1, 0);
+        }
+    }
     SetDisplayPosition();
     graph_set_bgcolor(0, 0, 0);
-    graph_set_framebuffer_filtered(static_cast<int>(frames[0].address), cfg.width, framePsm, 0, 0);
+    SetDisplayFramebuffer(frames[0]);
 
-    // The standard fixes the field rate the present clock counts in: 50 a second on PAL, 59.94
-    // on NTSC.
-    s_ticksPerField = (cfg.standard == video::Standard::Pal) ? (kPresentTicksPerSec / 50u)
-                                                             : (((kPresentTicksPerSec * 1001u) + 30000u) / 60000u);
+    // The output fixes the field rate the present clock counts in: 50 a second on PAL's 576i,
+    // 59.94 on everything else.
+    s_ticksPerField = video::FieldRateIsPal(cfg.standard, cfg.output) ? (kPresentTicksPerSec / 50u)
+                                                                      : (((kPresentTicksPerSec * 1001u) + 30000u) / 60000u);
 
     s_texUploadPacket.Init(kTexUploadQwords);
     InitVsyncWait();
@@ -518,7 +575,10 @@ void Init(const Config & cfg)
     // 1), showing whatever VRAM holds there. The boot splash left the id logo there in exactly this
     // layout unless the config chose another one, so the logo stays up until the game's first
     // frame. In any other layout those texels would show as garbage: the frame starts black.
-    if (!splash::IsShownIn(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, cfg.standard))
+    // A digital output scans the same VRAM through another CRT mode, so the splash, drawn in the
+    // console's interlaced one, is never taken for it.
+    if (cfg.output != video::Output::Interlaced ||
+        !splash::IsShownIn(static_cast<int>(frames[0].address), cfg.width, cfg.height, framePsm, cfg.standard))
     {
         pkt.DisableTests(Index(DrawContext::Ctx0), zbuffer);
         pkt.Clear(Index(DrawContext::Ctx0), 0.0f, 0.0f,
@@ -672,10 +732,7 @@ void PresentFramebuffer(const DrawContext ctx)
         SetDisplayPosition();
     }
 
-    const framebuffer_t & fb = detail::g_state.framebuffer[Index(ctx)];
-    graph_set_framebuffer_filtered(static_cast<int>(fb.address),
-                                   static_cast<int>(fb.width),
-                                   static_cast<int>(fb.psm), 0, 0);
+    SetDisplayFramebuffer(detail::g_state.framebuffer[Index(ctx)]);
     StampDisplayWrite();
 }
 

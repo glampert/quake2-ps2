@@ -108,6 +108,14 @@ static u64  s_pixelTests  = 0;
 static volatile bool      s_passInFlight = false;
 static volatile CpuCycles s_passStart    = 0;
 
+#if PS2_QUAKE_DEBUG
+// The watchdog: VSINTs a pass has been in flight through, and the handler's word that one never
+// ended (WaitPassDone reports it).
+static volatile u32  s_inFlightVsyncs = 0;
+static volatile bool s_passStuck      = false;
+constexpr u32 kStuckPassVsyncs = 60; // about a second
+#endif // PS2_QUAKE_DEBUG
+
 // The interrupt side: HSINTs since the last VSINT, the line count each pass starts at, and the
 // pass the handler last asked for.
 static volatile u32 s_lines       = 0;
@@ -145,6 +153,7 @@ static volatile int s_renderField = 1; // 1080i: 1 draws the odd lines (no offse
 static s32 s_passSema  = -1; // the handler wakes the pass thread
 static s32 s_lockSema  = -1; // the GS lock, a mutex
 static s32 s_adoptSema = -1; // a pass adopted a frame (WaitForHalf)
+static s32 s_finishSema = -1; // FINISH ended the pass in flight (WaitPassDone)
 static int s_handlerId = -1;
 static s32 s_threadId  = -1;
 
@@ -292,8 +301,9 @@ void Adopt()
 }
 
 #if PS2_QUAKE_DEBUG
-// A pass that never ends would leave this spinning above every other thread, the whole EE frozen
-// with nothing printed: after a second it says what the engine was waiting on, and gives up.
+// A pass that never ends would leave the pass thread, and then everything that takes the GS lock,
+// waiting for good with nothing printed: after a second the VSINT handler wakes the waiter, which
+// says what the engine was waiting on, and gives up on the pass.
 Q_COLD_FUNC void ReportStuckPass()
 {
     std::printf("hi-res: a pass never finished: inFlight %d, D1_CHCR %08x, CSR %08x, IMR %08x, T1 %u/%u mode %04x, "
@@ -304,22 +314,26 @@ Q_COLD_FUNC void ReportStuckPass()
 }
 #endif // PS2_QUAKE_DEBUG
 
+// Sleeps, never spins: the pass thread is above every other, and once the GS can't draw a field's
+// passes inside the field (a heavy view, every pass replaying the whole frame), each pass finds the
+// one before still drawing and waits most of a pass for it, back to back. A spin there kept the main
+// and sound threads off the EE for good: on a console 720p's 3 passes froze at base2's first view,
+// and its 2 at waste2's fight, sound looping, no log (2026-11-28). A FINISH left over from a pass
+// nobody waited for only costs a turn of the loop.
 void WaitPassDone()
 {
-#if PS2_QUAKE_DEBUG
-    const CpuCycles start = ReadCycles();
     while (s_passInFlight)
     {
-        if ((ReadCycles() - start) > (ps2::debug::ProfileCyclesPerMillisec() * 1000u))
+        WaitSema(s_finishSema);
+#if PS2_QUAKE_DEBUG
+        if (s_passStuck)
         {
             ReportStuckPass();
+            s_passStuck    = false;
             s_passInFlight = false;
-            break;
         }
-    }
-#else // PS2_QUAKE_DEBUG
-    while (s_passInFlight) {}
 #endif // PS2_QUAKE_DEBUG
+    }
     while ((*R_EE_D1_CHCR & (1u << 8)) != 0) {}
 }
 
@@ -333,6 +347,9 @@ void SendPass(const int pass)
 
     *GS_REG_CSR = 2; // clear FINISH, so the handler's is this pass's
     s_passStart    = ReadCycles();
+#if PS2_QUAKE_DEBUG
+    s_inFlightVsyncs = 0;
+#endif // PS2_QUAKE_DEBUG
     s_passInFlight = true;
     dma_channel_send_chain(DMA_CHANNEL_VIF1, prologue, qwords, DMA_FLAG_TRANSFERTAG, 0);
     ++s_stats.passes;
@@ -457,6 +474,19 @@ s32 GsHandler(const s32 cause)
         }
         ++s_stats.vsyncs;
         s_stats.fieldLines = lines;
+
+#if PS2_QUAKE_DEBUG
+        if (s_passInFlight && !s_passStuck)
+        {
+            const u32 vsyncs = s_inFlightVsyncs + 1u;
+            s_inFlightVsyncs = vsyncs;
+            if (vsyncs > kStuckPassVsyncs)
+            {
+                s_passStuck = true;
+                iSignalSema(s_finishSema);
+            }
+        }
+#endif // PS2_QUAKE_DEBUG
         s_lines = 0;
 
         const bool offNominal = (lines + 8u < s_nominalLines) || (lines > s_nominalLines + 8u);
@@ -486,6 +516,7 @@ s32 GsHandler(const s32 cause)
             s_stats.worstCycles = took;
         }
         s_passInFlight = false;
+        iSignalSema(s_finishSema);
     }
 
     ExitHandler();
@@ -596,12 +627,13 @@ void Start(const u64 pixelTests)
     sema.max_count  = 1;
     s_passSema  = CreateSema(&sema);
     s_adoptSema = CreateSema(&sema);
+    s_finishSema = CreateSema(&sema);
     sema.init_count = 1;
     s_lockSema  = CreateSema(&sema);
-    if (s_passSema < 0 || s_adoptSema < 0 || s_lockSema < 0)
+    if (s_passSema < 0 || s_adoptSema < 0 || s_finishSema < 0 || s_lockSema < 0)
     {
-        Sys_Error("hi-res: no semaphores for the pass engine (%d %d %d).",
-                  static_cast<int>(s_passSema), static_cast<int>(s_adoptSema), static_cast<int>(s_lockSema));
+        Sys_Error("hi-res: no semaphores for the pass engine (%d %d %d %d).", static_cast<int>(s_passSema),
+                  static_cast<int>(s_adoptSema), static_cast<int>(s_finishSema), static_cast<int>(s_lockSema));
         return; // unreachable; Sys_Error halts (it is not marked noreturn)
     }
 

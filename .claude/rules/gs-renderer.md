@@ -181,6 +181,27 @@ The README's "Rendering" section is the architecture overview. The renderer file
     own work; `hires-720p-timer-demos.emulog.txt`). ps2sdk takes T2 and T3; T0 and T1 are free.
   - 1080i's 39-map cycle (2026-11-28) loaded every map: no hold, no repack, no blank load, worst
     moment 31.04 MB (memory-budget.md).
+  - **The first console run (2026-11-28**, the user's PAL console, USB, profiling release a606267,
+    `ps2_perftest 2`; `build/console-hires-2026-11-28/frame_log{1..5}.txt`, runs 1-5 = NTSC, 480p,
+    720p, 720p 2-pass, 1080i). The TV was on the AV (composite) cable, which carries none of the
+    digital modes: no picture in 480p, 720p or 1080i, the sound and the log as usual. They need
+    component (YPbPr) or an HDMI adapter.
+    - **Every pass costs about what the whole frame's GPU work does**, since it replays the whole
+      chain: 720p 2-pass fits *pass = 1.94 ms + 0.75 µs a triangle* (4955 3D rows), mean 5.1 ms,
+      worst 9.1 ms against the 7474 µs strip budget, 45 late passes (views of 7.0-7.8K triangles).
+      It held 60 fps until it froze (Frame mean 16.3 ms, EE work 6.2 ms, 158 texture-heap
+      repacks). The NTSC serial frame is 3.8 ms for 4.2K triangles, 2.6 of it VU1 (performance.md).
+      So 3 passes need 3x the frame's VU1 work every field: about 5.7 ms of pass at base2's
+      6.3K-triangle first view, past a 256-row strip's 5.7 ms scan and, three times over, past the
+      field. Per-strip culling (each batch replayed only in the strips it touches) is what would
+      make them fit.
+    - **A late pass froze the EE.** `WaitPassDone` spun at priority 0, and a GS that can't finish
+      a field's passes in the field makes every pass late by most of a pass: the main and sound
+      threads never ran again. 720p and 1080i at 3 passes froze at base2's first view (their logs
+      end at frame 64, the plaque), 2-pass at waste2's 7.3-9.7K-triangle fight (frame ~5321).
+      Nothing was written: a release has no watchdog, and the debug one (a second) would not have
+      fired, the passes did finish. The wait sleeps on a semaphore the FINISH interrupt signals
+      now; the debug watchdog counts VSINTs. A late pass tears its strip; it must never stall.
   - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
     480i scene at the wider 16:9 view, the HUD at 2x. The 720p perf demos: 3 passes and one
     adoption a frame, none late, no frame over a field, chains up to 649 KB of the 768, the world

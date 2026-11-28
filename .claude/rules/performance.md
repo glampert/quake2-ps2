@@ -650,6 +650,16 @@ gets the ten columns at the end of a row, after `sndPlay`.
   own end); no-fill identical, since PCSX2 charges no fill; the VU counts identical across the
   three passes (255 slow-path, 142 clipped to nothing, 160 fanned, 2294 back faces a 3D frame,
   of 4224 triangles), the demos being deterministic. The console run is what gives the split.
+- **The first console split (2026-11-28**, PAL console forced to NTSC, USB, profiling release,
+  `ps2_perftest 2`; `build/console-hires-2026-11-28/frame_log1.txt`), over ~6950 3D frames a
+  segment, 4.2K triangles and 55 batches a frame:
+  - Pipelined: GsWait 1.44 ms a frame (p95 2.8), 81% `gpuVu`, 13% `gpuGs`, 5% `gpuVif`.
+  - Serial (the chain's whole cost): 3.82 ms a frame (p95 5.6, max 7.7). `gpuVu` 2.59 ms (68%,
+    0.61 µs a triangle), `gpuGs` 1.13, `gpuVif` 0.15.
+  - Serial no-fill: 3.03 ms, `gpuVu` unchanged, `gpuGs` 0.31. **Fill is 0.81 ms a frame**,
+    2.82 ns a screen pixel over 640x448.
+  - So VU1 is two thirds of the GPU's work and the GS's pixels a fifth. What strip mode costs on
+    top of that is in gs-renderer.md.
 - **Strip mode's columns** (720p/1080i, hi_res.h; every profiling build writes them, zeros in the
   other modes): `hrFields` (first passes, one a field), `hrPasses`, `hrLate` (a pass that found
   the one before still drawing: that strip tore), `hrSkipped` (held, or no frame yet), `hrBusy`

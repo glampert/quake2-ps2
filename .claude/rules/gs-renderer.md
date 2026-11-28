@@ -154,9 +154,18 @@ The README's "Rendering" section is the architecture overview. The renderer file
     counted 562/563 a field, as a console does. PCSX2 also reads the display at vblank rather
     than behind the beam, so its live picture may show a strip's z-buffer; `screenshot` (each
     strip drawn alone and read back after its pass) is what to judge it by.
+  - **Count the lines on EE timer T1, not with HSINT** (`ps2_hires_timer`, default 1). gsKit's
+    HSINT-per-line counter cost the EE a quarter of its time in PCSX2: the 720p perf demos ran
+    EntGeom at 0.331 µs a triangle against NTSC's 0.262, World 6.60 against 5.33 µs a surface,
+    every stage alike (`build/baselines/hires-720p-perf1.flog`). T1 clocked by H-blank, its
+    compare armed at each VSINT for the earliest pass and re-armed by each compare interrupt, is
+    seven interrupts a frame with the FINISHes: 0.271 and 5.42 µs (+1.6 to +3.4%, the pass thread's
+    own work; `hires-720p-timer-demos.emulog.txt`). ps2sdk takes T2 and T3; T0 and T1 are free.
   - Checked in PCSX2: scripted shots of the attract demo at 720p (3 strips) and 1080i match the
-    480i scene at the wider 16:9 view, the HUD at 2x; 3 passes and one adoption a field, none
-    late, frames at 16.9 ms.
+    480i scene at the wider 16:9 view, the HUD at 2x. The 720p perf demos: 3 passes and one
+    adoption a frame, none late, no frame over a field, chains up to 649 KB of the 768, the world
+    loads through the heap copy; the cinematics too. NTSC on the same build matched the GPU
+    sampler capture within 1% (`hires-ntsc-after-perf1.flog`).
 - **The picture's place on the TV is DISPLAY's DX/DY**, `graph_set_screen`'s x/y adjustments over
   libgraph's origin for the standard (NTSC 652/50, PAL 680/72): 4 VCK per pixel at 640 wide (DW
   2560, MAGH 3) and 2 raster lines per framebuffer row in FIELD mode. `ps2_screen_x/y` (ref.cpp,

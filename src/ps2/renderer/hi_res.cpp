@@ -20,6 +20,7 @@
 #include <gs_privileged.h>
 #include <gs_psm.h>
 #include <ee_regs.h>
+#include <timer.h> // T1_COUNT, T1_MODE, T1_COMP
 #include <vif_codes.h>
 
 namespace ps2::hires {
@@ -119,6 +120,24 @@ static u32          s_passLine[kMaxPasses] = {};
 static u32 s_baseLine[kMaxPasses] = {};
 static u32 s_nominalLines = 750;
 static u32 s_scaledFor    = 0;
+
+// ps2_hires_timer 1 (the default): the lines are counted by EE timer T1, clocked by H-blank, not by
+// an HSINT per line. An HSINT is a kernel INTC dispatch, and at 525 to 750 a frame those cost the
+// EE about a fifth of its time in PCSX2 (every stage of the 720p perf capture ran ~20% long for the
+// same work). With the timer, VSINT reads T1 and arms its compare on the earliest pass's line, and
+// each compare interrupt wakes its pass and arms the next: four interrupts a frame. ps2sdk takes
+// T2 and T3; T0 and T1 are free.
+static bool s_useTimer = true;
+static int  s_order[kMaxPasses] = {}; // pass numbers by line, earliest first
+static volatile int s_nextOrder   = 0;
+static volatile u32 s_vsyncCount  = 0; // T1 at the last VSINT
+
+constexpr u32 kTimerClockHblank = 3u;       // CLKS: count H-blanks
+constexpr u32 kTimerCountEnable = 1u << 7;  // CUE
+constexpr u32 kTimerCompareInt  = 1u << 8;  // CMPE
+constexpr u32 kTimerEqualFlag   = 1u << 10; // EQUF, write 1 to clear
+constexpr u32 kTimerMode        = kTimerClockHblank | kTimerCountEnable | kTimerCompareInt;
+
 static volatile int s_signalled   = 0;
 static volatile int s_renderField = 1; // 1080i: 1 draws the odd lines (no offset), 0 the even
 
@@ -330,6 +349,45 @@ void PassThread(void *)
     }
 }
 
+// Aims T1's compare at the next pass this frame, or where it can't be reached before the next
+// VSINT re-arms it: a line behind the count, which it would take the 16-bit counter's whole lap
+// (about 1.4 s) to come round to.
+void ArmTimer()
+{
+    const int index = s_nextOrder;
+    if (index < s_layout.passes)
+    {
+        *T1_COMP = (s_vsyncCount + s_passLine[s_order[index]]) & 0xFFFFu;
+    }
+    else
+    {
+        *T1_COMP = (*T1_COUNT - 1u) & 0xFFFFu;
+    }
+}
+
+s32 TimerHandler(const s32 cause)
+{
+    (void)cause;
+    *T1_MODE = kTimerMode | kTimerEqualFlag; // clear EQUF
+
+    const int index = s_nextOrder;
+    if (index < s_layout.passes)
+    {
+        const int pass = s_order[index];
+        if (pass == 0)
+        {
+            s_renderField = ((*GS_REG_CSR >> 13) & 1u) != 0 ? 0 : 1;
+        }
+        s_signalled = pass;
+        s_nextOrder = index + 1;
+        ArmTimer();
+        iSignalSema(s_passSema);
+    }
+
+    ExitHandler();
+    return 0;
+}
+
 // INTC_GS: HSINT counts the lines, VSINT starts a field, FINISH ends a pass. Each is cleared by
 // writing its bit alone (CSR's event bits are write-one-to-clear), so the others survive.
 s32 GsHandler(const s32 cause)
@@ -363,7 +421,13 @@ s32 GsHandler(const s32 cause)
     if ((csr & 8u) != 0) // VSINT
     {
         *GS_REG_CSR = 8u;
-        const u32 lines = s_lines;
+        u32 lines = s_lines;
+        if (s_useTimer)
+        {
+            const u32 now = *T1_COUNT;
+            lines = (now - s_vsyncCount) & 0xFFFFu;
+            s_vsyncCount = now;
+        }
         ++s_stats.vsyncs;
         s_stats.fieldLines = lines;
         s_lines = 0;
@@ -376,6 +440,12 @@ s32 GsHandler(const s32 cause)
                 s_passLine[p] = (s_baseLine[p] * lines) / s_nominalLines;
             }
             s_scaledFor = lines;
+        }
+
+        if (s_useTimer)
+        {
+            s_nextOrder = 0;
+            ArmTimer();
         }
     }
 
@@ -484,6 +554,16 @@ void Start(const u64 pixelTests)
     }
     s_nominalLines = (s_layout.output == video::Output::Dtv1080i) ? 562u : 750u;
 
+    // The passes in the order their lines come: 1, 2, then 0, which starts as the CRTC reaches the
+    // last strip.
+    for (int i = 0; i < s_layout.passes; ++i)
+    {
+        s_order[i] = (i + 1) % s_layout.passes;
+    }
+
+    // Not archived: an A/B switch for the line counting (set it in the config before a run).
+    s_useTimer = (Cvar_Get("ps2_hires_timer", "1", 0)->value != 0.0f);
+
     ee_sema_t sema  = {};
     sema.init_count = 0;
     sema.max_count  = 1;
@@ -513,7 +593,23 @@ void Start(const u64 pixelTests)
         return; // unreachable; Sys_Error halts (it is not marked noreturn)
     }
 
-    // HSINT and FINISH unmasked, VSINT too (graph_set_mode left it so); the rest stay masked.
+    // T1 first, so the first VSINT finds it counting.
+    if (s_useTimer)
+    {
+        *T1_MODE  = 0u;
+        *T1_COUNT = 0u;
+        *T1_COMP  = 0xFFFFu;
+        if (AddIntcHandler(INTC_TIM1, &TimerHandler, 0) < 0)
+        {
+            Sys_Error("hi-res: no INTC_TIM1 handler.");
+            return; // unreachable; Sys_Error halts (it is not marked noreturn)
+        }
+        *T1_MODE = kTimerMode | kTimerEqualFlag;
+        EnableIntc(INTC_TIM1);
+    }
+
+    // FINISH and VSINT unmasked (graph_set_mode left VSINT so), and HSINT when it counts the lines;
+    // the rest stay masked.
     *GS_REG_CSR = 2u | 4u | 8u;
     s_handlerId = AddIntcHandler(INTC_GS, &GsHandler, 0);
     if (s_handlerId < 0)
@@ -522,12 +618,13 @@ void Start(const u64 pixelTests)
         return; // unreachable; Sys_Error halts (it is not marked noreturn)
     }
     EnableIntc(INTC_GS);
-    GsPutIMR(0x7100);
+    GsPutIMR(s_useTimer ? 0x7500 : 0x7100);
 
-    Com_Printf("hi-res: %s, %dx%d in %d strips of %d rows, passes at lines %u/%u/%u, %d KB of VRAM.\n",
+    Com_Printf("hi-res: %s, %dx%d in %d strips of %d rows, passes at lines %u/%u/%u (%s), %d KB of VRAM.\n",
                video::OutputName(video::Selected(), s_layout.output), s_layout.width, s_layout.height,
                s_layout.passes, s_layout.stripRows, s_passLine[0], s_passLine[1],
-               (s_layout.passes > 2) ? s_passLine[2] : 0u, (s_layout.endWords * 4) / 1024);
+               (s_layout.passes > 2) ? s_passLine[2] : 0u, s_useTimer ? "T1 H-blank count" : "HSINT count",
+               (s_layout.endWords * 4) / 1024);
 }
 
 void SetClear(const u8 rgb[3], const bool dither)

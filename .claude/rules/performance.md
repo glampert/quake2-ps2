@@ -658,7 +658,9 @@ gets the ten columns at the end of a row, after `sndPlay`.
   `hrAdopt` (frames that took over the replay), `hrVsyncs` and `hrLines` (HSINTs in the last
   field: 750 on a console at 720p, 525 in PCSX2). The pacing wait (`hires::WaitForHalf`) is
   charged to `VSync`. `hrWorst` against the budget is the number the experiment is about, and only
-  a console has it: PCSX2's passes are ~400 µs of DMA whatever they draw.
+  a console has it: PCSX2's passes are ~260-400 µs of DMA whatever they draw. The EE's own cost
+  of strip mode, in PCSX2's 720p demos against NTSC per item: +24-27% with gsKit's HSINT line
+  counter, +1.6-3.4% with T1 (gs-renderer.md).
 - What a strip ("hi-res") mode would cost is modelled from the serial and no-fill segments:
   every replay pays the chain's VU1 and GS setup again, and the fill grows with the pixels.
 
